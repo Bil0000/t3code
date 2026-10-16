@@ -57,11 +57,6 @@ const observedPullRequestSummaryAtom = Atom.family((key: string) =>
   ),
 );
 
-/**
- * Positive when `incoming` is the newer snapshot. Merged is final. Then the host's own update
- * time, then the server's read-start time, which survives its caches; a snapshot without one
- * never beats a stamped read. Zero when neither side carries a read time.
- */
 function compareSummaries(current: PullRequestSummary, incoming: PullRequestSummary): number {
   const merged = Number(incoming.state === "merged") - Number(current.state === "merged");
   if (merged !== 0) return merged;
@@ -80,7 +75,6 @@ export function newestPullRequestSummary(
   return compareSummaries(current, observed) >= 0 ? observed : current;
 }
 
-/** Reuse list status without treating its deferred line-count placeholders as real stats. */
 export function pullRequestListEntryToSummary(entry: PullRequestListEntry): PullRequestSummary {
   return {
     provider: entry.provider,
@@ -113,7 +107,6 @@ function pullRequestSummaryKey(environmentId: EnvironmentId, reference: PullRequ
   ]);
 }
 
-/** The observation to hold after `incoming` arrives. Returns `current` itself on a tie. */
 export function newestPullRequestObservation(
   current: ObservedPullRequestSummary | null,
   incoming: ObservedPullRequestSummary | null,
@@ -121,7 +114,6 @@ export function newestPullRequestObservation(
   if (current === null) return incoming;
   if (incoming === null) return current;
   let order = compareSummaries(current.summary, incoming.summary);
-  // Client clocks only break ties between snapshots that both lack a server read time.
   if (
     order === 0 &&
     current.summary.observedAt === undefined &&
@@ -166,7 +158,6 @@ export function threadPullRequestLinkToSummary(
   link: ThreadPullRequestLink,
   projectId: ProjectId,
 ): PullRequestSummary | null {
-  // Without the host update time a snapshot cannot be ordered against a fresh read, so it sits out.
   const updatedAt = link.snapshot?.updatedAt;
   if (link.snapshot === null || updatedAt == null) return null;
   return {
@@ -182,8 +173,6 @@ export function threadPullRequestLinkToSummary(
   };
 }
 
-// Saved thread snapshots by environment and host-qualified link, indexed once per shell update
-// rather than per control. The host keeps a link to another forge from matching the project's PR.
 function savedPullRequestKey(
   environmentId: EnvironmentId,
   reference: Pick<PullRequestRef, "host" | "repository" | "number">,
@@ -208,7 +197,6 @@ const savedPullRequestSummariesAtom = Atom.make((get) => {
 
 const savedPullRequestSummaryAtom = Atom.family((key: string) =>
   Atom.make((get) => get(savedPullRequestSummariesAtom).get(key) ?? null).pipe(
-    // Shell updates also resend unchanged links; keep their subscribers quiet.
     Atom.withEquality((previous, next) => JSON.stringify(previous) === JSON.stringify(next)),
     Atom.setIdleTTL(5 * 60_000),
   ),
@@ -286,7 +274,6 @@ export interface MergedPullRequestListView {
   readonly refresh: (targets?: ReadonlyArray<EnvironmentQueryTarget<PullRequestListInput>>) => void;
 }
 
-/** One listing per environment, merged into the single list the page renders. */
 export function usePullRequestList(
   targets: ReadonlyArray<EnvironmentQueryTarget<PullRequestListInput>>,
 ): MergedPullRequestListView {
@@ -312,7 +299,6 @@ export function usePullRequestList(
   return { data, error: query.error, isPending: query.isPending, refresh: query.refresh };
 }
 
-/** The line counts for the rows on screen, asked of each environment for its own rows. */
 export function usePullRequestListStats(
   targets: ReadonlyArray<EnvironmentQueryTarget<PullRequestListStatsInput>>,
 ): {

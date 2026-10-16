@@ -1,80 +1,55 @@
-/**
- * Linear's GraphQL API over the platform HttpClient, signed with the personal API key the user
- * saved in Settings. One method per document the tracker needs; every response is decoded
- * against a schema here, so the tracker above sees Linear's shapes and nothing looser.
- *
- * Linear rate-limits by query complexity and reports the budget in `x-ratelimit-*` headers; a
- * refusal arrives as HTTP 429 or as a `RATELIMITED` GraphQL error on a 400, and both map to
- * `rate-limited` with the reset time when Linear names one.
- *
- * @module issue-tracker-linear/server/LinearApi
- */
-import * as Clock from "effect/Clock";
-import * as Config from "effect/Config";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
-import * as Hex from "effect/encoding/Hex";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { HttpClient, HttpClientRequest } from "effect/http";
-import { collectUint8StreamText } from "@t3tools/provider-core/server/collectStreamText";
 import { IssueTrackerKind, type IssuePageInput } from "@t3tools/contracts";
 import { IssueTrackerError } from "@t3tools/issue-tracker-core/server/IssueTracker";
-import * as IssueTrackerHost from "@t3tools/issue-tracker-core/server/IssueTrackerHost";
-import * as RateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
+
+import { GraphQL, GraphQLClient, GraphQLClientError, GraphQLGroup } from "effect/graphql";
+import * as Native from "../../schema/linear.graphql.ts";
+import * as Generated from "./linearIssueTracker.graphql.ts";
+import * as LinearGraphQlClient from "./linearGraphQlClient.ts";
 
 export const KIND = IssueTrackerKind.make("linear");
-const DEFAULT_API_URL = "https://api.linear.app/graphql";
-
-const LinearApiConfig = Config.all({
-  apiUrl: Config.String("T3CODE_LINEAR_API_URL").pipe(Config.withDefault(DEFAULT_API_URL)),
-});
 
 // --- Linear's shapes -----------------------------------------------------------------------
 
 export const LinearUser = Schema.Struct({
-  id: Schema.String,
+  ...Generated.ViewerUser.fields,
   name: Schema.NullOr(Schema.String),
   displayName: Schema.NullOr(Schema.String),
   email: Schema.NullOr(Schema.String),
-  avatarUrl: Schema.optional(Schema.NullOr(Schema.String)),
 });
 export type LinearUser = typeof LinearUser.Type;
-
 const LinearAssignableUser = Schema.Struct({ ...LinearUser.fields, active: Schema.Boolean });
-
-const LinearTeam = Schema.Struct({
-  id: Schema.String,
-  key: Schema.String,
-  name: Schema.String,
-});
+const LinearTeam = Generated.T3ProbeCredentialTeamsNodesTeam;
 type LinearTeam = typeof LinearTeam.Type;
+const LinearOrganization = Generated.T3ProbeCredentialOrganizationOrganization;
+type LinearOrganization = typeof LinearOrganization.Type;
 const LinearTeamVisibility = Schema.Literals(["public", "private", "restricted"]);
-const LinearTeamAccess = Schema.Struct({
-  private: Schema.Boolean,
-  visibility: LinearTeamVisibility,
-  restrictedBy: Schema.NullOr(Schema.Struct({ id: Schema.String })),
-});
 const LinearAssignmentTeam = Schema.Struct({
-  ...LinearTeam.fields,
-  ...LinearTeamAccess.fields,
-  ancestors: Schema.optional(
-    Schema.Array(Schema.Struct({ id: Schema.String, ...LinearTeamAccess.fields })).check(
-      Schema.isMaxLength(5),
-    ),
-  ),
+  ...Generated.LinearAssignmentTeam.fields,
+  ancestors: Schema.Array(
+    Schema.Struct({
+      id: Generated.LinearAssignmentTeam.fields.id,
+      private: Generated.LinearAssignmentTeam.fields.private,
+      visibility: Generated.LinearAssignmentTeam.fields.visibility,
+      restrictedBy: Generated.LinearAssignmentTeam.fields.restrictedBy,
+    }),
+  ).check(Schema.isMaxLength(5)),
 });
-const TEAM_ACCESS_FIELDS = "private visibility restrictedBy { id }";
-
 const assigneeTeamIds = (team: typeof LinearAssignmentTeam.Type): ReadonlyArray<string> | null => {
+  if (
+    team.visibility !== "public" &&
+    team.visibility !== "private" &&
+    team.visibility !== "restricted"
+  )
+    return null;
   if (team.private !== (team.visibility === "private")) return null;
   if (team.visibility !== "restricted")
     return team.restrictedBy === null ? (team.visibility === "public" ? [] : [team.id]) : null;
-  const boundary =
-    team.ancestors?.findIndex((ancestor) => ancestor.id === team.restrictedBy?.id) ?? -1;
-  if (boundary < 0 || team.ancestors?.[boundary]?.visibility !== "private") return null;
+  const boundary = team.ancestors.findIndex((ancestor) => ancestor.id === team.restrictedBy?.id);
+  if (boundary < 0 || team.ancestors[boundary]?.visibility !== "private") return null;
   const ancestors = team.ancestors.slice(boundary);
   if (
     ancestors.some((ancestor, index) =>
@@ -89,98 +64,28 @@ const assigneeTeamIds = (team: typeof LinearAssignmentTeam.Type): ReadonlyArray<
   const ids = [...ancestors.map((ancestor) => ancestor.id), team.id];
   return new Set(ids).size === ids.length ? ids : null;
 };
-const LinearOrganization = Schema.Struct({ id: Schema.String, urlKey: Schema.String });
-type LinearOrganization = typeof LinearOrganization.Type;
 
-/** `type` is one of Linear's categories: triage, backlog, unstarted, started, completed, canceled. */
-export const LinearWorkflowState = Schema.Struct({
-  id: Schema.String,
-  name: Schema.String,
-  type: Schema.String,
-  position: Schema.optional(Schema.Number),
+export type LinearWorkflowState = Generated.WorkflowState;
+type LinearLabel = Generated.AncestorsLabelsNodesIssueLabel;
+export type LinearReaction = Generated.Reaction;
+export type LinearComment = Generated.NodesComment;
+const BidirectionalPageInfo = Schema.Struct({
+  ...Generated.PageInfo.fields,
+  hasPreviousPage: Schema.optional(Schema.Boolean),
+  startCursor: Schema.optional(Schema.NullOr(Schema.String)),
 });
-export type LinearWorkflowState = typeof LinearWorkflowState.Type;
-
-const LinearLabel = Schema.Struct({
-  id: Schema.String,
-  name: Schema.String,
-  color: Schema.NullOr(Schema.String),
-  description: Schema.optional(Schema.NullOr(Schema.String)),
-  archivedAt: Schema.optional(Schema.NullOr(Schema.String)),
-  isGroup: Schema.optional(Schema.Boolean),
-});
-type LinearLabel = typeof LinearLabel.Type;
-
-export const LinearReaction = Schema.Struct({
-  id: Schema.String,
-  emoji: Schema.String,
-  user: Schema.NullOr(LinearUser),
-});
-export type LinearReaction = typeof LinearReaction.Type;
-
-export const LinearComment = Schema.Struct({
-  id: Schema.String,
-  body: Schema.String,
-  createdAt: Schema.String,
-  editedAt: Schema.optional(Schema.NullOr(Schema.String)),
-  url: Schema.NullOr(Schema.String),
-  user: Schema.NullOr(LinearUser),
-  reactions: Schema.Array(LinearReaction),
-});
-export type LinearComment = typeof LinearComment.Type;
-
-const PageInfo = Schema.Struct({
-  hasNextPage: Schema.Boolean,
-  endCursor: Schema.NullOr(Schema.String),
-});
-
-const Connection = <S extends Schema.Top>(node: S) =>
-  Schema.Struct({ nodes: Schema.Array(node), pageInfo: PageInfo });
-
-export const LinearIssue = Schema.Struct({
-  id: Schema.String,
-  identifier: Schema.String,
-  team: Schema.Struct({ key: Schema.String }),
-  number: Schema.Number,
-  title: Schema.String,
-  url: Schema.String,
-  description: Schema.NullOr(Schema.String),
-  createdAt: Schema.String,
-  updatedAt: Schema.String,
-  completedAt: Schema.NullOr(Schema.String),
-  canceledAt: Schema.NullOr(Schema.String),
-  state: LinearWorkflowState,
-  projectMilestone: Schema.optional(Schema.NullOr(Schema.Struct({ name: Schema.String }))),
-  creator: Schema.NullOr(LinearUser),
-  assignee: Schema.NullOr(LinearUser),
-  labels: Connection(LinearLabel),
-  reactions: Schema.optional(Schema.Array(LinearReaction)),
+const LinearIssue = Schema.Struct({
+  ...Generated.LinearIssueRow.fields,
+  labels: Generated.IssueLabelsIssueLabelConnection,
+  projectMilestone: Schema.optional(Generated.LinearIssueRow.fields.projectMilestone),
+  reactions: Schema.optional(Schema.Array(Generated.Reaction)),
 });
 export type LinearIssue = typeof LinearIssue.Type;
-
-export const LinearAttachment = Schema.Struct({
-  url: Schema.String,
-  title: Schema.String,
-  sourceType: Schema.NullOr(Schema.String),
-  metadata: Schema.NullOr(Schema.Record(Schema.String, Schema.Unknown)),
-});
-export type LinearAttachment = typeof LinearAttachment.Type;
-
-export const LinearHistoryEntry = Schema.Struct({
-  id: Schema.String,
-  createdAt: Schema.String,
-  actor: Schema.NullOr(LinearUser),
-  fromState: Schema.NullOr(LinearWorkflowState),
-  toState: Schema.NullOr(LinearWorkflowState),
-  fromAssignee: Schema.NullOr(LinearUser),
-  toAssignee: Schema.NullOr(LinearUser),
-  addedLabels: Schema.NullOr(Schema.Array(LinearLabel)),
-  removedLabels: Schema.NullOr(Schema.Array(LinearLabel)),
-  fromTitle: Schema.NullOr(Schema.String),
-  toTitle: Schema.NullOr(Schema.String),
-});
-export type LinearHistoryEntry = typeof LinearHistoryEntry.Type;
-
+export type LinearAttachment = Generated.Attachment;
+export type LinearHistoryEntry = Generated.IssueHistory;
+type LinearIssueDetail = Generated.T3Issue.Result["issue"];
+export type LinearIssueReference = Generated.T3IssueReference.Result["issue"];
+export type LinearRelation = Generated.ParentIssue;
 const LinearTemplateData = Schema.Struct({
   title: Schema.optional(Schema.NullOr(Schema.String)),
   description: Schema.optional(Schema.Unknown),
@@ -188,314 +93,73 @@ const LinearTemplateData = Schema.Struct({
   labelIds: Schema.optional(Schema.NullOr(Schema.Array(Schema.String))),
   assigneeId: Schema.optional(Schema.NullOr(Schema.String)),
 });
-
-export const LinearTemplate = Schema.Struct({
-  id: Schema.String,
-  name: Schema.String,
-  description: Schema.NullOr(Schema.String),
-  /** The template body as markdown, where Linear stored it that way. */
-  content: Schema.NullOr(Schema.String),
-  type: Schema.String,
-  hasFormFields: Schema.Boolean,
+const LinearTemplate = Schema.Struct({
+  ...Generated.Template.fields,
   templateData: Schema.Union([Schema.fromJsonString(LinearTemplateData), LinearTemplateData]),
 });
 export type LinearTemplate = typeof LinearTemplate.Type;
 const LinearTemplates = Schema.Struct({
-  ...Connection(LinearTemplate).fields,
+  ...Generated.TemplateConnection.fields,
   nodes: Schema.Array(LinearTemplate).check(Schema.isMaxLength(100)),
 });
-
-const LinearIssueDetail = Schema.Struct({
-  ...LinearIssue.fields,
-  team: Schema.Struct({
-    key: Schema.String,
-    states: Schema.optional(Connection(LinearWorkflowState)),
-  }),
-  comments: Connection(LinearComment),
-  reactions: Schema.Array(LinearReaction),
-  attachments: Connection(LinearAttachment),
-  history: Connection(LinearHistoryEntry),
+const AssignmentMembers = Schema.Struct({
+  ...Generated.UserConnection.fields,
+  nodes: Schema.Array(LinearAssignableUser),
 });
-type LinearIssueDetail = typeof LinearIssueDetail.Type;
-const LinearIssueReference = Schema.Struct({
-  id: Schema.String,
-  identifier: Schema.String,
-  url: Schema.String,
-  team: Schema.Struct({ key: Schema.String }),
+const LinearTeamDetail = Schema.Struct({
+  ...Generated.T3TeamTeamsNodesTeam.fields,
+  members: AssignmentMembers,
+  templates: LinearTemplates,
+  ancestors: Schema.Array(
+    Schema.Struct({
+      ...Generated.AncestorsTeam.fields,
+      templates: LinearTemplates,
+      labels: Schema.optionalKey(
+        Schema.Struct({
+          ...Generated.AncestorsLabelsIssueLabelConnection.fields,
+          nodes: Schema.Array(Generated.AncestorsLabelsNodesIssueLabel).check(
+            Schema.isMaxLength(250),
+          ),
+        }),
+      ),
+    }),
+  ).check(Schema.isMaxLength(5)),
 });
-export type LinearIssueReference = typeof LinearIssueReference.Type;
-const LinearTeamStates = Schema.Struct({
-  ...LinearTeam.fields,
-  states: Connection(LinearWorkflowState),
-});
-
-// --- Documents -----------------------------------------------------------------------------
-
-const USER_FIELDS = "id name displayName email avatarUrl";
-const STATE_FIELDS = "id name type position";
-const LABEL_FIELDS = "id name color";
-const TEMPLATE_FIELDS = "id name description content type hasFormFields templateData";
-const REACTION_FIELDS = `id emoji user { ${USER_FIELDS} }`;
-const COMMENT_FIELDS = `id body createdAt editedAt url user { ${USER_FIELDS} } reactions { ${REACTION_FIELDS} }`;
-const ISSUE_FIELDS = `
-  id identifier number title url description createdAt updatedAt completedAt canceledAt
-  team { key }
-  state { ${STATE_FIELDS} }
-  projectMilestone { name }
-  creator { ${USER_FIELDS} }
-  assignee { ${USER_FIELDS} }
-`;
-
-const VIEWER_QUERY = `query T3Viewer {
-  viewer { ${USER_FIELDS} }
-}`;
-const PROBE_QUERY = `query T3ProbeCredential {
-  viewer { ${USER_FIELDS} }
-  organization { id urlKey }
-  teams(first: 250) { nodes { id key name } pageInfo { hasNextPage endCursor } }
-}`;
-const SCOPES_QUERY = `query T3Scopes($first: Int!, $after: String) {
-  organization { id urlKey }
-  teams(first: $first, after: $after) { nodes { id key name } pageInfo { hasNextPage endCursor } }
-}`;
-const LIST_QUERY = `query T3Issues($first: Int, $last: Int, $after: String, $before: String, $orderBy: PaginationOrderBy!, $filter: IssueFilter!) {
-  organization { id urlKey }
-  viewer { id }
-  issues(first: $first, last: $last, after: $after, before: $before, filter: $filter, orderBy: $orderBy) {
-    nodes { ${ISSUE_FIELDS} labels(first: 20, includeArchived: true) { nodes { ${LABEL_FIELDS} } pageInfo { hasNextPage endCursor hasPreviousPage startCursor } } reactions { ${REACTION_FIELDS} } }
-    pageInfo { hasNextPage endCursor hasPreviousPage startCursor }
-  }
-}`;
-const ISSUE_QUERY = `query T3Issue($id: String!, $comments: Int!) {
-  issue(id: $id) {
-    ${ISSUE_FIELDS} team { key states(first: 100) { nodes { ${STATE_FIELDS} } pageInfo { hasNextPage endCursor } } }
-    labels(first: 100, includeArchived: true) { nodes { ${LABEL_FIELDS} } pageInfo { hasNextPage endCursor } }
-    comments(first: $comments, orderBy: createdAt) {
-      nodes { ${COMMENT_FIELDS} }
-      pageInfo { hasNextPage endCursor }
-    }
-    reactions { ${REACTION_FIELDS} }
-    attachments(first: 50) { nodes { url title sourceType metadata } pageInfo { hasNextPage endCursor } }
-    history(first: 100, orderBy: createdAt) {
-      nodes {
-        id createdAt actor { ${USER_FIELDS} }
-        fromState { ${STATE_FIELDS} } toState { ${STATE_FIELDS} }
-        fromAssignee { ${USER_FIELDS} } toAssignee { ${USER_FIELDS} }
-        addedLabels { ${LABEL_FIELDS} } removedLabels { ${LABEL_FIELDS} }
-        fromTitle toTitle
-      }
-      pageInfo { hasNextPage endCursor }
-    }
-  }
-}`;
-const ISSUE_REFERENCE_QUERY = `query T3IssueReference($id: String!) {
-  issue(id: $id) { id identifier url team { key } }
-}`;
-const COMMENT_TARGET_QUERY = `query T3CommentTarget($id: String!, $commentId: String!) {
-  issue(id: $id) { id identifier url team { key } }
-  comment(id: $commentId) { id issue { id identifier url team { key } } }
-}`;
-const TEAM_STATES_QUERY = `query T3TeamStates($key: String!) {
-  organization { id urlKey }
-  teams(first: 1, filter: { key: { eq: $key } }) {
-    nodes { id key name states(first: 100) { nodes { ${STATE_FIELDS} } pageInfo { hasNextPage endCursor } } }
-  }
-}`;
-const SCOPE_QUERY = `query T3Scope($key: String!) {
-  organization { id urlKey }
-  teams(first: 1, filter: { key: { eq: $key } }) { nodes { id key name } }
-}`;
-const COMMENTS_QUERY = `query T3Comments($id: String!, $first: Int!, $after: String) {
-  issue(id: $id) {
-    id identifier url team { key }
-    comments(first: $first, after: $after, orderBy: createdAt) {
-      nodes { ${COMMENT_FIELDS} }
-      pageInfo { hasNextPage endCursor }
-    }
-  }
-}`;
-const TEAM_QUERY = `query T3Team($key: String!, $includeAncestorLabels: Boolean!) {
-  organization { id urlKey templates(first: 100, filter: { type: { eq: "issue" } }) { nodes { ${TEMPLATE_FIELDS} } pageInfo { hasNextPage endCursor } } }
-  teams(first: 1, filter: { key: { eq: $key } }) {
-    nodes {
-      id key name ${TEAM_ACCESS_FIELDS}
-      states(first: 100) { nodes { ${STATE_FIELDS} } pageInfo { hasNextPage endCursor } }
-      ancestors { id key name ${TEAM_ACCESS_FIELDS} labels(first: 250, includeArchived: true) @include(if: $includeAncestorLabels) { nodes { ${LABEL_FIELDS} description archivedAt isGroup } pageInfo { hasNextPage endCursor } } templates(first: 100, filter: { type: { eq: "issue" } }) { nodes { ${TEMPLATE_FIELDS} } pageInfo { hasNextPage endCursor } } }
-      labels(first: 250, includeArchived: true) { nodes { ${LABEL_FIELDS} description archivedAt isGroup } pageInfo { hasNextPage endCursor } }
-      members(first: 250, filter: { active: { eq: true } }) { nodes { ${USER_FIELDS} active } pageInfo { hasNextPage endCursor } }
-      templates(first: 100, filter: { type: { eq: "issue" } }) { nodes { ${TEMPLATE_FIELDS} } pageInfo { hasNextPage endCursor } }
-    }
-  }
-  issueLabels(first: 250, includeArchived: true, filter: { team: { null: true } }) {
-    nodes { ${LABEL_FIELDS} description archivedAt isGroup } pageInfo { hasNextPage endCursor }
-  }
-}`;
-const ISSUE_CREATE_MUTATION = `mutation T3IssueCreate($input: IssueCreateInput!) {
-  issueCreate(input: $input) { success issue { identifier url } }
-}`;
-const ISSUE_UPDATE_MUTATION = `mutation T3IssueUpdate($id: String!, $input: IssueUpdateInput!) {
-  issueUpdate(id: $id, input: $input) { success }
-}`;
-const COMMENT_CREATE_MUTATION = `mutation T3CommentCreate($input: CommentCreateInput!) {
-  commentCreate(input: $input) { success }
-}`;
-const REACTION_CREATE_MUTATION = `mutation T3ReactionCreate($input: ReactionCreateInput!) {
-  reactionCreate(input: $input) { success }
-}`;
-const REACTION_DELETE_MUTATION = `mutation T3ReactionDelete($id: String!) {
-  reactionDelete(id: $id) { success }
-}`;
-const ISSUE_REACTIONS_QUERY = `query T3IssueReactions($id: String!) {
-  issue(id: $id) { reactions { ${REACTION_FIELDS} } }
-}`;
-const COMMENT_REACTIONS_QUERY = `query T3CommentReactions($id: String!) {
-  comment(id: $id) { reactions { ${REACTION_FIELDS} } }
-}`;
-
-// --- Envelopes -----------------------------------------------------------------------------
-
-const GraphQlError = Schema.Struct({
-  message: Schema.String,
-  extensions: Schema.optional(Schema.Struct({ code: Schema.optional(Schema.String) })),
-});
-type GraphQlError = typeof GraphQlError.Type;
-
-const Envelope = Schema.Struct({
-  data: Schema.optional(Schema.Unknown),
-  errors: Schema.optional(Schema.Array(GraphQlError)),
-});
-
-const ViewerData = Schema.Struct({
-  viewer: LinearUser,
-});
-const decodeEnvelope = Schema.decodeEffect(Schema.fromJsonString(Envelope));
-
-const decodeViewerId = Schema.decodeUnknownOption(
-  Schema.Struct({ viewer: Schema.Struct({ id: Schema.String }) }),
-);
+type LinearTeamDetail = typeof LinearTeamDetail.Type;
+const ViewerData = Schema.Struct({ ...Generated.T3Viewer.result.fields, viewer: LinearUser });
 const ProbeData = Schema.Struct({
+  ...Generated.T3ProbeCredential.result.fields,
   viewer: LinearUser,
-  organization: LinearOrganization,
-  teams: Connection(LinearTeam),
 });
-const ScopesData = Schema.Struct({
-  organization: LinearOrganization,
-  teams: Connection(LinearTeam),
+const TeamData = Schema.Struct({
+  ...Generated.T3Team.result.fields,
+  organization: Schema.Struct({
+    ...Generated.T3TeamOrganizationOrganization.fields,
+    templates: LinearTemplates,
+  }),
+  teams: Schema.Struct({
+    ...Generated.T3TeamTeamsTeamConnection.fields,
+    nodes: Schema.Array(LinearTeamDetail),
+  }),
 });
 const ListData = Schema.Struct({
   organization: LinearOrganization,
   viewer: Schema.optional(Schema.Struct({ id: Schema.String })),
   issues: Schema.Struct({
     nodes: Schema.Array(LinearIssue),
-    pageInfo: Schema.Struct({
-      ...PageInfo.fields,
-      hasPreviousPage: Schema.optional(Schema.Boolean),
-      startCursor: Schema.optional(Schema.NullOr(Schema.String)),
-    }),
+    pageInfo: BidirectionalPageInfo,
   }),
-});
-const IssueData = Schema.Struct({ issue: Schema.NullOr(LinearIssueDetail) });
-const IssueReferenceData = Schema.Struct({ issue: Schema.NullOr(LinearIssueReference) });
-const CommentTargetData = Schema.Struct({
-  issue: Schema.NullOr(LinearIssueReference),
-  comment: Schema.NullOr(
-    Schema.Struct({ id: Schema.String, issue: Schema.NullOr(LinearIssueReference) }),
-  ),
-});
-const TeamStatesData = Schema.Struct({
-  organization: LinearOrganization,
-  teams: Schema.Struct({ nodes: Schema.Array(LinearTeamStates) }),
-});
-const ScopeData = Schema.Struct({
-  organization: LinearOrganization,
-  teams: Schema.Struct({ nodes: Schema.Array(LinearTeam) }),
-});
-const CommentsData = Schema.Struct({
-  issue: Schema.NullOr(
-    Schema.Struct({ ...LinearIssueReference.fields, comments: Connection(LinearComment) }),
-  ),
-});
-const LinearTeamDetail = Schema.Struct({
-  ...LinearTeam.fields,
-  ...LinearTeamAccess.fields,
-  states: Connection(LinearWorkflowState),
-  ancestors: Schema.Array(
-    Schema.Struct({
-      ...LinearTeam.fields,
-      ...LinearTeamAccess.fields,
-      templates: LinearTemplates,
-      labels: Schema.optional(
-        Schema.Struct({
-          ...Connection(LinearLabel).fields,
-          nodes: Schema.Array(LinearLabel).check(Schema.isMaxLength(250)),
-        }),
-      ),
-    }),
-  ).check(Schema.isMaxLength(5)),
-  labels: Connection(LinearLabel),
-  members: Connection(LinearAssignableUser),
-  templates: LinearTemplates,
-});
-type LinearTeamDetail = typeof LinearTeamDetail.Type;
-const TeamData = Schema.Struct({
-  organization: Schema.Struct({ ...LinearOrganization.fields, templates: LinearTemplates }),
-  teams: Schema.Struct({ nodes: Schema.Array(LinearTeamDetail) }),
-  issueLabels: Connection(LinearLabel),
-});
-const CreatedData = Schema.Struct({
-  issueCreate: Schema.Struct({
-    success: Schema.Boolean,
-    issue: Schema.NullOr(Schema.Struct({ identifier: Schema.String, url: Schema.String })),
-  }),
-});
-const SuccessData = Schema.Record(Schema.String, Schema.Struct({ success: Schema.Boolean }));
-const ReactionsData = Schema.Struct({
-  issue: Schema.optional(Schema.NullOr(Schema.Struct({ reactions: Schema.Array(LinearReaction) }))),
-  comment: Schema.optional(
-    Schema.NullOr(Schema.Struct({ reactions: Schema.Array(LinearReaction) })),
-  ),
-});
-
-export const LinearRelation = Schema.Struct({
-  ...LinearIssueReference.fields,
-  title: Schema.String,
-  state: LinearWorkflowState,
-});
-export type LinearRelation = typeof LinearRelation.Type;
-const RELATION_FIELDS = `id identifier url team { key } title state { ${STATE_FIELDS} }`;
-const HISTORY_FIELDS = `id createdAt actor { ${USER_FIELDS} } fromState { ${STATE_FIELDS} } toState { ${STATE_FIELDS} } fromAssignee { ${USER_FIELDS} } toAssignee { ${USER_FIELDS} } addedLabels { ${LABEL_FIELDS} } removedLabels { ${LABEL_FIELDS} } fromTitle toTitle`;
-const HierarchyData = Schema.Struct({
-  issue: Schema.NullOr(
-    Schema.Struct({
-      ...LinearIssueReference.fields,
-      parent: Schema.NullOr(LinearRelation),
-      children: Connection(LinearRelation),
-    }),
-  ),
-});
-const HistoryPageData = Schema.Struct({
-  issue: Schema.NullOr(
-    Schema.Struct({ ...LinearIssueReference.fields, history: Connection(LinearHistoryEntry) }),
-  ),
-});
-const AttachmentsPageData = Schema.Struct({
-  issue: Schema.NullOr(
-    Schema.Struct({ ...LinearIssueReference.fields, attachments: Connection(LinearAttachment) }),
-  ),
 });
 const LabelCandidatesData = Schema.Struct({
   organization: LinearOrganization,
   teams: Schema.Struct({ nodes: Schema.Array(LinearTeam) }),
-  issueLabels: Connection(LinearLabel),
+  issueLabels: Generated.AncestorsLabelsIssueLabelConnection,
 });
 const AssigneeCandidatesData = Schema.Struct({
   organization: LinearOrganization,
   teams: Schema.Struct({
     nodes: Schema.Array(
-      Schema.Struct({
-        ...LinearAssignmentTeam.fields,
-        members: Connection(LinearAssignableUser),
-      }),
+      Schema.Struct({ ...LinearAssignmentTeam.fields, members: AssignmentMembers }),
     ),
   }),
 });
@@ -505,23 +169,29 @@ const AssigneeCandidatesResponse = Schema.Struct({
     nodes: Schema.Array(
       Schema.Struct({
         ...LinearAssignmentTeam.fields,
-        members: Schema.optional(Connection(LinearAssignableUser)),
+        members: Schema.optional(AssignmentMembers),
       }),
     ),
   }),
   users: Schema.optional(
-    Connection(
-      Schema.Struct({
-        ...LinearAssignableUser.fields,
-        teams: Schema.optional(
-          Schema.Struct({
-            nodes: Schema.Array(Schema.Struct({ id: Schema.String })).check(Schema.isMaxLength(1)),
-          }),
-        ),
-      }),
-    ),
+    Schema.Struct({
+      nodes: Schema.Array(
+        Schema.Struct({
+          ...LinearAssignableUser.fields,
+          teams: Schema.optional(
+            Schema.Struct({
+              nodes: Schema.Array(Schema.Struct({ id: Schema.String })).check(
+                Schema.isMaxLength(1),
+              ),
+            }),
+          ),
+        }),
+      ),
+      pageInfo: Generated.PageInfo,
+    }),
   ),
 });
+
 interface NativePageInput {
   readonly identifier: string;
   readonly first: number;
@@ -603,11 +273,12 @@ export class LinearApi extends Context.Service<
     readonly getCommentTarget: (
       identifier: string,
       commentId: string,
-    ) => Effect.Effect<typeof CommentTargetData.Type, IssueTrackerError>;
-    readonly getTeamStates: (
-      key: string,
-    ) => Effect.Effect<
-      (typeof LinearTeamStates.Type & { readonly organization: LinearOrganization }) | null,
+    ) => Effect.Effect<Generated.T3CommentTarget.Result, IssueTrackerError>;
+    readonly getTeamStates: (key: string) => Effect.Effect<
+      | (Generated.T3TeamStates.Result["teams"]["nodes"][number] & {
+          readonly organization: LinearOrganization;
+        })
+      | null,
       IssueTrackerError
     >;
     readonly getComments: (input: {
@@ -625,13 +296,13 @@ export class LinearApi extends Context.Service<
 
     readonly getHierarchy: (
       input: NativePageInput,
-    ) => Effect.Effect<typeof HierarchyData.Type, IssueTrackerError>;
+    ) => Effect.Effect<Generated.T3Hierarchy.Result, IssueTrackerError>;
     readonly getHistory: (
       input: NativePageInput,
-    ) => Effect.Effect<typeof HistoryPageData.Type, IssueTrackerError>;
+    ) => Effect.Effect<Generated.T3History.Result, IssueTrackerError>;
     readonly getAttachments: (
       input: NativePageInput,
-    ) => Effect.Effect<typeof AttachmentsPageData.Type, IssueTrackerError>;
+    ) => Effect.Effect<Generated.T3Attachments.Result, IssueTrackerError>;
     readonly listLabelCandidates: (input: {
       readonly ids?: ReadonlyArray<string>;
       readonly teamIds: ReadonlyArray<string>;
@@ -654,11 +325,11 @@ export class LinearApi extends Context.Service<
       includeAncestorLabels?: boolean,
     ) => Effect.Effect<LinearTeamScope | null, IssueTrackerError>;
     readonly createIssue: (
-      input: Record<string, unknown>,
+      input: Native.IssueCreateInput,
     ) => Effect.Effect<{ readonly identifier: string; readonly url: string }, IssueTrackerError>;
     readonly updateIssue: (
       identifier: string,
-      input: Record<string, unknown>,
+      input: Native.IssueUpdateInput,
     ) => Effect.Effect<void, IssueTrackerError>;
     readonly createComment: (input: {
       readonly issueId: string;
@@ -693,273 +364,133 @@ const fail = (
     ...(extra.cause === undefined ? {} : { cause: extra.cause }),
   });
 
-const isRateLimited = (errors: ReadonlyArray<GraphQlError> | undefined) =>
-  errors?.some((error) => error.extensions?.code === "RATELIMITED") === true;
+export const T3Issues = GraphQL.query("T3Issues", {
+  document:
+    "query T3Issues($first: Int, $last: Int, $after: String, $before: String, $orderBy: PaginationOrderBy!, $filter: IssueFilter!) {\n  organization { id urlKey }\n  viewer { id }\n  issues(first: $first, last: $last, after: $after, before: $before, filter: $filter, orderBy: $orderBy) {\n    nodes { \n  id identifier number title url description createdAt updatedAt completedAt canceledAt\n  team { key }\n  state { id name type position }\n  projectMilestone { name }\n  creator { id name displayName email avatarUrl }\n  assignee { id name displayName email avatarUrl }\n labels(first: 20, includeArchived: true) { nodes { id name color } pageInfo { hasNextPage endCursor hasPreviousPage startCursor } } reactions { id emoji user { id name displayName email avatarUrl } } }\n    pageInfo { hasNextPage endCursor hasPreviousPage startCursor }\n  }\n}",
+  variables: {
+    first: Schema.NullOr(Schema.Int),
+    last: Schema.NullOr(Schema.Int),
+    after: Schema.NullOr(Schema.String),
+    before: Schema.NullOr(Schema.String),
+    orderBy: Schema.Literals(["createdAt", "updatedAt"]),
+    filter: Schema.Record(Schema.String, Schema.Unknown),
+  },
+  result: ListData,
+});
 
-const isUnauthenticated = (errors: ReadonlyArray<GraphQlError> | undefined) =>
-  errors?.some((error) => error.extensions?.code === "AUTHENTICATION_ERROR") === true;
+export const T3LabelCandidates = GraphQL.query("T3LabelCandidates", {
+  document:
+    "query T3LabelCandidates($key: String!, $first: Int!, $after: String, $filter: IssueLabelFilter!) { organization { id urlKey } teams(first: 1, filter: { key: { eq: $key } }) { nodes { id key name } } issueLabels(first: $first, after: $after, includeArchived: true, filter: $filter) { nodes { id name color description archivedAt isGroup } pageInfo { hasNextPage endCursor } } }",
+  variables: {
+    key: Schema.String,
+    first: Schema.Int,
+    after: Schema.NullOr(Schema.String),
+    filter: Schema.Record(Schema.String, Schema.Unknown),
+  },
+  result: LabelCandidatesData,
+});
 
-const errorDetail = (errors: ReadonlyArray<GraphQlError> | undefined, fallback: string) => {
-  const code = errors?.[0]?.extensions?.code;
-  if (code === undefined || code.length > 64) return fallback;
-  switch (code) {
-    case "BAD_USER_INPUT":
-    case "GRAPHQL_VALIDATION_FAILED":
-      return "Linear rejected the request input.";
-    case "FORBIDDEN":
-      return "Linear denied access to this resource.";
-    case "INTERNAL_SERVER_ERROR":
-      return "Linear could not complete the request.";
-    default:
-      return fallback;
-  }
-};
+export const T3AssigneeCandidates = GraphQL.query("T3AssigneeCandidates", {
+  document:
+    "query T3AssigneeCandidates($key: String!, $first: Int!, $after: String, $filter: UserFilter!, $publicTeam: Boolean!, $readMembers: Boolean!, $restricted: Boolean!, $membershipTeamIds: [ID!]!) { organization { id urlKey } teams(first: 1, filter: { key: { eq: $key } }) { nodes { id key name private visibility restrictedBy { id } ancestors { id private visibility restrictedBy { id } } members(first: $first, after: $after, filter: $filter) @include(if: $readMembers) { nodes { id name displayName email avatarUrl active } pageInfo { hasNextPage endCursor } } } } users(first: $first, after: $after, filter: $filter) @include(if: $publicTeam) { nodes { id name displayName email avatarUrl active teams(first: 1, filter: { id: { in: $membershipTeamIds } }) @include(if: $restricted) { nodes { id } } } pageInfo { hasNextPage endCursor } } }",
+  variables: {
+    key: Schema.String,
+    first: Schema.Int,
+    after: Schema.NullOr(Schema.String),
+    filter: Schema.Record(Schema.String, Schema.Unknown),
+    publicTeam: Schema.Boolean,
+    readMembers: Schema.Boolean,
+    restricted: Schema.Boolean,
+    membershipTeamIds: Schema.Array(Schema.String),
+  },
+  result: AssigneeCandidatesResponse,
+});
+
+const LinearGraphQLGroup = GraphQLGroup.make(
+  GraphQL.query(Generated.T3Viewer.name, {
+    document: Generated.T3Viewer.document,
+    variables: Generated.T3Viewer.variables,
+    result: ViewerData,
+  }),
+  GraphQL.query(Generated.T3ProbeCredential.name, {
+    document: Generated.T3ProbeCredential.document,
+    variables: Generated.T3ProbeCredential.variables,
+    result: ProbeData,
+  }),
+  Generated.T3Scopes,
+  Generated.T3Issue,
+  Generated.T3IssueReference,
+  Generated.T3CommentTarget,
+  Generated.T3TeamStates,
+  Generated.T3Scope,
+  Generated.T3Comments,
+  GraphQL.query(Generated.T3Team.name, {
+    document: Generated.T3Team.document,
+    variables: Generated.T3Team.variables,
+    result: TeamData,
+  }),
+  Generated.T3IssueCreate,
+  Generated.T3IssueUpdate,
+  Generated.T3CommentCreate,
+  Generated.T3ReactionCreate,
+  Generated.T3ReactionDelete,
+  Generated.T3IssueReactions,
+  Generated.T3CommentReactions,
+  Generated.T3Hierarchy,
+  Generated.T3History,
+  Generated.T3Attachments,
+  Generated.T3CommentUpdate,
+  T3Issues,
+  T3LabelCandidates,
+  T3AssigneeCandidates,
+);
 
 export const make = Effect.gen(function* () {
-  // Only a default-carrying string: nothing in the environment can make it fail.
-  const config = yield* LinearApiConfig.pipe(Effect.orDie);
-  const httpClient = yield* HttpClient.HttpClient;
-  const host = yield* IssueTrackerHost.IssueTrackerHost;
-  const crypto = yield* Crypto.Crypto;
-  const rateLimits = yield* RateLimit.SourceControlRateLimit;
-  const rateKey = { provider: KIND, host: new URL(config.apiUrl).host };
-  const identities = new Map<string, string>();
-  const endpoints = new Map<string, Set<string>>();
-  const scopeFor = (identity: string, endpoint?: string) =>
-    endpoint === undefined ? identity : `${identity}\0endpoint:${endpoint}`;
-  const checkLimit = (identity: string, endpoint?: string, allowPaused = false) =>
-    rateLimits
-      .check(rateKey, { allowPaused })
-      .pipe(Effect.provideService(RateLimit.CredentialScope, scopeFor(identity, endpoint)));
-
-  const storedToken = (operation: string) =>
-    host.credentials
-      .get(KIND)
-      .pipe(
-        Effect.flatMap(
-          Effect.fromOption(() =>
-            fail(operation, "unauthenticated", "Linear is not connected on this server."),
-          ),
-        ),
-      );
-
-  const execute = <S extends Schema.Top>(
+  const policy = yield* LinearGraphQlClient.make;
+  const client = yield* GraphQLClient.make(
+    LinearGraphQLGroup.middleware(LinearGraphQlClient.LinearGraphQlAuth),
+  ).pipe(Effect.provide(policy.layer));
+  const execute = <A, V>(
     operation: string,
-    document: string,
-    variables: Record<string, unknown>,
-    data: S,
+    method: ((
+      variables: V,
+    ) => Effect.Effect<
+      A,
+      GraphQLClientError.GraphQLClientError,
+      LinearGraphQlClient.LinearGraphQlTarget
+    >) & { readonly operation: GraphQL.Any },
+    variables: V,
     token?: string,
-  ): Effect.Effect<S["Type"], IssueTrackerError, S["DecodingServices"]> =>
-    Effect.gen(function* () {
-      const key = token ?? (yield* storedToken(operation));
-      const fingerprint = yield* crypto
-        .digest("SHA-256", new TextEncoder().encode(key))
-        .pipe(Effect.map(Hex.encode), Effect.orDie);
-      const credentialScope = identities.get(fingerprint) ?? fingerprint;
-      const scopes = [undefined, ...(endpoints.get(document) ?? [])];
-      const checks = yield* Effect.forEach(scopes, (scope) =>
-        checkLimit(credentialScope, scope).pipe(Effect.result),
-      );
-      const paused = checks.flatMap((result) =>
-        result._tag === "Failure" ? [result.failure.retryAt] : [],
-      );
-      if (paused.length > 0)
-        return yield* fail(operation, "rate-limited", "Linear's rate limit was reached.", {
-          retryAt: Math.max(...paused),
-        });
-      const leases = new Map(
-        checks.flatMap((result, index) =>
-          result._tag === "Success" ? [[scopes[index], result.success] as const] : [],
-        ),
-      );
-      const leaseFor = (scope?: string) => {
-        const identity = identities.get(fingerprint) ?? fingerprint;
-        const lease = identity === credentialScope ? leases.get(scope) : undefined;
-        return lease === undefined
-          ? checkLimit(identity, scope, true).pipe(Effect.orDie)
-          : Effect.succeed(lease);
-      };
-      const recordLimit = (scope?: string, retryAt?: number) =>
-        Effect.gen(function* () {
-          const lease = yield* leaseFor(scope);
-          yield* rateLimits
-            .recordRateLimit({ ...rateKey, lease, retryAt })
-            .pipe(
-              Effect.provideService(
-                RateLimit.CredentialScope,
-                scopeFor(identities.get(fingerprint) ?? fingerprint, scope),
-              ),
-            );
-        });
-      const response = yield* httpClient
-        .execute(
-          HttpClientRequest.post(config.apiUrl).pipe(
-            // A personal API key goes in as-is; `Bearer` is for OAuth tokens, which this is not.
-            HttpClientRequest.setHeader("authorization", key),
-            HttpClientRequest.acceptJson,
-            HttpClientRequest.bodyJsonUnsafe({ query: document, variables }),
-          ),
-        )
-        .pipe(Effect.mapError(() => fail(operation, "failed", "Linear could not be reached.")));
-      const now = yield* Clock.currentTimeMillis;
-      const exhausted = ["requests", "complexity", "endpoint-requests"].filter((window) => {
-        const remaining = response.headers[`x-ratelimit-${window}-remaining`]?.trim();
-        return remaining !== undefined && /^-?\d+$/u.test(remaining) && Number(remaining) <= 0;
-      });
-      const resetAt = (window: string) => {
-        const value = response.headers[`x-ratelimit-${window}-reset`];
-        const reset = value === undefined || !/^\d+$/u.test(value.trim()) ? NaN : Number(value);
-        return Number.isSafeInteger(reset) && reset > now ? reset : undefined;
-      };
-      const retryAfter = RateLimit.retryAtFromHeader(response.headers["retry-after"], now);
-      const latestReset = (windows: ReadonlyArray<string>) => {
-        const resets = windows.flatMap((window) => {
-          const reset = resetAt(window);
-          return reset === undefined ? [] : [reset];
-        });
-        if (retryAfter !== undefined) resets.push(retryAfter);
-        return resets.length === 0 ? undefined : Math.max(...resets);
-      };
-      const namedEndpoint = response.headers["x-ratelimit-endpoint-name"]?.trim() || undefined;
-      if (namedEndpoint !== undefined) {
-        const names = endpoints.get(document) ?? new Set<string>();
-        names.add(namedEndpoint);
-        endpoints.set(document, names);
-      }
-      const recordLimits = (unknown = false) =>
-        Effect.gen(function* () {
-          const globalWindows = exhausted.filter((window) => window !== "endpoint-requests");
-          if (globalWindows.length > 0) yield* recordLimit(undefined, latestReset(globalWindows));
-          if (exhausted.includes("endpoint-requests"))
-            yield* recordLimit(namedEndpoint, latestReset(["endpoint-requests"]));
-          if (unknown && exhausted.length === 0) yield* recordLimit(undefined, retryAfter);
-        });
-      const retryAt = latestReset(exhausted);
-      const rateLimited = (cause?: string) =>
-        Effect.gen(function* () {
-          yield* recordLimits(true);
-          return yield* fail(operation, "rate-limited", "Linear's rate limit was reached.", {
-            ...(retryAt === undefined ? {} : { retryAt }),
-            ...(cause === undefined ? {} : { cause }),
-          });
-        });
-      if (response.status === 429) return yield* rateLimited();
-      if (response.status === 401 || response.status === 403) {
-        return yield* fail(operation, "unauthenticated", "Linear rejected the API key.");
-      }
-      const collected = yield* collectUint8StreamText({
-        stream: response.stream,
-        maxBytes: 4 * 1024 * 1024,
-      }).pipe(
-        Effect.mapError(() => fail(operation, "failed", "Linear response could not be read.")),
-      );
-      if (collected.truncated || collected.invalidUtf8)
-        return yield* fail(
-          operation,
-          "failed",
-          "Linear returned an oversized or invalid response.",
-        );
-      const envelope = yield* decodeEnvelope(collected.text).pipe(
-        Effect.tapError(() => recordLimits()),
-        Effect.mapError((cause) =>
-          fail(
-            operation,
-            "failed",
-            `Linear returned HTTP ${response.status} with an unexpected body.`,
-            { cause },
-          ),
-        ),
-      );
-      if (isRateLimited(envelope.errors)) return yield* rateLimited(collected.text);
-      if (isUnauthenticated(envelope.errors)) {
-        return yield* fail(operation, "unauthenticated", "Linear rejected the API key.", {
-          cause: collected.text,
-        });
-      }
-      if (
-        response.status < 200 ||
-        response.status >= 300 ||
-        (envelope.errors?.length ?? 0) > 0 ||
-        envelope.data === undefined ||
-        envelope.data === null
-      ) {
-        yield* recordLimits();
-        const missingIssue =
-          (operation === "getIssue" || operation === "getIssueReference") &&
-          (response.status === 200 || response.status === 400) &&
-          envelope.data == null &&
-          envelope.errors?.length === 1 &&
-          /^Entity not found: Issue(?:$| - )/.test(envelope.errors[0]?.message ?? "");
-        return yield* fail(
-          operation,
-          missingIssue ? "not-found" : "failed",
-          missingIssue
-            ? "Linear has no issue by that identifier, or this account cannot see it."
-            : errorDetail(envelope.errors, `Linear returned HTTP ${response.status}.`),
-          { cause: collected.text },
-        );
-      }
-      const decoded = yield* Schema.decodeEffect(data)(envelope.data).pipe(
-        Effect.tapError(() => recordLimits()),
-        Effect.mapError((cause) =>
-          fail(operation, "failed", "Linear returned an unexpected response.", { cause }),
-        ),
-      );
-      const viewer = decodeViewerId(decoded);
-      if (Option.isSome(viewer) && identities.get(fingerprint) !== viewer.value.viewer.id) {
-        identities.set(fingerprint, viewer.value.viewer.id);
-        for (const scope of [
-          undefined,
-          ...new Set([...endpoints.values()].flatMap((names) => [...names])),
-        ]) {
-          const previous = yield* checkLimit(credentialScope, scope).pipe(Effect.result);
-          if (previous._tag === "Failure") yield* recordLimit(scope, previous.failure.retryAt);
-        }
-        for (const scope of scopes)
-          yield* checkLimit(viewer.value.viewer.id, scope).pipe(
-            Effect.mapError((error) =>
-              fail(operation, "rate-limited", error.detail, { retryAt: error.retryAt }),
-            ),
-          );
-      }
-      yield* recordLimits();
-      for (const scope of [undefined, ...(endpoints.get(document) ?? [])]) {
-        const lease = yield* leaseFor(scope);
-        yield* rateLimits
-          .recordSuccess({ ...rateKey, lease })
-          .pipe(
-            Effect.provideService(
-              RateLimit.CredentialScope,
-              scopeFor(identities.get(fingerprint) ?? fingerprint, scope),
-            ),
-          );
-      }
-      return decoded;
-    }).pipe(
-      Effect.timeoutOrElse({
-        duration: "30 seconds",
-        orElse: () => Effect.fail(fail(operation, "failed", "Linear request timed out.")),
-      }),
-    );
+  ) => policy.call(operation, method.operation.document, method(variables), token);
 
-  const mutate = (
+  const mutate = <V>(
     operation: string,
-    document: string,
-    variables: Record<string, unknown>,
-    field: string,
+    method: ((
+      variables: V,
+    ) => Effect.Effect<
+      Readonly<Record<string, { readonly success: boolean }>>,
+      GraphQLClientError.GraphQLClientError,
+      LinearGraphQlClient.LinearGraphQlTarget
+    >) & { readonly operation: GraphQL.Any },
+    variables: V,
   ): Effect.Effect<void, IssueTrackerError> =>
-    execute(operation, document, variables, SuccessData).pipe(
+    execute(operation, method, variables).pipe(
+      Effect.mapError((error) =>
+        error.reason === "failed" && error.detail === "Linear returned an unexpected response."
+          ? fail(operation, "failed", "Linear did not apply the change.")
+          : error,
+      ),
       Effect.flatMap((data) =>
-        data[field]?.success === true
+        Object.values(data).some((value) => value.success === true)
           ? Effect.void
           : Effect.fail(fail(operation, "failed", "Linear did not apply the change.")),
       ),
     );
 
   const viewer: LinearApi["Service"]["viewer"] = (token) =>
-    execute("viewer", VIEWER_QUERY, {}, ViewerData, token);
+    execute("viewer", client.T3Viewer, {}, token);
   const probeCredential: LinearApi["Service"]["probeCredential"] = (token) =>
-    execute("probeCredential", PROBE_QUERY, {}, ProbeData, token).pipe(
+    execute("probeCredential", client.T3ProbeCredential, {}, token).pipe(
       Effect.flatMap((data) => {
         const cursor = data.teams.pageInfo.hasNextPage ? data.teams.pageInfo.endCursor : null;
         if (
@@ -994,9 +525,8 @@ export const make = Effect.gen(function* () {
         return yield* fail("listScopes", "failed", "Invalid Linear scope page.");
       const data = yield* execute(
         "listScopes",
-        SCOPES_QUERY,
+        client.T3Scopes,
         { first: limit, after: input.cursor ?? null },
-        ScopesData,
         token,
       );
       const cursor = data.teams.pageInfo.hasNextPage ? data.teams.pageInfo.endCursor : null;
@@ -1013,7 +543,7 @@ export const make = Effect.gen(function* () {
       return { organization: data.organization, teams: data.teams.nodes, nextCursor: cursor };
     });
   const getScope: LinearApi["Service"]["getScope"] = (key, token) =>
-    execute("getScope", SCOPE_QUERY, { key }, ScopeData, token).pipe(
+    execute("getScope", client.T3Scope, { key }, token).pipe(
       Effect.map((data) =>
         data.teams.nodes[0] === undefined
           ? null
@@ -1022,19 +552,14 @@ export const make = Effect.gen(function* () {
     );
 
   const listIssues: LinearApi["Service"]["listIssues"] = (input) =>
-    execute(
-      "listIssues",
-      LIST_QUERY,
-      {
-        first: input.order === "asc" ? null : Math.min(100, Math.max(1, input.first)),
-        last: input.order === "asc" ? Math.min(100, Math.max(1, input.first)) : null,
-        after: input.order === "asc" ? null : (input.after ?? null),
-        before: input.order === "asc" ? (input.after ?? null) : null,
-        orderBy: input.sort === "created" ? "createdAt" : "updatedAt",
-        filter: input.filter,
-      },
-      ListData,
-    ).pipe(
+    execute("listIssues", client.T3Issues, {
+      first: input.order === "asc" ? null : Math.min(100, Math.max(1, input.first)),
+      last: input.order === "asc" ? Math.min(100, Math.max(1, input.first)) : null,
+      after: input.order === "asc" ? null : (input.after ?? null),
+      before: input.order === "asc" ? (input.after ?? null) : null,
+      orderBy: input.sort === "created" ? "createdAt" : "updatedAt",
+      filter: input.filter,
+    }).pipe(
       Effect.map((data) => ({
         organization: data.organization,
         viewerId: data.viewer?.id ?? null,
@@ -1051,12 +576,10 @@ export const make = Effect.gen(function* () {
     );
 
   const getIssue: LinearApi["Service"]["getIssue"] = (identifier, comments) =>
-    execute(
-      "getIssue",
-      ISSUE_QUERY,
-      { id: identifier, comments: Math.min(100, Math.max(0, comments)) },
-      IssueData,
-    ).pipe(
+    execute("getIssue", client.T3Issue, {
+      id: identifier,
+      comments: Math.min(100, Math.max(0, comments)),
+    }).pipe(
       Effect.map((data) => data.issue),
       // Linear answers an unknown identifier with an error and no data, not with null.
       Effect.catchIf(
@@ -1065,12 +588,7 @@ export const make = Effect.gen(function* () {
       ),
     );
   const getIssueReference: LinearApi["Service"]["getIssueReference"] = (identifier) =>
-    execute(
-      "getIssueReference",
-      ISSUE_REFERENCE_QUERY,
-      { id: identifier },
-      IssueReferenceData,
-    ).pipe(
+    execute("getIssueReference", client.T3IssueReference, { id: identifier }).pipe(
       Effect.map((data) => data.issue),
       Effect.catchIf(
         (error) => error.reason === "not-found",
@@ -1078,14 +596,9 @@ export const make = Effect.gen(function* () {
       ),
     );
   const getCommentTarget: LinearApi["Service"]["getCommentTarget"] = (identifier, commentId) =>
-    execute(
-      "getCommentTarget",
-      COMMENT_TARGET_QUERY,
-      { id: identifier, commentId },
-      CommentTargetData,
-    );
+    execute("getCommentTarget", client.T3CommentTarget, { id: identifier, commentId });
   const getTeamStates: LinearApi["Service"]["getTeamStates"] = (key) =>
-    execute("getTeamStates", TEAM_STATES_QUERY, { key }, TeamStatesData).pipe(
+    execute("getTeamStates", client.T3TeamStates, { key }).pipe(
       Effect.map((data) =>
         data.teams.nodes[0] === undefined
           ? null
@@ -1094,27 +607,22 @@ export const make = Effect.gen(function* () {
     );
 
   const getComments: LinearApi["Service"]["getComments"] = (input) =>
-    execute(
-      "getComments",
-      COMMENTS_QUERY,
-      { id: input.identifier, first: Math.min(100, Math.max(1, input.first)), after: input.after },
-      CommentsData,
-    ).pipe(
-      Effect.flatMap((data) =>
-        data.issue === null
-          ? Effect.fail(fail("getComments", "not-found", "This issue no longer exists."))
-          : Effect.succeed({
-              issue: data.issue,
-              nodes: data.issue.comments.nodes,
-              nextCursor: data.issue.comments.pageInfo.hasNextPage
-                ? data.issue.comments.pageInfo.endCursor
-                : null,
-            }),
-      ),
+    execute("getComments", client.T3Comments, {
+      id: input.identifier,
+      first: Math.min(100, Math.max(1, input.first)),
+      after: input.after,
+    }).pipe(
+      Effect.map((data) => ({
+        issue: data.issue,
+        nodes: data.issue.comments.nodes,
+        nextCursor: data.issue.comments.pageInfo.hasNextPage
+          ? data.issue.comments.pageInfo.endCursor
+          : null,
+      })),
     );
 
   const getTeam: LinearApi["Service"]["getTeam"] = (key, includeAncestorLabels = false) =>
-    execute("getTeam", TEAM_QUERY, { key, includeAncestorLabels }, TeamData).pipe(
+    execute("getTeam", client.T3Team, { key, includeAncestorLabels }).pipe(
       Effect.filterOrFail(
         (data) => data.teams.nodes.every((team) => assigneeTeamIds(team) !== null),
         () => fail("getTeam", "failed", "Linear returned an invalid team visibility boundary."),
@@ -1168,7 +676,7 @@ export const make = Effect.gen(function* () {
     );
 
   const createIssue: LinearApi["Service"]["createIssue"] = (input) =>
-    execute("createIssue", ISSUE_CREATE_MUTATION, { input }, CreatedData).pipe(
+    execute("createIssue", client.T3IssueCreate, { input }).pipe(
       Effect.flatMap((data) =>
         data.issueCreate.success && data.issueCreate.issue !== null
           ? Effect.succeed(data.issueCreate.issue)
@@ -1177,93 +685,76 @@ export const make = Effect.gen(function* () {
     );
 
   const updateIssue: LinearApi["Service"]["updateIssue"] = (identifier, input) =>
-    mutate("updateIssue", ISSUE_UPDATE_MUTATION, { id: identifier, input }, "issueUpdate");
+    mutate("updateIssue", client.T3IssueUpdate, { id: identifier, input });
 
   const createComment: LinearApi["Service"]["createComment"] = (input) =>
-    mutate("createComment", COMMENT_CREATE_MUTATION, { input }, "commentCreate");
+    mutate("createComment", client.T3CommentCreate, { input });
 
   const createReaction: LinearApi["Service"]["createReaction"] = (input) =>
-    mutate(
-      "createReaction",
-      REACTION_CREATE_MUTATION,
-      {
-        input:
-          input.commentId === undefined
-            ? { issueId: input.issueId, emoji: input.emoji }
-            : { commentId: input.commentId, emoji: input.emoji },
-      },
-      "reactionCreate",
-    );
+    mutate("createReaction", client.T3ReactionCreate, {
+      input:
+        input.commentId === undefined
+          ? { issueId: input.issueId, emoji: input.emoji }
+          : { commentId: input.commentId, emoji: input.emoji },
+    });
 
   const deleteReaction: LinearApi["Service"]["deleteReaction"] = (id) =>
-    mutate("deleteReaction", REACTION_DELETE_MUTATION, { id }, "reactionDelete");
+    mutate("deleteReaction", client.T3ReactionDelete, { id });
 
   const listReactions: LinearApi["Service"]["listReactions"] = (input) =>
-    execute(
-      "listReactions",
-      input.commentId === undefined ? ISSUE_REACTIONS_QUERY : COMMENT_REACTIONS_QUERY,
-      { id: input.commentId ?? input.issueId },
-      ReactionsData,
-    ).pipe(Effect.map((data) => (data.comment ?? data.issue)?.reactions ?? []));
+    input.commentId === undefined
+      ? execute("listReactions", client.T3IssueReactions, { id: input.issueId ?? "" }).pipe(
+          Effect.map((data) => data.issue.reactions),
+        )
+      : execute("listReactions", client.T3CommentReactions, { id: input.commentId }).pipe(
+          Effect.map((data) => data.comment.reactions),
+        );
 
   const getHierarchy: LinearApi["Service"]["getHierarchy"] = (input) =>
-    execute(
-      "getHierarchy",
-      `query T3Hierarchy($id: String!, $first: Int!, $after: String) { issue(id: $id) { id identifier url team { key } parent { ${RELATION_FIELDS} } children(first: $first, after: $after) { nodes { ${RELATION_FIELDS} } pageInfo { hasNextPage endCursor } } } }`,
-      { id: input.identifier, first: input.first, after: input.after ?? null },
-      HierarchyData,
-    );
+    execute("getHierarchy", client.T3Hierarchy, {
+      id: input.identifier,
+      first: input.first,
+      after: input.after ?? null,
+    });
   const getHistory: LinearApi["Service"]["getHistory"] = (input) =>
-    execute(
-      "getHistory",
-      `query T3History($id: String!, $first: Int!, $after: String) { issue(id: $id) { id identifier url team { key } history(first: $first, after: $after, orderBy: createdAt) { nodes { ${HISTORY_FIELDS} } pageInfo { hasNextPage endCursor } } } }`,
-      { id: input.identifier, first: input.first, after: input.after ?? null },
-      HistoryPageData,
-    );
+    execute("getHistory", client.T3History, {
+      id: input.identifier,
+      first: input.first,
+      after: input.after ?? null,
+    });
   const getAttachments: LinearApi["Service"]["getAttachments"] = (input) =>
-    execute(
-      "getLinkedPullRequests",
-      `query T3Attachments($id: String!, $first: Int!, $after: String) { issue(id: $id) { id identifier url team { key } attachments(first: $first, after: $after) { nodes { url title sourceType metadata } pageInfo { hasNextPage endCursor } } } }`,
-      { id: input.identifier, first: input.first, after: input.after ?? null },
-      AttachmentsPageData,
-    );
+    execute("getLinkedPullRequests", client.T3Attachments, {
+      id: input.identifier,
+      first: input.first,
+      after: input.after ?? null,
+    });
   const listLabelCandidates: LinearApi["Service"]["listLabelCandidates"] = (input) =>
-    execute(
-      "listLabelCandidates",
-      `query T3LabelCandidates($key: String!, $first: Int!, $after: String, $filter: IssueLabelFilter!) { organization { id urlKey } teams(first: 1, filter: { key: { eq: $key } }) { nodes { id key name } } issueLabels(first: $first, after: $after, includeArchived: true, filter: $filter) { nodes { ${LABEL_FIELDS} description archivedAt isGroup } pageInfo { hasNextPage endCursor } } }`,
-      {
+    execute("listLabelCandidates", client.T3LabelCandidates, {
+      key: input.key,
+      first: input.first,
+      after: input.after ?? null,
+      filter: {
+        and: [
+          { or: [{ team: { id: { in: input.teamIds } } }, { team: { null: true } }] },
+          ...(input.ids === undefined ? [] : [{ id: { in: input.ids } }]),
+        ],
+      },
+    });
+  const listAssigneeCandidates: LinearApi["Service"]["listAssigneeCandidates"] = (input) =>
+    Effect.gen(function* () {
+      const data = yield* execute("listAssigneeCandidates", client.T3AssigneeCandidates, {
         key: input.key,
         first: input.first,
         after: input.after ?? null,
+        publicTeam: input.visibility !== undefined && input.visibility !== "private",
+        readMembers: input.visibility === "private",
+        restricted: input.visibility === "restricted",
+        membershipTeamIds: input.membershipTeamIds ?? [],
         filter: {
-          and: [
-            { or: [{ team: { id: { in: input.teamIds } } }, { team: { null: true } }] },
-            ...(input.ids === undefined ? [] : [{ id: { in: input.ids } }]),
-          ],
+          active: { eq: true },
+          ...(input.id === undefined ? {} : { id: { eq: input.id } }),
         },
-      },
-      LabelCandidatesData,
-    );
-  const listAssigneeCandidates: LinearApi["Service"]["listAssigneeCandidates"] = (input) =>
-    Effect.gen(function* () {
-      const data = yield* execute(
-        "listAssigneeCandidates",
-        `query T3AssigneeCandidates($key: String!, $first: Int!, $after: String, $filter: UserFilter!, $publicTeam: Boolean!, $readMembers: Boolean!, $restricted: Boolean!, $membershipTeamIds: [ID!]!) { organization { id urlKey } teams(first: 1, filter: { key: { eq: $key } }) { nodes { id key name ${TEAM_ACCESS_FIELDS} ancestors { id ${TEAM_ACCESS_FIELDS} } members(first: $first, after: $after, filter: $filter) @include(if: $readMembers) { nodes { ${USER_FIELDS} active } pageInfo { hasNextPage endCursor } } } } users(first: $first, after: $after, filter: $filter) @include(if: $publicTeam) { nodes { ${USER_FIELDS} active teams(first: 1, filter: { id: { in: $membershipTeamIds } }) @include(if: $restricted) { nodes { id } } } pageInfo { hasNextPage endCursor } } }`,
-        {
-          key: input.key,
-          first: input.first,
-          after: input.after ?? null,
-          publicTeam: input.visibility !== undefined && input.visibility !== "private",
-          readMembers: input.visibility === "private",
-          restricted: input.visibility === "restricted",
-          membershipTeamIds: input.membershipTeamIds ?? [],
-          filter: {
-            active: { eq: true },
-            ...(input.id === undefined ? {} : { id: { eq: input.id } }),
-          },
-        },
-        AssigneeCandidatesResponse,
-      );
+      });
       const team = data.teams.nodes[0];
       if (team === undefined) return { organization: data.organization, teams: { nodes: [] } };
       if (
@@ -1343,12 +834,7 @@ export const make = Effect.gen(function* () {
       };
     });
   const updateComment: LinearApi["Service"]["updateComment"] = (id, body) =>
-    mutate(
-      "editComment",
-      `mutation T3CommentUpdate($id: String!, $input: CommentUpdateInput!) { commentUpdate(id: $id, input: $input) { success } }`,
-      { id, input: { body } },
-      "commentUpdate",
-    );
+    mutate("editComment", client.T3CommentUpdate, { id, input: { body } });
 
   return LinearApi.of({
     getHierarchy,

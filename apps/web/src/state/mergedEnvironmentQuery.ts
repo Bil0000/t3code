@@ -13,19 +13,15 @@ export interface EnvironmentQueryTarget<Input> {
 }
 
 interface MergedEnvironmentQueryView<A> {
-  /** One entry per query target that has answered, in the order the targets were given. */
   readonly values: ReadonlyArray<readonly [EnvironmentId, A]>;
-  /** The first environment that failed. Others may still have answered — this is not fatal. */
   readonly error: string | null;
   readonly isPending: boolean;
   readonly observations: ReadonlyArray<readonly [EnvironmentId, A, number]>;
 }
 
 /**
- * The same per-environment query read across several environments at once. React cannot subscribe
- * to a list of atoms whose length changes, so the fan-out happens inside one derived atom keyed by
- * the targets — the same shape the cross-environment thread search uses.
- *
+ * React cannot subscribe to a list of atoms whose length changes, so the fan-out happens inside
+ * one derived atom keyed by the targets — the same shape the cross-environment thread search uses.
  * An environment that fails contributes nothing rather than blanking the page: the pull request
  * list is a union, and one unreachable machine should not hide the others' rows.
  */

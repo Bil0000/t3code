@@ -5,7 +5,6 @@ import type { ExpandedImageItem, ExpandedImagePreview } from "./ExpandedImagePre
 import { resolveExternalWebLinkHost } from "./externalLinkContextMenu";
 import { resolveProtocolRelativeMediaUrl } from "../media/mediaContent";
 
-// Weak keys retain resolved media actions only while the rendered image is reachable.
 export const markdownImageItems = new WeakMap<Element, ExpandedImageItem>();
 
 export function linkedMediaItem(
@@ -23,7 +22,6 @@ export function linkedMediaItem(
   };
 }
 
-/** Collect in document order only when opened, including PR sections separated by videos. */
 export function markdownImageGallery(
   element: Element,
   selected: ExpandedImageItem,

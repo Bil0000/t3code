@@ -6,6 +6,7 @@ import * as Option from "effect/Option";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import * as Schema from "effect/Schema";
+import { stripIgnoredCharacters } from "graphql";
 import * as RateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import { IssueSummary, IssueTrackerKind, IssueTrackerScopePage } from "@t3tools/contracts";
@@ -38,6 +39,24 @@ const state = (name: string, type: string, position = 0) => ({
   position,
 });
 
+const labelFixture = <
+  T extends {
+    readonly id: string;
+    readonly name: string;
+    readonly color: string;
+    readonly description?: string | null;
+    readonly archivedAt?: string | null;
+    readonly isGroup?: boolean;
+  },
+>(
+  input: T,
+) => ({
+  ...input,
+  description: input.description ?? null,
+  archivedAt: input.archivedAt ?? null,
+  isGroup: input.isGroup ?? false,
+});
+
 const issue = (
   identifier: string,
   overrides: Partial<Record<string, unknown>> = {},
@@ -52,15 +71,20 @@ const issue = (
   updatedAt: "2026-07-02T00:00:00.000Z",
   completedAt: null,
   canceledAt: null,
+  reactions: [],
   state: state("In Progress", "started"),
   creator: JULIUS,
   assignee: THEO,
-  team: { key: identifier.split("-")[0] },
+  team: {
+    key: identifier.split("-")[0],
+    states: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+  },
   labels: {
-    nodes: [{ id: "lbl_bug", name: "Bug", color: "#f00" }],
+    nodes: [labelFixture({ id: "lbl_bug", name: "Bug", color: "#f00" })],
     pageInfo: { hasNextPage: false, endCursor: null },
   },
   ...overrides,
+  projectMilestone: overrides.projectMilestone ?? null,
 });
 
 /** Answers each GraphQL document by its operation name, the way Linear would. */
@@ -82,8 +106,13 @@ function fakeLinear(
         const body = request.body;
         const text =
           body._tag === "Uint8Array" ? new TextDecoder().decode(body.body) : String(body._tag);
-        const parsed = JSON.parse(text) as { query: string; variables: Record<string, unknown> };
-        const operation = /^(?:query|mutation) (\w+)/.exec(parsed.query)?.[1] ?? "?";
+        const parsed = JSON.parse(text) as {
+          query: string;
+          operationName?: string;
+          variables: Record<string, unknown>;
+        };
+        const operation =
+          parsed.operationName ?? /^(?:query|mutation) (\w+)/.exec(parsed.query)?.[1] ?? "?";
         requests.push({
           authorization: request.headers.authorization,
           operation,
@@ -148,6 +177,8 @@ function fakeLinear(
     },
   };
 }
+
+const compactQuery = (query: string | undefined) => stripIgnoredCharacters(query ?? "");
 
 const target = { cwd: "/w/web", host: "linear.app", scope: "ENG" };
 const decodeIssueSummary = Schema.decodeEffect(IssueSummary);
@@ -436,8 +467,10 @@ it.effect("retains normalized list reactions and native viewer flags in one requ
     expect(page.nextCursor).toBe("next");
     expect(test.requests.map(({ operation }) => operation)).toEqual(["T3Issues"]);
     expect(test.requests[0]?.variables.after).toBe("previous");
-    expect(test.requests[0]?.query).toContain("viewer { id }");
-    expect(test.requests[0]?.query).toContain("reactions { id emoji user {");
+    expect(compactQuery(test.requests[0]?.query)).toContain(compactQuery("viewer { id }"));
+    expect(compactQuery(test.requests[0]?.query)).toContain(
+      compactQuery("reactions { id emoji user {"),
+    );
   }),
 );
 
@@ -555,7 +588,7 @@ it.effect.each([{ name: "Release 7" }, null, undefined])(
         "T3Viewer",
       ]);
       for (const request of test.requests.filter(({ operation }) => operation !== "T3Viewer"))
-        expect(request.query).toContain("projectMilestone { name }");
+        expect(compactQuery(request.query)).toContain(compactQuery("projectMilestone { name }"));
     }),
 );
 
@@ -741,7 +774,7 @@ describe("LinearIssueTracker", () => {
       expect(probe.accountId).toBe(`org_acme/${JULIUS.id}`);
       expect(probe.scopesTruncated).toBe(true);
       expect(probe.scopes).toEqual([{ key: "acme/ENG", name: "Engineering" }]);
-      expect(test.requests[1]?.query).toContain("teams(first: 250)");
+      expect(compactQuery(test.requests[1]?.query)).toContain(compactQuery("teams(first: 250)"));
       expect(yield* api.getScope("lin_api_probe", "hidden")).toEqual({
         key: "acme/HIDDEN",
         name: "Hidden team",
@@ -818,7 +851,9 @@ describe("LinearIssueTracker", () => {
       });
       expect(test.requests).toHaveLength(1);
       expect(test.requests[0]?.variables.first).toBe(100);
-      expect(test.requests[0]?.query).toContain("labels(first: 20, includeArchived: true)");
+      expect(compactQuery(test.requests[0]?.query)).toContain(
+        compactQuery("labels(first: 20, includeArchived: true)"),
+      );
       expect(page.items[0]?.labelsTruncated).toBe(true);
       expect(page.items.map((item) => item.commentCount)).toEqual([null, null]);
       expect(page.nextCursor).toBe("more-issues");
@@ -1076,7 +1111,8 @@ describe("LinearIssueTracker", () => {
                   id: "cmt_1",
                   body: "Comment",
                   createdAt: "2026-07-01T00:00:00.000Z",
-                  url: null,
+                  url: "https://linear.app/acme/issue/ENG-7#comment",
+                  editedAt: null,
                   user: THEO,
                   reactions: nativeReactions,
                 },
@@ -1099,12 +1135,12 @@ describe("LinearIssueTracker", () => {
       expect(detail.reactions?.[0]?.actors).toHaveLength(20);
       expect(detail.comments[0]?.reactionsTruncated).toBe(true);
       expect(detail.comments[0]?.reactions?.[0]?.count).toBe(100);
-      expect(test.requests.find((request) => request.operation === "T3Issue")?.query).toContain(
-        "labels(first: 100, includeArchived: true)",
-      );
-      expect(test.requests.find((request) => request.operation === "T3Issue")?.query).toContain(
-        "history(first: 100",
-      );
+      expect(
+        compactQuery(test.requests.find((request) => request.operation === "T3Issue")?.query),
+      ).toContain(compactQuery("labels(first: 100, includeArchived: true)"));
+      expect(
+        compactQuery(test.requests.find((request) => request.operation === "T3Issue")?.query),
+      ).toContain(compactQuery("history(first: 100"));
     }),
   );
   it.effect("uses only exhausted native windows for the reset", () =>
@@ -1426,16 +1462,19 @@ describe("LinearIssueTracker", () => {
     }),
   );
 
-  it.effect("rejects a failed HTTP response even when it includes valid data", () =>
-    Effect.gen(function* () {
-      const test = fakeLinear({
-        T3Viewer: () => Response.json({ data: { viewer: JULIUS } }, { status: 500 }),
-      });
-      const api = yield* test.api;
-      const error = yield* api.viewer().pipe(Effect.flip);
-      expect(error.reason).toBe("failed");
-      expect(error.detail).toBe("Linear returned HTTP 500.");
-    }),
+  it.effect.each([300, 400, 404, 500, 503])(
+    "rejects HTTP %s even when it includes valid data",
+    (status) =>
+      Effect.gen(function* () {
+        const test = fakeLinear({
+          T3Viewer: () => Response.json({ data: { viewer: JULIUS } }, { status }),
+        });
+        const api = yield* test.api;
+        const error = yield* api.viewer().pipe(Effect.flip);
+        expect(error.reason).toBe("failed");
+        expect(error.detail).toBe(`Linear returned HTTP ${status}.`);
+        expect(test.requests).toHaveLength(1);
+      }),
   );
 
   it.effect.each([
@@ -1517,7 +1556,14 @@ describe("LinearIssueTracker", () => {
       }),
   );
 
-  it.effect.each([401, 403, 429])("does not read native HTTP %s bodies for diagnostics", (status) =>
+  it.effect.each(
+    [401, 403, 429].flatMap((status) =>
+      ["application/json", "application/graphql-response+json"].map((contentType) => ({
+        status,
+        contentType,
+      })),
+    ),
+  )("does not read native HTTP $status $contentType bodies", ({ status, contentType }) =>
     Effect.gen(function* () {
       let reads = 0;
       const test = fakeLinear({
@@ -1532,7 +1578,7 @@ describe("LinearIssueTracker", () => {
               },
               { highWaterMark: 0 },
             ),
-            { status, headers: { "retry-after": "10" } },
+            { status, headers: { "retry-after": "10", "content-type": contentType } },
           ),
       });
       const api = yield* test.api;
@@ -1724,6 +1770,120 @@ describe("LinearIssueTracker", () => {
       expect(error.cause).toContain("A field could not be read.");
     }),
   );
+  it.effect.each(["template-data", "template-count", "ancestor-count"] as const)(
+    "keeps quota backoff after invalid decoded team %s",
+    (invalid) =>
+      Effect.gen(function* () {
+        const now = 1_750_000_000_000;
+        yield* TestClock.setTime(now);
+        const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+        const template = {
+          id: "template",
+          name: "Template",
+          description: null,
+          content: null,
+          type: "issue",
+          hasFormFields: false,
+          templateData: invalid === "template-data" ? "{" : {},
+        };
+        const test = fakeLinear({
+          T3Viewer: () => new Response(null, { status: 429 }),
+          T3Team: () => ({
+            organization: ORGANIZATION,
+            issueLabels: empty,
+            teams: {
+              nodes: [
+                {
+                  id: "team",
+                  key: "ENG",
+                  name: "Engineering",
+                  private: false,
+                  visibility: "public",
+                  restrictedBy: null,
+                  states: empty,
+                  labels: empty,
+                  members: empty,
+                  templates: {
+                    ...empty,
+                    nodes: Array.from(
+                      { length: invalid === "template-count" ? 101 : 1 },
+                      () => template,
+                    ),
+                  },
+                  ancestors:
+                    invalid === "ancestor-count"
+                      ? Array.from({ length: 6 }, (_, index) => ({
+                          id: `ancestor-${index}`,
+                          key: `A${index}`,
+                          name: "Ancestor",
+                          private: false,
+                          visibility: "public",
+                          restrictedBy: null,
+                          templates: empty,
+                        }))
+                      : [],
+                },
+              ],
+            },
+          }),
+        });
+        const api = yield* test.api;
+        yield* api.viewer().pipe(Effect.flip);
+        const first = yield* api.viewer().pipe(Effect.flip);
+        const cooldown = first.retryAt! - now;
+        expect(cooldown).toBeGreaterThan(0);
+        yield* TestClock.adjust(cooldown);
+        expect((yield* api.getTeam("ENG").pipe(Effect.flip)).reason).toBe("failed");
+        yield* api.viewer().pipe(Effect.flip);
+        const second = yield* api.viewer().pipe(Effect.flip);
+        expect(second.retryAt! - (now + cooldown)).toBeGreaterThan(cooldown);
+        expect(test.requests.map(({ operation }) => operation)).toEqual([
+          "T3Viewer",
+          "T3Team",
+          "T3Viewer",
+        ]);
+      }),
+  );
+
+  it.effect("rejects invalid UTF-8 before decoding native data", () =>
+    Effect.gen(function* () {
+      const test = fakeLinear({ T3Viewer: () => new Response(Uint8Array.of(0xff)) });
+      const api = yield* test.api;
+      expect((yield* api.viewer().pipe(Effect.flip)).detail).toBe(
+        "Linear returned an oversized or invalid response.",
+      );
+      expect(test.requests).toHaveLength(1);
+    }),
+  );
+
+  it.effect("does not promote a viewer identity from malformed native data", () =>
+    Effect.gen(function* () {
+      const now = 1_750_000_000_000;
+      yield* TestClock.setTime(now);
+      const test = fakeLinear(
+        {
+          T3ProbeCredential: () =>
+            Response.json(
+              { data: { viewer: JULIUS } },
+              {
+                headers: {
+                  "x-ratelimit-requests-remaining": "0",
+                  "x-ratelimit-requests-reset": String(now + 60_000),
+                },
+              },
+            ),
+          T3Viewer: () => ({ viewer: JULIUS }),
+        },
+        "lin_first",
+      );
+      const api = yield* test.api;
+      expect((yield* api.probeCredential("lin_first").pipe(Effect.flip)).reason).toBe("failed");
+      expect((yield* api.viewer("lin_second")).viewer.id).toBe(JULIUS.id);
+      expect((yield* api.viewer("lin_first").pipe(Effect.flip)).reason).toBe("rate-limited");
+      expect(test.requests).toHaveLength(2);
+    }),
+  );
+
   it.effect("records rate errors before decoding incomplete native data", () =>
     Effect.gen(function* () {
       const test = fakeLinear({
@@ -1895,7 +2055,8 @@ describe("LinearIssueTracker", () => {
                   id: "cmt_1",
                   body: "hi",
                   createdAt: "2026-07-02T01:00:00.000Z",
-                  url: null,
+                  url: "https://linear.app/acme/issue/ENG-7#comment",
+                  editedAt: null,
                   user: THEO,
                   reactions: [{ id: "r1", emoji: "👍", user: JULIUS }],
                 },
@@ -1927,9 +2088,9 @@ describe("LinearIssueTracker", () => {
                   url: `https://gitlab.com/acme/web/-/merge_requests/${index + 1}`,
                   title: `Change ${index + 1}`,
                   sourceType: "gitlab",
-                  metadata,
+                  metadata: metadata ?? {},
                 })),
-                { url: "https://example.test/doc", title: "Doc", sourceType: null, metadata: null },
+                { url: "https://example.test/doc", title: "Doc", sourceType: null, metadata: {} },
               ],
             },
             history: {
@@ -1943,7 +2104,7 @@ describe("LinearIssueTracker", () => {
                   toState: state("Done", "completed"),
                   fromAssignee: null,
                   toAssignee: JULIUS,
-                  addedLabels: [{ id: "lbl_bug", name: "Bug", color: null }],
+                  addedLabels: [labelFixture({ id: "lbl_bug", name: "Bug", color: "#000" })],
                   removedLabels: null,
                   fromTitle: null,
                   toTitle: null,
@@ -2084,7 +2245,7 @@ describe("LinearIssueTracker", () => {
   );
   it.effect("requires a native label ID when team and workspace names collide", () =>
     Effect.gen(function* () {
-      const label = { id: "team_bug", name: "Bug", color: null };
+      const label = labelFixture({ id: "team_bug", name: "Bug", color: "#000" });
       const test = fakeLinear({
         T3Team: () => ({
           organization: ORGANIZATION,
@@ -2131,16 +2292,27 @@ describe("LinearIssueTracker", () => {
 
   it.effect("retains archived labels and child labels while refusing native label groups", () =>
     Effect.gen(function* () {
-      const old = { id: "lbl_old", name: "Old", color: null, archivedAt: "2026-01-01T00:00:00Z" };
-      const group = { id: "lbl_type", name: "Type", color: null, archivedAt: null, isGroup: true };
-      const bug = {
+      const old = labelFixture({
+        id: "lbl_old",
+        name: "Old",
+        color: "#000",
+        archivedAt: "2026-01-01T00:00:00Z",
+      });
+      const group = labelFixture({
+        id: "lbl_type",
+        name: "Type",
+        color: "#000",
+        archivedAt: null,
+        isGroup: true,
+      });
+      const bug = labelFixture({
         id: "lbl_bug",
         name: "Bug",
-        color: null,
+        color: "#000",
         archivedAt: null,
         isGroup: false,
         parent: group,
-      };
+      });
       const workspaceOld = { ...old, id: "lbl_workspace_old", name: "WorkspaceOld" };
       const workspaceGroup = { ...group, id: "lbl_workspace_type", name: "WorkspaceType" };
       const test = fakeLinear({
@@ -2160,7 +2332,9 @@ describe("LinearIssueTracker", () => {
                 labels: {
                   nodes: test.requests
                     .at(-1)
-                    ?.query.includes("labels(first: 250, includeArchived: true)")
+                    ?.query.includes(
+                      stripIgnoredCharacters("labels(first: 250, includeArchived: true)"),
+                    )
                     ? [old, group, bug]
                     : [group, bug],
                   pageInfo: { hasNextPage: false, endCursor: null },
@@ -2174,7 +2348,9 @@ describe("LinearIssueTracker", () => {
           issueLabels: {
             nodes: test.requests
               .at(-1)
-              ?.query.includes("issueLabels(first: 250, includeArchived: true")
+              ?.query.includes(
+                stripIgnoredCharacters("issueLabels(first: 250, includeArchived: true"),
+              )
               ? [workspaceOld, workspaceGroup]
               : [workspaceGroup],
             pageInfo: { hasNextPage: true, endCursor: "more-labels" },
@@ -2199,7 +2375,7 @@ describe("LinearIssueTracker", () => {
       yield* api.update({ ...scoped, key: "ENG-7", labels: [old.id, bug.id, workspaceOld.id] });
       const candidates = yield* api.listCandidates(scoped);
       expect(candidates.labels).toEqual([
-        { id: bug.id, name: "Bug", color: null, description: null },
+        { id: bug.id, name: "Bug", color: "#000", description: null },
       ]);
       expect(candidates.truncated).toBe(true);
       expect(test.requests.map((request) => request.operation)).toEqual([
@@ -2819,7 +2995,7 @@ it.effect("pages label and member candidates with native cursors and workspace c
         organization: ORGANIZATION,
         teams: { nodes: [{ id: "team-1", key: "ENG", name: "Engineering" }] },
         issueLabels: {
-          nodes: [{ id: "label-1", name: "Bug", color: "#f00", description: null }],
+          nodes: [labelFixture({ id: "label-1", name: "Bug", color: "#f00", description: null })],
           pageInfo,
         },
       }),
@@ -2834,6 +3010,7 @@ it.effect("pages label and member candidates with native cursors and workspace c
               private: true,
               visibility: "private",
               restrictedBy: null,
+              ancestors: [],
               members: { nodes: [JULIUS], pageInfo },
             },
           ],
@@ -2970,7 +3147,8 @@ it.effect("rejects unchanged Linear comment cursors without extra requests", () 
                   id: "comment-1",
                   body: "Saved comment",
                   createdAt: "2026-07-01T00:00:00Z",
-                  url: null,
+                  url: "https://linear.app/acme/issue/ENG-7#comment",
+                  editedAt: null,
                   user: JULIUS,
                   reactions: [],
                 },
@@ -3008,7 +3186,7 @@ it.effect("maps editable old comments with the supplied viewer and native edit t
                 body: "edited",
                 createdAt: "2026-07-01T00:00:00.000Z",
                 editedAt: "2026-07-02T00:00:00.000Z",
-                url: null,
+                url: "https://linear.app/acme/issue/ENG-7#comment",
                 user: JULIUS,
                 reactions: [],
               },
@@ -3089,7 +3267,10 @@ it.effect.each(["create", "update"] as const)(
       const labels = Array.from({ length: 250 }, (_, n) => ({
         id: `label-${n}`,
         name: "Same",
-        color: null,
+        color: "#000",
+        description: null,
+        archivedAt: null,
+        isGroup: false,
       }));
       const members = Array.from({ length: 250 }, (_, n) => user(`member-${n}`, "Same"));
       const team = {
@@ -3127,7 +3308,7 @@ it.effect.each(["create", "update"] as const)(
             organization: ORGANIZATION,
             teams: { nodes: [team] },
             issueLabels: {
-              nodes: [{ id: "label-250", name: "Same", color: null }],
+              nodes: [labelFixture({ id: "label-250", name: "Same", color: "#000" })],
               pageInfo: empty.pageInfo,
             },
           };
@@ -3231,13 +3412,15 @@ it.effect.each([
             failure === "missing"
               ? []
               : [
-                  {
+                  labelFixture({
                     id: failure === "wrong-id" ? "other" : "chosen",
                     name: "Same",
-                    color: null,
+                    color: "#000",
                     isGroup: failure === "group",
-                  },
-                  ...(failure === "duplicate" ? [{ id: "chosen", name: "Same", color: null }] : []),
+                  }),
+                  ...(failure === "duplicate"
+                    ? [labelFixture({ id: "chosen", name: "Same", color: "#000" })]
+                    : []),
                 ],
           pageInfo: {
             hasNextPage: failure === "partial",
@@ -3423,9 +3606,9 @@ it.effect.each([false, true])(
   (partial) =>
     Effect.gen(function* () {
       const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
-      const parentLabel = { id: "parent-security", name: "Security", color: null };
+      const parentLabel = labelFixture({ id: "parent-security", name: "Security", color: "#000" });
       const childLabel = { ...parentLabel, id: "child-security" };
-      const other = { id: "other", name: "Other", color: null };
+      const other = labelFixture({ id: "other", name: "Other", color: "#000" });
       const written: unknown[] = [];
       const team = {
         id: "team_eng",
@@ -3843,11 +4026,13 @@ it.effect("uses workspace-scoped native templates without accepting another team
     const test = fakeLinear({
       T3Team: (variables) => {
         expect(variables).toEqual({ key: "ENG", includeAncestorLabels: false });
-        expect(test.requests.at(-1)?.query).toContain(
-          'organization { id urlKey templates(first: 100, filter: { type: { eq: "issue" } })',
+        expect(compactQuery(test.requests.at(-1)?.query)).toContain(
+          compactQuery(
+            'organization { id urlKey templates(first: 100, filter: { type: { eq: "issue" } })',
+          ),
         );
-        expect(test.requests.at(-1)?.query).toContain(
-          "teams(first: 1, filter: { key: { eq: $key } })",
+        expect(compactQuery(test.requests.at(-1)?.query)).toContain(
+          compactQuery("teams(first: 1, filter: { key: { eq: $key } })"),
         );
         return {
           organization: {
@@ -3905,15 +4090,17 @@ it.effect.each(["create", "assignee", "clearLabels", "labelPage", "missingLabels
   (operation) =>
     Effect.gen(function* () {
       const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
-      const parentLabel = { id: "parent-label", name: "Security", color: null };
+      const parentLabel = labelFixture({ id: "parent-label", name: "Security", color: "#000" });
       const test = fakeLinear({
         T3Team: (variables) => {
           expect(variables.includeAncestorLabels).toBe(operation === "missingLabels");
-          expect(test.requests.at(-1)?.query).toContain(
-            "ancestors { id key name private visibility restrictedBy { id } labels(",
+          expect(compactQuery(test.requests.at(-1)?.query)).toContain(
+            compactQuery("ancestors { id key name private visibility restrictedBy { id } labels("),
           );
-          expect(test.requests.at(-1)?.query).toContain(
-            "labels(first: 250, includeArchived: true) @include(if: $includeAncestorLabels)",
+          expect(compactQuery(test.requests.at(-1)?.query)).toContain(
+            compactQuery(
+              "labels(first: 250, includeArchived: true) @include(if: $includeAncestorLabels)",
+            ),
           );
           return {
             organization: { ...ORGANIZATION, templates: empty },
@@ -4346,6 +4533,7 @@ it.effect.each([false, true])(
         private: privateTeam,
         visibility: privateTeam ? "private" : "public",
         restrictedBy: null,
+        ancestors: [],
       };
       const test = fakeLinear({
         T3AssigneeCandidates: ({ publicTeam, readMembers, after }) => {

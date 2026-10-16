@@ -18,7 +18,8 @@
   },
   "scripts": {
     "typecheck": "tsc-rs --noEmit",
-    "test": "vp test run --config ../../vite.config.ts --dir ."
+    "test": "vp test run --config ../../vite.config.ts --dir .",
+    "generate": "graphqlgen"
   },
   "dependencies": {
     "@t3tools/contracts": "workspace:*",
@@ -28,8 +29,11 @@
     "effect": "catalog:"
   },
   "devDependencies": {
+    "@effect/graphql-generator": "catalog:",
+    "@effect/platform-node": "catalog:",
     "@effect/vitest": "catalog:",
     "@types/node": "catalog:",
+    "graphql": "16.14.1",
     "vite-plus": "catalog:"
   }
 }
