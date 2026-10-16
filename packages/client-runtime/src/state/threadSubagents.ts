@@ -12,7 +12,6 @@ type RunId = Projection["runs"][number]["id"];
 export interface ThreadTurnSubagents {
   readonly runId: RunId | null;
   readonly turnActive: boolean;
-  /** Spawn order: startedAt, falling back to updatedAt for agents that never started. */
   readonly subagents: ReadonlyArray<Subagent>;
   readonly liveCount: number;
   readonly settledCount: number;
@@ -27,14 +26,11 @@ function orderKey(subagent: Subagent): number {
   return DateTime.toEpochMillis(subagent.startedAt ?? subagent.updatedAt);
 }
 
-/** null when the thread has never spawned a subagent. */
 export function deriveThreadTurnSubagents(
   projection: Pick<Projection, "runs" | "subagents">,
 ): ThreadTurnSubagents | null {
   if (projection.subagents.length === 0) return null;
   const activeRun = resolveActiveThreadRun(projection);
-  // With no live run the newest roster is still worth showing: a turn that
-  // just finished leaves results the user has not read yet.
   const latestUpdated = projection.subagents.reduce((latest, subagent) =>
     DateTime.toEpochMillis(subagent.updatedAt) > DateTime.toEpochMillis(latest.updatedAt)
       ? subagent
@@ -58,9 +54,6 @@ export function deriveThreadTurnSubagents(
   return { runId, turnActive: activeRun !== null, subagents, liveCount, settledCount };
 }
 
-/**
- * What the pill's agents segment says, or null while it should stay hidden.
- */
 export function resolveSubagentPillSegment(
   turn: ThreadTurnSubagents | null,
 ): SubagentPillSegment | null {

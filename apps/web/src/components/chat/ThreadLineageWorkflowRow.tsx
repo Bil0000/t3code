@@ -21,7 +21,6 @@ import {
   THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS,
 } from "./threadDetailsPanelStyles";
 
-/** Members run under the coordinator's provider, so they share its glyph. */
 function WorkflowMemberRow({
   member,
   providerInstanceId,
@@ -110,12 +109,10 @@ export function ThreadLineageWorkflowRow({
   readonly stopDisabled: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
-  // The running phase opens itself until the user picks a side for it.
   const [phaseOpen, setPhaseOpen] = useState<ReadonlyMap<number, boolean>>(() => new Map());
   const label = group.workflow.workflowName ?? group.workflow.title;
   const phases = group.phases.filter((phase) => phase.members.length > 0);
   return (
-    // The flag lets the lineage list trade its compact height for the open tree.
     <li className="group" data-workflow-expanded={expanded ? "" : undefined}>
       <div className={cn("relative", THREAD_DETAILS_PANEL_SPLIT_GROUP_CLASS)}>
         {header}

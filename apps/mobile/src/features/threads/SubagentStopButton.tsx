@@ -3,8 +3,8 @@ import type { EnvironmentId, OrchestrationV2Subagent } from "@t3tools/contracts"
 import { useState } from "react";
 import { Alert, Pressable, View } from "react-native";
 
-import { AppActivityIndicator } from "../../components/AppActivityIndicator";
-import { SymbolView } from "../../components/AppSymbol";
+import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
+import { SymbolView } from "../../components/ui/AppSymbol";
 import { cn } from "../../lib/cn";
 import { orchestrationEnvironment } from "../../state/orchestration";
 import { threadEnvironment } from "../../state/threads";

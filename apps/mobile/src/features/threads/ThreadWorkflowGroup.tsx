@@ -14,8 +14,8 @@ import { deriveSubagentElapsedMs, formatDuration } from "@t3tools/shared/orchest
 import { Fragment, useState } from "react";
 import { Pressable, ScrollView, View } from "react-native";
 
-import { AppText as Text } from "../../components/AppText";
-import { SymbolView, type AppSymbolName } from "../../components/AppSymbol";
+import { AppText as Text } from "../../components/ui/AppText";
+import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
 import { cn } from "../../lib/cn";
 import { useEnvironmentServerConfig, useThreadShell } from "../../state/entities";
 import { SUBAGENT_TONE_TEXT_CLASS, SubagentStatusDot } from "./SubagentStatusDot";

@@ -79,7 +79,6 @@ describe("projectedSubagentsToRuntime workflow expansion", () => {
       phaseTitle: "Alpha",
       status: "running",
     });
-    // A queued member is not started work: it must not report an elapsed clock.
     expect(rows[2]?.status).toBe("pending");
     expect(rows[2]?.startedAt).toBeNull();
   });
@@ -112,7 +111,6 @@ describe("projectedSubagentsToRuntime workflow expansion", () => {
     expect(settled?.model).toBe("claude-opus-5[1m]");
     expect(settled?.effort).toBe("xhigh");
     expect(settled?.speed).toBe("standard");
-    // The prompt stays on progress so the detail view can show both halves.
     expect(settled?.progress).toBe("Reply with exactly: A1");
     expect(settled?.usage).toEqual({ totalTokens: 71_141, toolUses: 3, durationMs: 1500 });
   });
@@ -134,7 +132,6 @@ describe("projectedSubagentsToRuntime workflow expansion", () => {
           },
         }),
       ]);
-      // The settled run keeps its members reachable under the coordinator.
       expect(groups[0]?.workflow.status).toBe(status);
       const members = groups[0]?.phases.flatMap((phase) => phase.members);
       expect(members?.map((agent) => agent.status)).toEqual([status, status, "completed"]);
@@ -256,7 +253,6 @@ describe("deriveWorkflowGroups over a dynamic workflow", () => {
     const groups = groupsOf([
       subagent({
         workflow: {
-          // The declared plan has not caught up with the member's phase yet.
           phases: [{ index: 1, title: "Alpha" }],
           agents: [
             member({ state: "completed" }),
