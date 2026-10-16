@@ -141,23 +141,34 @@ function zipImageDimensions(bytes: Uint8Array) {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const packed = bytes[10]!;
   let offset = 13 + (packed & 0x80 ? 3 * (2 << (packed & 7)) : 0);
-  while (bytes[offset] === 0x21) {
-    offset += 2;
+  let { width, height } = dimensions;
+  let sawFrame = false;
+  while (offset < bytes.length) {
+    const block = bytes[offset++]!;
+    if (block === 0x3b) return sawFrame ? { width, height } : null;
+    if (block === 0x2c) {
+      if (offset + 9 > bytes.length) return null;
+      width = Math.max(width, view.getUint16(offset, true) + view.getUint16(offset + 4, true));
+      height = Math.max(
+        height,
+        view.getUint16(offset + 2, true) + view.getUint16(offset + 6, true),
+      );
+      const imagePacked = bytes[offset + 8]!;
+      offset += 9 + (imagePacked & 0x80 ? 3 * (2 << (imagePacked & 7)) : 0);
+      if (offset >= bytes.length) return null;
+      offset++;
+      sawFrame = true;
+    } else if (block === 0x21) {
+      if (offset >= bytes.length) return null;
+      offset++;
+    } else {
+      return null;
+    }
     while (offset < bytes.length && bytes[offset] !== 0) offset += 1 + bytes[offset]!;
     if (offset >= bytes.length) return null;
     offset++;
   }
-  if (bytes[offset] !== 0x2c || offset + 10 > bytes.length) return null;
-  return {
-    width: Math.max(
-      dimensions.width,
-      view.getUint16(offset + 1, true) + view.getUint16(offset + 5, true),
-    ),
-    height: Math.max(
-      dimensions.height,
-      view.getUint16(offset + 3, true) + view.getUint16(offset + 7, true),
-    ),
-  };
+  return null;
 }
 
 function readFile(
@@ -203,7 +214,9 @@ function readFile(
         return;
       }
       if (mimeType.startsWith("image/")) {
-        const header = new Uint8Array(Math.min(size, IMAGE_DIMENSIONS_HEADER_BYTES));
+        const header = new Uint8Array(
+          chunks[0]?.[0] === 0x47 ? size : Math.min(size, IMAGE_DIMENSIONS_HEADER_BYTES),
+        );
         let offset = 0;
         for (const chunk of chunks) {
           const part = chunk.subarray(0, header.length - offset);

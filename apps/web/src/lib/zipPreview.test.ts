@@ -1,3 +1,4 @@
+import { IMAGE_DIMENSIONS_HEADER_BYTES } from "@t3tools/shared/imageDimensions";
 import JSZip from "jszip";
 import { describe, expect, it, vi } from "vite-plus/test";
 
@@ -12,6 +13,32 @@ function png(width = 800, height = 600) {
   view.setUint32(16, width);
   view.setUint32(20, height);
   return bytes;
+}
+
+function gif(frames: readonly (readonly [number, number])[], padding = 0) {
+  const header = new Uint8Array([
+    71, 73, 70, 56, 57, 97, 1, 0, 1, 0, 128, 0, 0, 0, 0, 0, 255, 255, 255,
+  ]);
+  const screen = new DataView(header.buffer);
+  screen.setUint16(6, frames[0]![0], true);
+  screen.setUint16(8, frames[0]![1], true);
+  const bytes = Array.from(header);
+  for (const [index, [width, height]] of frames.entries()) {
+    if (index === 1 && padding > 0) {
+      bytes.push(33, 254);
+      for (let remaining = padding; remaining > 0; remaining -= 255) {
+        const size = Math.min(remaining, 255);
+        bytes.push(size, ...new Uint8Array(size));
+      }
+      bytes.push(0);
+    }
+    const frame = new Uint8Array([44, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 1, 68, 0]);
+    const view = new DataView(frame.buffer);
+    view.setUint16(5, width, true);
+    view.setUint16(7, height, true);
+    bytes.push(...frame);
+  }
+  return new Uint8Array([...bytes, 59]);
 }
 
 async function archive(zip: JSZip) {
@@ -216,7 +243,8 @@ describe("loadZipPreview", () => {
     [
       "photo.gif",
       new Uint8Array([
-        71, 73, 70, 56, 57, 97, 1, 0, 1, 0, 0, 0, 0, 44, 0, 0, 0, 0, 16, 39, 16, 39, 0,
+        71, 73, 70, 56, 57, 97, 1, 0, 1, 0, 0, 0, 0, 44, 0, 0, 0, 0, 16, 39, 16, 39, 0, 2, 1, 68, 0,
+        59,
       ]),
     ],
   ])("rejects oversized decoded images before creating a Blob: %s", async (name, bytes) => {
@@ -235,12 +263,7 @@ describe("loadZipPreview", () => {
   it.each([
     ["photo.png", png(4000, 4000)],
     ["photo.png", png(8192, 1)],
-    [
-      "photo.gif",
-      new Uint8Array([
-        71, 73, 70, 56, 57, 97, 32, 3, 88, 2, 0, 0, 0, 44, 0, 0, 0, 0, 32, 3, 88, 2, 0,
-      ]),
-    ],
+    ["photo.gif", gif([[800, 600]])],
     [
       "photo.gif",
       Uint8Array.from(atob("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"), (c) =>
@@ -290,6 +313,91 @@ describe("loadZipPreview", () => {
     const preview = await loadZipPreview(await archive(new JSZip().file(name, bytes)), signal());
     await expect(preview.readFile(preview.entries[0]!, signal())).rejects.toThrow(
       /Cannot safely preview this image.*Download the ZIP/i,
+    );
+  });
+
+  it.each([
+    [0, 8193, 1],
+    [0, 4001, 4000],
+    [IMAGE_DIMENSIONS_HEADER_BYTES + 32, 8193, 1],
+    [IMAGE_DIMENSIONS_HEADER_BYTES + 32, 4001, 4000],
+  ])(
+    "blocks an oversized later GIF frame, padding=%s width=%s height=%s",
+    async (padding, width, height) => {
+      const bytes = gif(
+        [
+          [1, 1],
+          [width!, height!],
+        ],
+        padding,
+      );
+      const preview = await loadZipPreview(
+        await archive(new JSZip().file("photo.png", bytes)),
+        signal(),
+      );
+      const createBlob = vi.spyOn(globalThis, "Blob");
+      try {
+        await expect(preview.readFile(preview.entries[0]!, signal())).rejects.toThrow(
+          /16 million pixels.*8,192/i,
+        );
+        expect(createBlob).not.toHaveBeenCalled();
+      } finally {
+        createBlob.mockRestore();
+      }
+    },
+  );
+
+  it.each([0, IMAGE_DIMENSIONS_HEADER_BYTES + 32])(
+    "opens a safe animated GIF, padding=%s",
+    async (padding) => {
+      const bytes = gif(
+        [
+          [1, 1],
+          [1, 1],
+        ],
+        padding,
+      );
+      const preview = await loadZipPreview(
+        await archive(new JSZip().file("photo.gif", bytes)),
+        signal(),
+      );
+      const image = await preview.readFile(preview.entries[0]!, signal());
+
+      expect(new Uint8Array(await image.arrayBuffer())).toEqual(bytes);
+    },
+  );
+
+  it.each([
+    [
+      "trailer",
+      gif([
+        [1, 1],
+        [1, 1],
+      ]).slice(0, -1),
+    ],
+    [
+      "later image data",
+      gif([
+        [1, 1],
+        [1, 1],
+      ]).slice(0, -3),
+    ],
+    [
+      "later descriptor",
+      gif([
+        [1, 1],
+        [1, 1],
+      ]).slice(0, -10),
+    ],
+    ["color table", gif([[1, 1]]).slice(0, 14)],
+  ])("blocks a GIF with incomplete %s", async (_part, bytes) => {
+    const preview = await loadZipPreview(
+      await archive(new JSZip().file("photo.gif", bytes)),
+      signal(),
+    );
+
+    await expect(preview.readFile(preview.entries[0]!, signal())).rejects.toThrow(
+      /Cannot safely preview/i,
     );
   });
 
