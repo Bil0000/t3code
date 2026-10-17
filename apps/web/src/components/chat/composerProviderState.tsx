@@ -19,7 +19,12 @@ import type { ReactNode } from "react";
 import type { DraftId } from "../../composerDraftStore";
 import { getProviderModelCapabilities } from "../../providerModels";
 import type { ComposerControlSize } from "./ComposerControl";
-import { shouldRenderTraitsControls, TraitsMenuContent, TraitsPicker } from "./TraitsPicker";
+import {
+  getReasoningTraitStep,
+  shouldRenderTraitsControls,
+  TraitsMenuContent,
+  TraitsPicker,
+} from "./TraitsPicker";
 
 export type ComposerProviderStateInput = {
   provider: ProviderDriverKind;
@@ -154,6 +159,62 @@ export function getComposerProviderState(input: ComposerProviderStateInput): Com
           modelPickerIconClassName: "ultrathink-chroma",
         }
       : {}),
+  };
+}
+
+/**
+ * `cursorOffset` is the shift an expanded caret needs to stay on the same
+ * character after the Ultrathink prefix is added or removed; 0 when the prompt
+ * is unchanged.
+ */
+export function getComposerReasoningStep(input: {
+  provider: ProviderDriverKind;
+  instanceId: ProviderInstanceId;
+  model: string;
+  models: ReadonlyArray<ServerProviderModel>;
+  modelOptions: ReadonlyArray<ProviderOptionSelection> | null | undefined;
+  reportedModelSelection?: ModelSelection | null | undefined;
+  prompt: string;
+  planModeEnabled: boolean;
+  direction: 1 | -1;
+}): {
+  prompt: string;
+  cursorOffset: number;
+  modelOptions?: ReadonlyArray<ProviderOptionSelection>;
+} | null {
+  const { prompt } = input;
+  const { selections } = resolveComposerOptionSelections(
+    input.models,
+    input.model,
+    input.provider,
+    input.modelOptions,
+    input.planModeEnabled,
+  );
+  const step = getReasoningTraitStep({
+    provider: input.provider,
+    instanceId: input.instanceId,
+    model: input.model,
+    models: input.models,
+    modelOptions: selections,
+    reportedModelSelection: input.reportedModelSelection,
+    prompt,
+    planModeEnabled: input.planModeEnabled,
+    direction: input.direction,
+  });
+  if (!step) return null;
+  // Adding the prefix also trims the prompt, so leading whitespace shifts the caret back.
+  const prefixLength = step.prompt.length - prompt.trim().length;
+  const leadingWhitespaceLength = prompt.length - prompt.trimStart().length;
+  const cursorOffset =
+    step.prompt === prompt
+      ? 0
+      : "modelOptions" in step
+        ? step.prompt.length - prompt.length
+        : prefixLength - leadingWhitespaceLength;
+  return {
+    prompt: step.prompt,
+    cursorOffset,
+    ...("modelOptions" in step ? { modelOptions: step.modelOptions } : {}),
   };
 }
 

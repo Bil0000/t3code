@@ -296,7 +296,6 @@ import {
   ComposerSelectControl,
 } from "./ComposerControl";
 import { resolveComposerMenuActiveItemId } from "./composerMenuHighlight";
-import { getReasoningLevelChange } from "./TraitsPicker";
 import { buildPullRequestReferenceContext } from "../pullRequest/pullRequestDetail.logic";
 import {
   matchesPullRequestQuery,
@@ -309,6 +308,7 @@ import {
 import {
   getComposerPromptInjectionState,
   getComposerProviderState,
+  getComposerReasoningStep,
   renderProviderTraitsMenuContent,
   renderProviderTraitsPicker,
 } from "./composerProviderState";
@@ -1443,7 +1443,7 @@ export interface ChatComposerHandle {
     sourceAnchor: AssistantCitationSourceAnchor,
   ) => boolean;
   openModelPicker: () => void;
-  adjustReasoningLevel: (direction: 1 | -1) => void;
+  stepReasoningEffort: (direction: 1 | -1) => void;
   toggleModelPicker: () => void;
   openControl: (command: KeybindingCommand) => void;
   isModelPickerOpen: () => boolean;
@@ -3686,7 +3686,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     options?: {
       expectedText?: string;
       expandedCursorAfterReplace?: number;
-      expandedSelectionEndAfterReplace?: number;
       focusEditorAfterReplace?: boolean;
       citationComment?: {
         start: number;
@@ -3751,14 +3750,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (options?.focusEditorAfterReplace !== false) {
       window.requestAnimationFrame(() => {
         if (promptRef.current !== next.text) return;
-        composerEditorRef.current?.focusAt(
-          nextCursor,
-          collapseExpandedComposerCursor(
-            next.text,
-            options?.expandedSelectionEndAfterReplace ?? nextExpandedCursor,
-            isLiteralPendingAnswer,
-          ),
-        );
+        composerEditorRef.current?.focusAt(nextCursor);
       });
     }
     return true;
@@ -6100,46 +6092,35 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           { ensureLeadingBoundary: true, citationCommentAnchor: sourceAnchor },
         ),
       openModelPicker: openModelPickerStable,
-      adjustReasoningLevel: (direction) => {
+      stepReasoningEffort: (direction) => {
         if (noProviderAvailable || isComposerApprovalState || pendingUserInputs.length > 0) return;
-        const store = useComposerDraftStore.getState();
-        const modelOptions =
-          store.getComposerDraft(composerDraftTarget)?.modelSelectionByProvider[selectedInstanceId]
-            ?.options ?? composerModelOptions?.[selectedInstanceId];
-        const change = getReasoningLevelChange({
+        const change = getComposerReasoningStep({
           provider: selectedProvider,
           instanceId: selectedInstanceId,
-          models: selectedProviderModels,
           model: selectedModel,
-          modelOptions,
+          models: selectedProviderModels,
+          modelOptions: composerModelOptions?.[selectedInstanceId],
           reportedModelSelection,
           prompt: promptRef.current,
           planModeEnabled: settings.planModeEnabled,
           direction,
         });
         if (!change) return;
-        if ("modelOptions" in change) {
-          store.setProviderModelOptions(
-            composerDraftTarget,
-            selectedProvider,
-            change.modelOptions,
-            {
+        if (change.modelOptions) {
+          useComposerDraftStore
+            .getState()
+            .setProviderModelOptions(composerDraftTarget, selectedProvider, change.modelOptions, {
               instanceId: selectedInstanceId,
               model: selectedModel,
               persistSticky: true,
-            },
-          );
+            });
         }
-        if ("promptSelectionOffset" in change) {
-          const snapshot = readComposerSnapshotStable();
-          const selection = composerEditorRef.current?.readSelectionRange() ?? {
-            start: snapshot.expandedCursor,
-            end: snapshot.expandedCursor,
-          };
-          const offset = change.promptSelectionOffset;
+        if (change.prompt !== promptRef.current) {
           applyPromptReplacementStable(0, promptRef.current.length, change.prompt, {
-            expandedCursorAfterReplace: Math.max(0, selection.start + offset),
-            expandedSelectionEndAfterReplace: Math.max(0, selection.end + offset),
+            expandedCursorAfterReplace: Math.max(
+              0,
+              readComposerSnapshotStable().expandedCursor + change.cursorOffset,
+            ),
           });
         }
       },

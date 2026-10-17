@@ -7833,11 +7833,11 @@ export default function ChatView(props: ChatViewProps) {
         return;
       }
 
-      if (command === "reasoning.increase" || command === "reasoning.decrease") {
+      if (command === "composer.increaseEffort" || command === "composer.decreaseEffort") {
         event.preventDefault();
         event.stopPropagation();
         if (!event.repeat) {
-          composerRef.current?.adjustReasoningLevel(command === "reasoning.increase" ? 1 : -1);
+          composerRef.current?.stepReasoningEffort(command === "composer.increaseEffort" ? 1 : -1);
         }
         return;
       }

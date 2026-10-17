@@ -91,6 +91,14 @@ type TraitsPersistence =
 
 const ULTRATHINK_PROMPT_PREFIX = "Ultrathink:\n";
 
+const REASONING_SELECT_DESCRIPTOR_IDS: ReadonlySet<string> = new Set([
+  "reasoningEffort",
+  "reasoning",
+  "effort",
+  "variant",
+  "thinking",
+]);
+
 function DefaultBadge() {
   return (
     <Badge variant="outline" size="sm" className="min-w-0">
@@ -281,41 +289,58 @@ function getTraitSelectChange(
   };
 }
 
-export function getReasoningLevelChange(
-  input: Parameters<typeof getTraitsSectionVisibility>[0] & {
-    direction: 1 | -1;
-    instanceId?: ProviderInstanceId;
-    reportedModelSelection?: ModelSelection | null | undefined;
-  },
-) {
-  const selected = getTraitsSectionVisibility(input);
-  const descriptor = selected.selectDescriptors.find((entry) =>
-    ["reasoningEffort", "reasoning", "effort", "variant", "thinking"].includes(entry.id),
+/**
+ * `modelOptions` must already carry the composer's implicit defaults (see
+ * `withImplicitFastModeDefault`) so the persisted selection matches what the
+ * picker would write.
+ */
+export function getReasoningTraitStep(input: {
+  provider: ProviderDriverKind;
+  instanceId: ProviderInstanceId;
+  model: string;
+  models: ReadonlyArray<ServerProviderModel>;
+  modelOptions: ProviderOptions | undefined;
+  reportedModelSelection: ModelSelection | null | undefined;
+  prompt: string;
+  planModeEnabled: boolean;
+  direction: 1 | -1;
+}) {
+  const selected = getSelectedTraits(
+    input.provider,
+    input.models,
+    input.model,
+    input.prompt,
+    input.modelOptions,
+    true,
+    input.planModeEnabled,
   );
-  if (!descriptor || selected.modelIsUnavailable || selected.ultrathinkInBodyText) return null;
-  const modelSelection =
-    input.instanceId && input.model
-      ? { instanceId: input.instanceId, model: input.model, options: input.modelOptions ?? [] }
-      : null;
+  if (selected.modelIsUnavailable || selected.ultrathinkInBodyText) return null;
+  const descriptor = selected.selectDescriptors.find((entry) =>
+    REASONING_SELECT_DESCRIPTOR_IDS.has(entry.id),
+  );
+  if (!descriptor || descriptor.options.length < 2) return null;
+  const isPrimary = descriptor.id === selected.primarySelectDescriptor?.id;
   const current =
-    selected.ultrathinkPromptControlled && descriptor.id === selected.primarySelectDescriptor?.id
+    isPrimary && selected.ultrathinkPromptControlled
       ? "ultrathink"
-      : (getProviderOptionCurrentValue(descriptor, modelSelection, input.reportedModelSelection) ??
-        getProviderOptionCurrentValue(descriptor));
+      : (getDescriptorStringValue(
+          descriptor,
+          { instanceId: input.instanceId, model: input.model, options: input.modelOptions ?? [] },
+          input.reportedModelSelection,
+        ) ?? getDescriptorStringValue(descriptor));
   const index = descriptor.options.findIndex((option) => option.id === current);
-  if (index < 0 || descriptor.options.length < 2) return null;
-  const next =
-    descriptor.options[
-      (index + input.direction + descriptor.options.length) % descriptor.options.length
-    ];
+  if (index < 0) return null;
+  const count = descriptor.options.length;
+  const next = descriptor.options[(index + input.direction + count) % count];
   const change = next ? getTraitSelectChange(selected, descriptor, input.prompt, next.id) : null;
-  if (!change || change.prompt === input.prompt) return change;
-  return {
-    ...change,
-    promptSelectionOffset:
-      change.prompt.length -
-      ("modelOptions" in change ? input.prompt.length : input.prompt.trimEnd().length),
-  };
+  if (!change) return null;
+  if ("modelOptions" in change) {
+    return change.modelOptions
+      ? { prompt: change.prompt, modelOptions: change.modelOptions }
+      : null;
+  }
+  // A slash command refuses the Ultrathink prefix, so the step would change nothing.
+  return change.prompt.startsWith(ULTRATHINK_PROMPT_PREFIX) ? change : null;
 }
 
 export function shouldRenderTraitsControls(input: {
@@ -592,7 +617,7 @@ export function buildTraitsTriggerDisplay(input: {
       if (
         reasoningLabelIndex === -1 &&
         descriptor.type === "select" &&
-        ["reasoningEffort", "reasoning", "effort", "variant", "thinking"].includes(descriptor.id)
+        REASONING_SELECT_DESCRIPTOR_IDS.has(descriptor.id)
       ) {
         reasoningLabelIndex = labels.length;
       }
