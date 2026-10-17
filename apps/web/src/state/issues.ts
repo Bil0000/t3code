@@ -15,7 +15,7 @@ import {
 import { useAtomValue } from "@effect/atom-react";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
-import { useCallback, useState } from "react";
+import { useState } from "react";
 
 import { useIssueViewRefresh } from "../hooks/useIssueViewRefresh";
 import { connectionAtomRuntime } from "../connection/runtime";
@@ -72,10 +72,10 @@ function createIssueQueries<Input, A>(
         ? (EMPTY_ANSWERS as unknown as Atom.Atom<ReadonlyArray<IssueQueryAnswer<A>>>)
         : family(key),
     );
-    const refresh = useCallback(() => {
+    const refresh = () => {
       const target = (JSON.parse(key) as ReadonlyArray<EnvironmentQueryTarget<Input>>)[0];
       if (target !== undefined) appAtomRegistry.refresh(atomFor(target));
-    }, [key]);
+    };
     return { answers, refresh };
   };
 }
@@ -134,10 +134,10 @@ function createIssuePagedQuery<
           })),
     );
     const first = answers[0]?.value ?? null;
-    const refreshPages = useCallback(() => {
+    const refreshPages = () => {
       setCursors({ key, seed: first, values: [] });
       refresh();
-    }, [key, first, refresh]);
+    };
     useIssueViewRefresh(
       refreshPages,
       environmentId === null || input === null ? [] : [{ environmentId, input }],

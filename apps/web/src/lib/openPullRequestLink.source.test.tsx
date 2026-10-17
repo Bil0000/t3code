@@ -35,6 +35,7 @@ vi.mock("../state/server", async (importOriginal) => {
   const original = await importOriginal<typeof import("../state/server")>();
   return {
     ...original,
+    environmentServerConfigsAtom: (await import("effect/reactivity")).Atom.make(state.configs),
     serverEnvironment: {
       ...original.serverEnvironment,
       configValueAtom: (configEnvironment: string) => ({ configEnvironment }),

@@ -9,7 +9,7 @@ import {
   type ThreadIssueSnapshot,
 } from "@t3tools/contracts";
 import { Atom } from "effect/reactivity";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { issueUrlConnectionId } from "~/lib/issueUrlConnection";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
@@ -109,7 +109,8 @@ function LinkThreadIssueDialog({
       ? (sources[0] ?? null)
       : (sources.find((candidate) => sourceValue(candidate) === selectedSource) ?? null);
   const requestKey = JSON.stringify([filterKey, source === null ? null : sourceValue(source)]);
-  const requestContext = useMemo(() => ({ key: requestKey }), [requestKey]);
+  const [requestContext, setRequestContext] = useState({ key: requestKey });
+  if (requestContext.key !== requestKey) setRequestContext({ key: requestKey });
   const latest = useRef({ requestContext, data: list.data, held });
   useEffect(() => {
     latest.current = { requestContext, data: list.data, held };

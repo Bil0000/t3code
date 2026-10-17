@@ -2,7 +2,7 @@ import { pullRequestHostOf, SourceControlProviderKind } from "@t3tools/contracts
 import type { EnvironmentId, IssueRef, ScopedThreadRef } from "@t3tools/contracts";
 import { parseIssueUrl } from "@t3tools/shared/issueUrl";
 import { useNavigate } from "@tanstack/react-router";
-import { type MouseEvent, useCallback } from "react";
+import { type MouseEvent } from "react";
 
 import {
   canOpenLinksInApp,
@@ -49,120 +49,104 @@ export function useOpenIssueLink(
   const projects = useProjects();
   const openLink = useOpenLink(threadRef);
   const resolveUrl = useAtomCommand(issueEnvironment.resolveUrl, { reportFailure: false });
-  return useCallback(
-    (event, targetUrl, targetEnvironmentId) => {
-      if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return false;
-      const resolvedPanelRef = threadRef ?? (panelRef && ISSUES_PANEL_REF);
-      const environmentId =
-        targetEnvironmentId ?? issueLinkContext?.environmentId ?? threadRef?.environmentId;
-      if (resolvedPanelRef === undefined || environmentId === undefined) return false;
-      if (serverConfigs.get(environmentId)?.environment.capabilities.issues !== true) return false;
-      const source =
-        issueLinkContext?.environmentId === environmentId ? issueLinkContext : undefined;
-      const candidate =
-        parseIssueUrl(targetUrl) !== null ||
-        (source !== undefined && parseIssueUrl(targetUrl, source) !== null) ||
-        projects.some((project) => {
-          const identity = project.repositoryIdentity;
-          const tracker = identity?.provider;
-          if (
-            project.environmentId !== environmentId ||
-            tracker === undefined ||
-            tracker === "unknown"
-          )
-            return false;
-          const kind = SourceControlProviderKind.make(tracker);
-          let host = pullRequestHostOf(identity, kind);
-          if (tracker === "forgejo" && identity?.webUrl !== undefined) {
-            host = pullRequestHostOf(
-              { canonicalKey: host, locator: { remoteUrl: identity.webUrl } },
-              kind,
-            );
-          }
-          return parseIssueUrl(targetUrl, { tracker, host }) !== null;
-        });
-      if (!candidate) return false;
-      event.preventDefault();
-      event.stopPropagation();
-      const connectionId =
-        source === undefined ? undefined : issueUrlConnectionId(targetUrl, source);
-      const projectId =
-        source?.projectId ??
-        (threadRef?.environmentId === environmentId
-          ? readThreadShell(threadRef)?.projectId
-          : undefined);
-      void resolveUrl({
-        environmentId,
-        input: {
+  return (event, targetUrl, targetEnvironmentId) => {
+    if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return false;
+    const resolvedPanelRef = threadRef ?? (panelRef && ISSUES_PANEL_REF);
+    const environmentId =
+      targetEnvironmentId ?? issueLinkContext?.environmentId ?? threadRef?.environmentId;
+    if (resolvedPanelRef === undefined || environmentId === undefined) return false;
+    if (serverConfigs.get(environmentId)?.environment.capabilities.issues !== true) return false;
+    const source = issueLinkContext?.environmentId === environmentId ? issueLinkContext : undefined;
+    const candidate =
+      parseIssueUrl(targetUrl) !== null ||
+      (source !== undefined && parseIssueUrl(targetUrl, source) !== null) ||
+      projects.some((project) => {
+        const identity = project.repositoryIdentity;
+        const tracker = identity?.provider;
+        if (
+          project.environmentId !== environmentId ||
+          tracker === undefined ||
+          tracker === "unknown"
+        )
+          return false;
+        const kind = SourceControlProviderKind.make(tracker);
+        let host = pullRequestHostOf(identity, kind);
+        if (tracker === "forgejo" && identity?.webUrl !== undefined) {
+          host = pullRequestHostOf(
+            { canonicalKey: host, locator: { remoteUrl: identity.webUrl } },
+            kind,
+          );
+        }
+        return parseIssueUrl(targetUrl, { tracker, host }) !== null;
+      });
+    if (!candidate) return false;
+    event.preventDefault();
+    event.stopPropagation();
+    const connectionId = source === undefined ? undefined : issueUrlConnectionId(targetUrl, source);
+    const projectId =
+      source?.projectId ??
+      (threadRef?.environmentId === environmentId
+        ? readThreadShell(threadRef)?.projectId
+        : undefined);
+    void resolveUrl({
+      environmentId,
+      input: {
+        url: targetUrl,
+        ...(projectId === undefined ? {} : { projectId }),
+        ...(connectionId === undefined ? {} : { connectionId }),
+      },
+    })
+      .then(async (result) => {
+        if (result._tag === "Failure") {
+          return canOpenLinksInApp(threadRef) &&
+            (await resolveBrowserLinkTargetPreference()) === "app"
+            ? openLink(targetUrl)
+            : openUnresolvedLink(targetUrl);
+        }
+        const reference = result.value;
+        useRightPanelStore.getState().openIssue(resolvedPanelRef, {
+          ...(resolvedPanelRef.environmentId === environmentId ? {} : { environmentId }),
+          projectId: reference.projectId,
+          tracker: reference.tracker,
+          host: reference.host,
+          ...(reference.connectionId === undefined ? {} : { connectionId: reference.connectionId }),
+          scope: reference.scope,
+          key: reference.key,
           url: targetUrl,
-          ...(projectId === undefined ? {} : { projectId }),
-          ...(connectionId === undefined ? {} : { connectionId }),
-        },
-      })
-        .then(async (result) => {
-          if (result._tag === "Failure") {
-            return canOpenLinksInApp(threadRef) &&
-              (await resolveBrowserLinkTargetPreference()) === "app"
-              ? openLink(targetUrl)
-              : openUnresolvedLink(targetUrl);
-          }
-          const reference = result.value;
-          useRightPanelStore.getState().openIssue(resolvedPanelRef, {
-            ...(resolvedPanelRef.environmentId === environmentId ? {} : { environmentId }),
-            projectId: reference.projectId,
-            tracker: reference.tracker,
-            host: reference.host,
-            ...(reference.connectionId === undefined
-              ? {}
-              : { connectionId: reference.connectionId }),
-            scope: reference.scope,
-            key: reference.key,
-            url: targetUrl,
-          });
-          if (threadRef === undefined) {
-            await navigate({
-              to: "/issues",
-              search: {
-                ...readIssueListPreferences(),
-                selectedEnvironmentId: environmentId,
-                selectedProjectId: reference.projectId,
-                ...(reference.host === undefined ? {} : { selectedHost: reference.host }),
-                tracker: reference.tracker,
-                ...(reference.connectionId === undefined
-                  ? {}
-                  : { selectedConnectionId: reference.connectionId }),
-                scope: reference.scope,
-                key: reference.key,
-              },
-            });
-          }
-        })
-        .catch(() => {
-          const id = toastManager.add({
-            type: "error",
-            title: "The link could not be opened",
-            description: targetUrl,
-            actionProps: {
-              children: "Open link",
-              onClick: () =>
-                void openUnresolvedLink(targetUrl).then(
-                  () => toastManager.close(id),
-                  () => undefined,
-                ),
+        });
+        if (threadRef === undefined) {
+          await navigate({
+            to: "/issues",
+            search: {
+              ...readIssueListPreferences(),
+              selectedEnvironmentId: environmentId,
+              selectedProjectId: reference.projectId,
+              ...(reference.host === undefined ? {} : { selectedHost: reference.host }),
+              tracker: reference.tracker,
+              ...(reference.connectionId === undefined
+                ? {}
+                : { selectedConnectionId: reference.connectionId }),
+              scope: reference.scope,
+              key: reference.key,
             },
           });
+        }
+      })
+      .catch(() => {
+        const id = toastManager.add({
+          type: "error",
+          title: "The link could not be opened",
+          description: targetUrl,
+          actionProps: {
+            children: "Open link",
+            onClick: () =>
+              void openUnresolvedLink(targetUrl).then(
+                () => toastManager.close(id),
+                () => undefined,
+              ),
+          },
         });
-      return true;
-    },
-    [
-      issueLinkContext,
-      navigate,
-      openLink,
-      panelRef,
-      projects,
-      resolveUrl,
-      serverConfigs,
-      threadRef,
-    ],
-  );
+      });
+    return true;
+  };
 }

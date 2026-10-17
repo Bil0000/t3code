@@ -21,7 +21,7 @@ import {
 } from "@t3tools/shared/threadPullRequests";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
-import { useLayoutEffect, useMemo } from "react";
+import { useLayoutEffect } from "react";
 
 import { connectionAtomRuntime } from "../connection/runtime";
 import { appAtomRegistry } from "../rpc/atomRegistry";
@@ -142,12 +142,11 @@ export function newestPullRequestObservation(
 }
 
 function observePullRequestSummary(
-  environmentId: EnvironmentId,
-  reference: PullRequestRef,
+  key: string,
   summary: PullRequestSummary,
   observedAt: number,
 ): void {
-  const atom = observedPullRequestSummaryAtom(pullRequestSummaryKey(environmentId, reference));
+  const atom = observedPullRequestSummaryAtom(key);
   appAtomRegistry.modify(atom, (previous) => {
     const next = newestPullRequestObservation(previous, { summary, observedAt });
     return next === previous ? [false, previous] : [true, next];
@@ -221,11 +220,11 @@ export function useSharedPullRequestSummary(
         : savedPullRequestKey(environmentId, reference),
     ),
   );
+  // Keyed structurally so a fresh reference object for the same pull request is a no-op.
   useLayoutEffect(() => {
-    if (environmentId === null || reference === null || current === null || observedAt === null)
-      return;
-    observePullRequestSummary(environmentId, reference, current, observedAt);
-  }, [current, environmentId, reference, observedAt]);
+    if (key === "none" || current === null || observedAt === null) return;
+    observePullRequestSummary(key, current, observedAt);
+  }, [current, key, observedAt]);
   const summary =
     newestPullRequestObservation(
       observed,
@@ -282,20 +281,19 @@ export function usePullRequestList(
     for (const [environmentId, answer, observedAt] of query.observations) {
       for (const entry of answer.entries) {
         observePullRequestSummary(
-          environmentId,
-          {
+          pullRequestSummaryKey(environmentId, {
             projectId: entry.projectId,
             host: entry.host,
             repository: entry.repository,
             number: entry.number,
-          },
+          }),
           pullRequestListEntryToSummary(entry),
           observedAt,
         );
       }
     }
   }, [query.observations]);
-  const data = useMemo(() => mergePullRequestLists(query.values), [query.values]);
+  const data = mergePullRequestLists(query.values);
   return { data, error: query.error, isPending: query.isPending, refresh: query.refresh };
 }
 
@@ -309,14 +307,11 @@ export function usePullRequestListStats(
   ) => void;
 } {
   const query = usePullRequestStatsQuery(targets);
-  const stats = useMemo(
-    () =>
-      query.values.length === 0
-        ? null
-        : query.values.flatMap(([environmentId, result]) =>
-            result.stats.map((stat) => ({ ...stat, environmentId })),
-          ),
-    [query.values],
-  );
+  const stats =
+    query.values.length === 0
+      ? null
+      : query.values.flatMap(([environmentId, result]) =>
+          result.stats.map((stat) => ({ ...stat, environmentId })),
+        );
   return { stats, isPending: query.isPending, refresh: query.refresh };
 }

@@ -2,7 +2,7 @@ import { ExternalLinkIcon, PaperclipIcon } from "lucide-react";
 import { markdownImageSourceFragment } from "@t3tools/client-runtime/markdown-images";
 import { githubMediaFetchUrl } from "@t3tools/shared/githubMedia";
 import type { AssetResource, EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
-import { createContext, useContext, useMemo } from "react";
+import { createContext, useContext } from "react";
 import type { Options as ReactMarkdownOptions } from "react-markdown";
 
 import { useAssetUrlRefresh, useAssetUrlState } from "~/assets/assetUrls";
@@ -30,10 +30,7 @@ function PullRequestGitHubVideo({
   url: string;
   fetchUrl: string;
 }) {
-  const resource = useMemo<AssetResource>(
-    () => ({ _tag: "github-media", cwd, url: fetchUrl }),
-    [cwd, fetchUrl],
-  );
+  const resource: AssetResource = { _tag: "github-media", cwd, url: fetchUrl };
   const assetUrl = useAssetUrlState(environmentId, resource);
   const refreshAssetUrl = useAssetUrlRefresh(environmentId, resource);
   const src =
@@ -71,10 +68,9 @@ export function PullRequestMarkdown({
   const context = useContext(PullRequestMarkdownContext);
   const repositoryUrl = context?.repositoryUrl;
   const resolvedThreadRef = threadRef ?? context?.threadRef ?? undefined;
-  const extraRemarkPlugins = useMemo<NonNullable<ReactMarkdownOptions["remarkPlugins"]>>(
-    () => (repositoryUrl ? [[remarkPullRequestAutolinks, { repositoryUrl }]] : []),
-    [repositoryUrl],
-  );
+  const extraRemarkPlugins: NonNullable<ReactMarkdownOptions["remarkPlugins"]> = repositoryUrl
+    ? [[remarkPullRequestAutolinks, { repositoryUrl }]]
+    : [];
   return (
     <div
       className={cn(

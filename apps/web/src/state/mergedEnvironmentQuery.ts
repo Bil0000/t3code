@@ -2,7 +2,6 @@ import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
-import { useCallback } from "react";
 
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { formatEnvironmentQueryError } from "./query";
@@ -62,16 +61,13 @@ export function createMergedEnvironmentQuery<Input, A>(
   return function useMergedQuery(targets: ReadonlyArray<EnvironmentQueryTarget<Input>>) {
     const key = JSON.stringify(targets);
     const view = useAtomValue(targets.length === 0 ? empty : family(key));
-    const refresh = useCallback(
-      (override?: ReadonlyArray<EnvironmentQueryTarget<Input>>) => {
-        const refreshTargets =
-          override ?? (JSON.parse(key) as ReadonlyArray<EnvironmentQueryTarget<Input>>);
-        for (const atom of new Set(refreshTargets.map(atomFor))) {
-          appAtomRegistry.refresh(atom);
-        }
-      },
-      [key],
-    );
+    const refresh = (override?: ReadonlyArray<EnvironmentQueryTarget<Input>>) => {
+      const refreshTargets =
+        override ?? (JSON.parse(key) as ReadonlyArray<EnvironmentQueryTarget<Input>>);
+      for (const atom of new Set(refreshTargets.map(atomFor))) {
+        appAtomRegistry.refresh(atom);
+      }
+    };
     return { ...view, refresh };
   };
 }

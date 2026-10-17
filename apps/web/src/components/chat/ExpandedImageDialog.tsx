@@ -1,6 +1,5 @@
 import {
   memo,
-  useCallback,
   useEffect,
   useRef,
   useState,
@@ -132,9 +131,9 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
       }
     : source;
 
-  const navigateImage = useCallback((direction: -1 | 1) => {
+  const navigateImage = (direction: -1 | 1) => {
     setImageOffset((current) => current + direction);
-  }, []);
+  };
 
   // The element that opened the preview gets focus back on close. Without
   // this a close button click leaves focus on the unmounted dialog, and the

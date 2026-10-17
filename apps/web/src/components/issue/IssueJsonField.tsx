@@ -1,5 +1,5 @@
 import { parseTree, type Node, type ParseError } from "jsonc-parser";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -344,7 +344,7 @@ export function IssueJsonField({
     root: null,
   });
   const [source, setSource] = useState(false);
-  const root = useMemo(() => {
+  const root = (() => {
     if (draft.text === value) return draft.root;
     if (!value.trim()) return null;
     try {
@@ -352,7 +352,7 @@ export function IssueJsonField({
     } catch {
       return undefined;
     }
-  }, [draft, value]);
+  })();
   const edit = (next: JsonNode | null) => {
     const text = next ? serialize(next) : "";
     setDraft({ text, root: next });

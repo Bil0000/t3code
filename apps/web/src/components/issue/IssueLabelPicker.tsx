@@ -1,6 +1,6 @@
 import type { EnvironmentId, IssueLabel, IssueScopeRef } from "@t3tools/contracts";
 import { TagIcon } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import { useIssueLabelCandidates } from "~/state/issues";
 
@@ -31,14 +31,14 @@ export function IssueLabelPicker({
   const [query, setQuery] = useState("");
   const candidates = useIssueLabelCandidates(environmentId, open ? source : null);
 
-  const rows = useMemo(() => {
+  const rows = (() => {
     const matches = issueLabelOptions(
       selected,
       candidates.items.map((label) => ({ ...label, description: label.description ?? null })),
       query,
     );
     return candidates.hasMore ? [...matches, LOAD_MORE] : matches;
-  }, [selected, candidates.items, candidates.hasMore, query]);
+  })();
 
   const loaded = candidates.items.length > 0;
   const note = [

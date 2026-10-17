@@ -40,15 +40,7 @@ import {
   UserCheckIcon,
   UsersIcon,
 } from "lucide-react";
-import {
-  useCallback,
-  useEffect,
-  useEffectEvent,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { useEffect, useEffectEvent, useRef, useState, type ReactNode } from "react";
 
 import { IssueCreateDialog, type IssueCreateScope } from "~/components/issue/IssueCreateDialog";
 import { IssueScrollSentinel } from "~/components/issue/IssueLoadMore";
@@ -258,44 +250,26 @@ function IssuesRoute() {
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   useEscapeToGoBack();
 
-  const capableEnvironments = useMemo(
-    () =>
-      environments.filter(
-        (environment) => environment.serverConfig?.environment.capabilities.issues === true,
-      ),
-    [environments],
+  const capableEnvironments = environments.filter(
+    (environment) => environment.serverConfig?.environment.capabilities.issues === true,
   );
-  const environmentLabels = useMemo(
-    () => new Map(environments.map((e) => [e.environmentId, e.label] as const)),
-    [environments],
-  );
+  const environmentLabels = new Map(environments.map((e) => [e.environmentId, e.label] as const));
 
-  const capableProjects = useMemo(
-    () =>
-      projects.filter((project) =>
-        capableEnvironments.some((e) => e.environmentId === project.environmentId),
-      ),
-    [projects, capableEnvironments],
+  const capableProjects = projects.filter((project) =>
+    capableEnvironments.some((e) => e.environmentId === project.environmentId),
   );
-  const projectScope = useMemo(
-    () =>
-      issueListProjectScope(
-        capableProjects,
-        { projectId: search.projectId, environmentId: search.environmentId },
-        projectsKnown,
-      ),
-    [capableProjects, search.projectId, search.environmentId, projectsKnown],
+  const projectScope = issueListProjectScope(
+    capableProjects,
+    { projectId: search.projectId, environmentId: search.environmentId },
+    projectsKnown,
   );
   const scopedProject = projectScope === "waiting" ? null : projectScope;
-  const listedEnvironments = useMemo(
-    () =>
-      projectScope === "waiting"
-        ? []
-        : capableEnvironments.filter(
-            (e) => projectScope === null || e.environmentId === projectScope.environmentId,
-          ),
-    [capableEnvironments, projectScope],
-  );
+  const listedEnvironments =
+    projectScope === "waiting"
+      ? []
+      : capableEnvironments.filter(
+          (e) => projectScope === null || e.environmentId === projectScope.environmentId,
+        );
 
   const sortSourceKey = JSON.stringify([
     listedEnvironments.map((environment) => environment.environmentId),
@@ -319,36 +293,24 @@ function IssuesRoute() {
       ? { sort: search.issueSort ?? "updated", order: search.issueOrder ?? "desc" }
       : supportedIssueSort(search.issueSort, search.issueOrder, sortOptions);
   const debouncedQuery = useDebouncedValue(search.q ?? "", 300);
-  const baseInput = useMemo<IssueListInput>(
-    () => ({
-      state: search.status,
-      involvement: search.who,
-      sort: effectiveSort.sort,
-      order: effectiveSort.order,
-      ...(search.status === "all"
-        ? {}
-        : {
-            stateCategories:
-              search.status === "open"
-                ? ["backlog", "unstarted", "started"]
-                : ["completed", "canceled"],
-          }),
-      ...(scopedProject ? { projectId: scopedProject.id } : {}),
-      ...(search.host ? { host: search.host } : {}),
-      ...(search.connectionId === undefined ? {} : { connectionId: search.connectionId }),
-      ...(debouncedQuery ? { query: debouncedQuery } : {}),
-    }),
-    [
-      search.status,
-      search.who,
-      effectiveSort.sort,
-      effectiveSort.order,
-      scopedProject,
-      search.host,
-      search.connectionId,
-      debouncedQuery,
-    ],
-  );
+  const baseInput: IssueListInput = {
+    state: search.status,
+    involvement: search.who,
+    sort: effectiveSort.sort,
+    order: effectiveSort.order,
+    ...(search.status === "all"
+      ? {}
+      : {
+          stateCategories:
+            search.status === "open"
+              ? ["backlog", "unstarted", "started"]
+              : ["completed", "canceled"],
+        }),
+    ...(scopedProject ? { projectId: scopedProject.id } : {}),
+    ...(search.host ? { host: search.host } : {}),
+    ...(search.connectionId === undefined ? {} : { connectionId: search.connectionId }),
+    ...(debouncedQuery ? { query: debouncedQuery } : {}),
+  };
   const filterKey = JSON.stringify([listedEnvironments.map((e) => e.environmentId), baseInput]);
   const [paging, setPaging] = useState<{
     readonly key: string;
@@ -356,14 +318,10 @@ function IssuesRoute() {
   }>({ key: filterKey, pages: new Map() });
   const filterKeyRef = useRef(filterKey);
   const current = paging.key === filterKey ? paging : null;
-  const targets = useMemo<ReadonlyArray<IssueListTarget>>(
-    () =>
-      listedEnvironments.map((e) => ({
-        environmentId: e.environmentId,
-        input: { ...baseInput, limit: PAGE_SIZE },
-      })),
-    [listedEnvironments, baseInput],
-  );
+  const targets: ReadonlyArray<IssueListTarget> = listedEnvironments.map((e) => ({
+    environmentId: e.environmentId,
+    input: { ...baseInput, limit: PAGE_SIZE },
+  }));
   const list = useIssueList(targets);
   if (list.values.length > 0) {
     const next = new Map(sortPolicy.sourceKey === sortSourceKey ? sortPolicy.environments : []);
@@ -386,7 +344,7 @@ function IssuesRoute() {
     if (changed) setSortPolicy({ sourceKey: sortSourceKey, environments: next });
   }
   const [refreshedPages] = useState(() => new WeakMap<HeldPage, HeldPage>());
-  const held = useMemo(() => {
+  const held = (() => {
     const refreshed = (previous: HeldPage, answer: IssueListResult) => {
       const cached = refreshedPages.get(previous);
       if (cached?.answer === answer) return cached;
@@ -410,7 +368,7 @@ function IssuesRoute() {
       if (!next.has(environmentId)) next.set(environmentId, page);
     }
     return next;
-  }, [list.values, current, refreshedPages]);
+  })();
   const [knownSources, setKnownSources] = useState(
     () => new Map<EnvironmentId, IssueListSources>(),
   );
@@ -425,15 +383,11 @@ function IssuesRoute() {
       setKnownSources(next);
     }
   }
-  const filterProjects = useMemo(
-    () =>
-      pullRequestFilterProjects(
-        issueFilterProjects(capableProjects, knownSources, scopedProject),
-        environmentLabels,
-        scopedProject ?? undefined,
-        true,
-      ),
-    [scopedProject, capableProjects, knownSources, environmentLabels],
+  const filterProjects = pullRequestFilterProjects(
+    issueFilterProjects(capableProjects, knownSources, scopedProject),
+    environmentLabels,
+    scopedProject ?? undefined,
+    true,
   );
   const heldRef = useRef(held);
   useEffect(() => {
@@ -616,7 +570,7 @@ function IssuesRoute() {
 
   // Rows grouped per tracker account, so a tracker that cannot be read says so where its rows
   // would be, and each tracker's rows carry on from their own cursors.
-  const groups = useMemo(() => {
+  const groups = (() => {
     const byTracker = new Map<
       string,
       {
@@ -686,9 +640,9 @@ function IssuesRoute() {
     return [...byTracker.values()].sort((a, b) =>
       trackerKey(a.tracker).localeCompare(trackerKey(b.tracker)),
     );
-  }, [held, debouncedQuery, projects, effectiveSort.sort, effectiveSort.order]);
+  })();
 
-  const hostOptions = useMemo<ReadonlyArray<PullRequestFilterOption<string>>>(() => {
+  const hostOptions: ReadonlyArray<PullRequestFilterOption<string>> = (() => {
     const hosts = new Map<string, IssueTrackerSummary>();
     for (const group of groups) {
       const tracker = group.tracker;
@@ -725,20 +679,17 @@ function IssuesRoute() {
           ]
         : []),
     ];
-  }, [groups, search.host, search.connectionId]);
-  const projectOptions = useMemo<ReadonlyArray<PullRequestFilterOption<string>>>(
-    () => [
-      { value: "", label: "All projects", Icon: LayersIcon },
-      ...filterProjects.map((project) => ({
-        value: pullRequestProjectKey(project),
-        label: project.title,
-        Icon: FolderGit2Icon,
-        project,
-      })),
-    ],
-    [filterProjects],
-  );
-  const offeredInvolvements = useMemo(() => {
+  })();
+  const projectOptions: ReadonlyArray<PullRequestFilterOption<string>> = [
+    { value: "", label: "All projects", Icon: LayersIcon },
+    ...filterProjects.map((project) => ({
+      value: pullRequestProjectKey(project),
+      label: project.title,
+      Icon: FolderGit2Icon,
+      project,
+    })),
+  ];
+  const offeredInvolvements = (() => {
     const offered = offeredIssueInvolvements(
       groups.map((group) => group.tracker),
       search.who,
@@ -746,40 +697,37 @@ function IssuesRoute() {
     return offered === null
       ? INVOLVEMENT_TABS
       : INVOLVEMENT_TABS.filter((tab) => offered.has(tab.value));
-  }, [groups, search.who]);
+  })();
 
-  const updateSearch = useCallback(
-    (patch: { [Key in keyof IssuesSearch]?: IssuesSearch[Key] | undefined }) =>
-      void navigate({
-        search: (previous: IssuesSearch): IssuesSearch => {
-          const next = { ...previous, ...patch };
-          return {
-            who: next.who ?? previous.who,
-            status: next.status ?? previous.status,
-            ...(next.issueSort ? { issueSort: next.issueSort } : {}),
-            ...(next.issueOrder ? { issueOrder: next.issueOrder } : {}),
-            ...(next.host ? { host: next.host } : {}),
-            ...(next.connectionId === undefined ? {} : { connectionId: next.connectionId }),
-            ...(next.environmentId ? { environmentId: next.environmentId } : {}),
-            ...(next.projectId ? { projectId: next.projectId } : {}),
-            q: next.q || undefined,
-            ...(next.selectedEnvironmentId
-              ? { selectedEnvironmentId: next.selectedEnvironmentId }
-              : {}),
-            ...(next.selectedProjectId ? { selectedProjectId: next.selectedProjectId } : {}),
-            ...(next.selectedHost ? { selectedHost: next.selectedHost } : {}),
-            ...(next.selectedConnectionId === undefined
-              ? {}
-              : { selectedConnectionId: next.selectedConnectionId }),
-            ...(next.tracker ? { tracker: next.tracker } : {}),
-            ...(next.scope ? { scope: next.scope } : {}),
-            ...(next.key ? { key: next.key } : {}),
-          };
-        },
-        replace: true,
-      }),
-    [navigate],
-  );
+  const updateSearch = (patch: { [Key in keyof IssuesSearch]?: IssuesSearch[Key] | undefined }) =>
+    void navigate({
+      search: (previous: IssuesSearch): IssuesSearch => {
+        const next = { ...previous, ...patch };
+        return {
+          who: next.who ?? previous.who,
+          status: next.status ?? previous.status,
+          ...(next.issueSort ? { issueSort: next.issueSort } : {}),
+          ...(next.issueOrder ? { issueOrder: next.issueOrder } : {}),
+          ...(next.host ? { host: next.host } : {}),
+          ...(next.connectionId === undefined ? {} : { connectionId: next.connectionId }),
+          ...(next.environmentId ? { environmentId: next.environmentId } : {}),
+          ...(next.projectId ? { projectId: next.projectId } : {}),
+          q: next.q || undefined,
+          ...(next.selectedEnvironmentId
+            ? { selectedEnvironmentId: next.selectedEnvironmentId }
+            : {}),
+          ...(next.selectedProjectId ? { selectedProjectId: next.selectedProjectId } : {}),
+          ...(next.selectedHost ? { selectedHost: next.selectedHost } : {}),
+          ...(next.selectedConnectionId === undefined
+            ? {}
+            : { selectedConnectionId: next.selectedConnectionId }),
+          ...(next.tracker ? { tracker: next.tracker } : {}),
+          ...(next.scope ? { scope: next.scope } : {}),
+          ...(next.key ? { key: next.key } : {}),
+        };
+      },
+      replace: true,
+    });
   const clearedSelection = {
     selectedEnvironmentId: undefined,
     selectedProjectId: undefined,
@@ -816,10 +764,7 @@ function IssuesRoute() {
       ? selectedSurface
       : null;
   const { active: panelAnimationsActive, durationMs } = usePanelAnimationSettings();
-  const presenceValue = useMemo(
-    () => ({ activeSurface: panelSurface, surfaces: rightPanelState.surfaces }),
-    [panelSurface, rightPanelState.surfaces],
-  );
+  const presenceValue = { activeSurface: panelSurface, surfaces: rightPanelState.surfaces };
   const presence = usePanelPresence(
     rightPanelState.isOpen && panelSurface !== null,
     presenceValue,
@@ -868,23 +813,23 @@ function IssuesRoute() {
         : clearedSelection,
     );
 
-  const selectEntry = useCallback(
-    (entry: IssueRowTarget) => {
-      if (rightPanelRef === null) return;
-      useRightPanelStore.getState().openIssue(rightPanelRef, entry);
-      updateSearch({
-        selectedEnvironmentId: entry.environmentId,
-        selectedProjectId: entry.projectId,
-        selectedHost: entry.host,
-        selectedConnectionId: entry.connectionId,
-        tracker: entry.tracker,
-        scope: entry.scope,
-        key: entry.key,
-      });
-    },
-    [rightPanelRef, updateSearch],
-  );
+  const selectEntry = (entry: IssueRowTarget) => {
+    if (rightPanelRef === null) return;
+    useRightPanelStore.getState().openIssue(rightPanelRef, entry);
+    updateSearch({
+      selectedEnvironmentId: entry.environmentId,
+      selectedProjectId: entry.projectId,
+      selectedHost: entry.host,
+      selectedConnectionId: entry.connectionId,
+      tracker: entry.tracker,
+      scope: entry.scope,
+      key: entry.key,
+    });
+  };
 
+  const updateSelectedEnvironment = useEffectEvent((environmentId: EnvironmentId) =>
+    updateSearch({ selectedEnvironmentId: environmentId }),
+  );
   // A link into the page names an issue before any row was pressed.
   useEffect(() => {
     if (
@@ -908,7 +853,7 @@ function IssuesRoute() {
       key: search.key,
     });
     if (search.selectedEnvironmentId === undefined)
-      updateSearch({ selectedEnvironmentId: selectedIssueEnvironmentId });
+      updateSelectedEnvironment(selectedIssueEnvironmentId);
   }, [
     rightPanelRef,
     search.selectedHost,
@@ -919,7 +864,6 @@ function IssuesRoute() {
     search.selectedProjectId,
     search.selectedEnvironmentId,
     selectedIssueEnvironmentId,
-    updateSearch,
   ]);
 
   const closeSurface = (surface: RightPanelSurface) => {
@@ -966,7 +910,7 @@ function IssuesRoute() {
   }, [keybindings]);
 
   // Every writable scope the workspace has, for the composer.
-  const createScopes = useMemo<ReadonlyArray<IssueCreateScope>>(() => {
+  const createScopes: ReadonlyArray<IssueCreateScope> = (() => {
     const scopes: IssueCreateScope[] = [];
     const seen = new Set<string>();
     const known = (
@@ -1044,7 +988,7 @@ function IssuesRoute() {
       }
     }
     return scopes;
-  }, [held, projects, scopedProject]);
+  })();
   const [createOpen, setCreateOpen] = useState(false);
 
   const showTracker = groups.length > 1;

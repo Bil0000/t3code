@@ -11,7 +11,7 @@ import {
   PlusIcon,
   UnlinkIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 
 import { useIssueViewRefresh } from "~/hooks/useIssueViewRefresh";
 import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
@@ -126,21 +126,31 @@ export function ThreadIssuesPanel({ threadRef }: { threadRef: ScopedThreadRef })
   const unlink = useAtomCommand(threadEnvironment.unlinkIssue, { reportFailure: true });
   const canUnlink = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
   const canLink = canUnlink;
-  const [refreshError, setRefreshError] = useState<string | null>(null);
   const refreshedThread = useRef<string | null>(null);
   const threadKey = `${environmentId}:${threadRef.threadId}`;
-  const refreshLinks = useCallback(() => {
+  const [refreshError, setRefreshError] = useState({
+    threadKey,
+    canRefresh,
+    error: null as string | null,
+  });
+  if (refreshError.threadKey !== threadKey || refreshError.canRefresh !== canRefresh)
+    setRefreshError({ threadKey, canRefresh, error: null });
+  const refreshLinks = () => {
     if (!canRefresh) return;
     void refresh({ environmentId, input: { threadId: threadRef.threadId } }).then((result) => {
       if (refreshedThread.current !== threadKey) return;
-      setRefreshError(result._tag === "Failure" ? formatEnvironmentQueryError(result.cause) : null);
+      setRefreshError({
+        threadKey,
+        canRefresh,
+        error: result._tag === "Failure" ? formatEnvironmentQueryError(result.cause) : null,
+      });
     });
-  }, [canRefresh, environmentId, refresh, threadKey, threadRef.threadId]);
+  };
+  const refreshOnScopeChange = useEffectEvent(refreshLinks);
   useEffect(() => {
     refreshedThread.current = threadKey;
-    setRefreshError(null);
-    refreshLinks();
-  }, [refreshLinks, threadKey]);
+    if (canRefresh) refreshOnScopeChange();
+  }, [canRefresh, threadKey]);
   useIssueViewRefresh(refreshLinks, [], threadKey);
 
   const items = thread?.issues ?? [];
@@ -152,7 +162,7 @@ export function ThreadIssuesPanel({ threadRef }: { threadRef: ScopedThreadRef })
     .flatMap((link) => (link.snapshot ? [link.snapshot.syncedAt] : []))
     .toSorted()
     .at(-1);
-  const error = refreshError;
+  const error = refreshError.error;
 
   if (items.length === 0) {
     return (

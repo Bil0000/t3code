@@ -1,6 +1,6 @@
 import type { EnvironmentId, IssueActor, IssueScopeRef } from "@t3tools/contracts";
 import { CheckIcon, UserPlusIcon } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import { useIssueAssigneeCandidates } from "~/state/issues";
 
@@ -38,14 +38,14 @@ export function IssueAssigneePicker({
   const [query, setQuery] = useState("");
   const candidates = useIssueAssigneeCandidates(environmentId, open && max > 0 ? source : null);
 
-  const rows = useMemo(() => {
+  const rows = (() => {
     const matches = issueAssigneeOptions(
       selected,
       candidates.items.map((actor) => ({ ...actor, id: issueAssigneeId(actor) })),
       query,
     );
     return candidates.hasMore ? [...matches, LOAD_MORE] : matches;
-  }, [selected, candidates.items, candidates.hasMore, query]);
+  })();
 
   if (max === 0) return null;
 

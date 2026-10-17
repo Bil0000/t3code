@@ -6,7 +6,7 @@ import { liftListItem, sinkListItem, splitListItem, wrapInList } from "@tiptap/p
 import { EditorState, type Command } from "@tiptap/pm/state";
 import { EditorView } from "@tiptap/pm/view";
 import { DOMSerializer } from "@tiptap/pm/model";
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 import { Button } from "../ui/button";
 import {
@@ -444,7 +444,7 @@ export function IssueRichBodyView({ value }: { value: IssueRichBody }) {
 }
 
 function IssueAdfBodyView({ value }: { value: IssueRichBody }) {
-  const content = useMemo(() => readIssueAdf(value), [value]);
+  const content = readIssueAdf(value);
   const mount = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!mount.current || !content) return;
