@@ -158,14 +158,20 @@ export function ProjectScriptEditorDialog({
   onClose: () => void;
 }) {
   const canEditActions = useEnvironmentScope(environmentId, editScope);
-  const [validationError, setValidationError] = useState<string | null>(null);
+  const [validationErrorState, setValidationErrorState] = useState<{
+    request: ProjectScriptEditorRequest | null;
+    error: string | null;
+  }>({ request: null, error: null });
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useComposerMenuState(!canEditActions);
   const [deleteName, setDeleteName] = useState("");
-  const [errorRequest, setErrorRequest] = useState<ProjectScriptEditorRequest | null>(null);
-  if (request !== errorRequest) {
-    setErrorRequest(request);
-    if (request) setValidationError(request.error ?? null);
+  const validationError =
+    validationErrorState.request === request
+      ? validationErrorState.error
+      : (request?.error ?? null);
+  if (validationErrorState.request !== request) {
+    setValidationErrorState({ request, error: validationError });
   }
+  const setValidationError = (error: string | null) => setValidationErrorState({ request, error });
 
   return (
     <>
