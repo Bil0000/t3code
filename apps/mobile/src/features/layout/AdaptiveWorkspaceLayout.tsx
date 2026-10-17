@@ -38,6 +38,7 @@ import {
   deriveLayout,
   type VerticalHinge,
   deriveWorkspacePaneLayout,
+  isPrimarySidebarPinned,
   type FileInspectorPaneLayout,
   type Layout,
   type WorkspaceAuxiliaryPaneRole,
@@ -245,7 +246,6 @@ function AdaptiveWorkspaceLayoutContent(
   const navigation = useNavigation();
   const activeRoleOwner = useRef<symbol | null>(null);
   const [primarySidebarPreferredVisible, setPrimarySidebarPreferredVisible] = useState(true);
-  const showPrimarySidebar = pathname === "/" || primarySidebarPreferredVisible;
   const [supplementaryPanePreferredVisible, setSupplementaryPanePreferredVisible] = useState(true);
   const [supplementaryPanePreferredWidth, setSupplementaryPanePreferredWidth] = useState<
     number | null
@@ -261,6 +261,12 @@ function AdaptiveWorkspaceLayoutContent(
     () => deriveLayout({ width: viewportWidth, height, nativeMetrics }),
     [height, viewportWidth, nativeMetrics],
   );
+  const primarySidebarPinned = isPrimarySidebarPinned({
+    pathname,
+    nativeWorkspace,
+    usesSplitView: baseLayout.usesSplitView,
+  });
+  const showPrimarySidebar = primarySidebarPinned || primarySidebarPreferredVisible;
   const shouldRenderNavigationRail = Platform.OS === "android" && baseLayout.usesSplitView;
   const navigationRailWidth =
     shouldRenderNavigationRail && showPrimarySidebar
@@ -378,7 +384,7 @@ function AdaptiveWorkspaceLayoutContent(
     };
   }, []);
   const togglePrimarySidebar = useCallback(() => {
-    if (pathname === "/") {
+    if (primarySidebarPinned) {
       return;
     }
     if (!panes.primarySidebarVisible && panes.primarySidebarSuppressedByAuxiliary) {
@@ -387,7 +393,11 @@ function AdaptiveWorkspaceLayoutContent(
       return;
     }
     setPrimarySidebarPreferredVisible((current) => !current);
-  }, [panes.primarySidebarSuppressedByAuxiliary, panes.primarySidebarVisible, pathname]);
+  }, [
+    panes.primarySidebarSuppressedByAuxiliary,
+    panes.primarySidebarVisible,
+    primarySidebarPinned,
+  ]);
   const revealPrimarySidebar = useCallback(() => {
     if (panes.primarySidebarSuppressedByAuxiliary) {
       setFileInspectorPreferredVisible(false);
@@ -399,8 +409,8 @@ function AdaptiveWorkspaceLayoutContent(
     return true;
   }, [togglePrimarySidebar]);
   const sidebarCommands = useMemo(
-    () => (pathname === "/" ? [] : (["toggleSidebar"] as const)),
-    [pathname],
+    () => (primarySidebarPinned ? [] : (["toggleSidebar"] as const)),
+    [primarySidebarPinned],
   );
   useHardwareKeyboardCommand(sidebarCommands, handleToggleSidebarCommand);
   const showAuxiliaryPane = useCallback((role: WorkspaceAuxiliaryPaneRole) => {
@@ -504,7 +514,8 @@ function AdaptiveWorkspaceLayoutContent(
     sidebarVisible: panes.primarySidebarVisible,
     width: contentTargetWidth,
     listPaneTarget: layout.listPaneWidth,
-    listPaneFrom: layout.listPaneWidth,
+    listPaneFloor: layout.listPaneWidth,
+    listPaneCeiling: layout.listPaneWidth,
     revision: 0,
   });
   if (
@@ -537,21 +548,34 @@ function AdaptiveWorkspaceLayoutContent(
         ? Math.max(contentSizing.width ?? 0, contentTargetWidth ?? 0)
         : contentTargetWidth,
       listPaneTarget: layout.listPaneWidth,
-      // While a hinge resizes the list, its width follows the pane edge between these two.
-      listPaneFrom: resizingSidebar ? contentSizing.listPaneTarget : layout.listPaneWidth,
+      // While a hinge resizes the list, its width follows the pane edge within this span. A
+      // retarget mid-animation widens the span, since the edge is still somewhere inside it.
+      listPaneFloor: resizingSidebar
+        ? Math.min(contentSizing.listPaneFloor ?? 0, layout.listPaneWidth ?? 0)
+        : layout.listPaneWidth,
+      listPaneCeiling: resizingSidebar
+        ? Math.max(contentSizing.listPaneCeiling ?? 0, layout.listPaneWidth ?? 0)
+        : layout.listPaneWidth,
       revision: contentSizing.revision + 1,
     });
   }
   const settleContentWidth = useCallback((revision: number) => {
     setContentSizing((current) =>
       current.revision !== revision ||
-      (current.width === current.target && current.listPaneFrom === current.listPaneTarget)
+      (current.width === current.target &&
+        current.listPaneFloor === current.listPaneTarget &&
+        current.listPaneCeiling === current.listPaneTarget)
         ? current
-        : { ...current, width: current.target, listPaneFrom: current.listPaneTarget },
+        : {
+            ...current,
+            width: current.target,
+            listPaneFloor: current.listPaneTarget,
+            listPaneCeiling: current.listPaneTarget,
+          },
     );
   }, []);
-  const listPaneFloor = Math.min(contentSizing.listPaneFrom ?? 0, layout.listPaneWidth ?? 0);
-  const listPaneCeiling = Math.max(contentSizing.listPaneFrom ?? 0, layout.listPaneWidth ?? 0);
+  const listPaneFloor = contentSizing.listPaneFloor ?? 0;
+  const listPaneCeiling = contentSizing.listPaneCeiling ?? 0;
   const contentSettledWidth = Platform.OS === "android" ? contentSizing.width : contentTargetWidth;
   const contentRevision = contentSizing.revision;
 
