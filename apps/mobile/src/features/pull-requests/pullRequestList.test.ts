@@ -291,6 +291,11 @@ describe("mobile PR scan and filters", () => {
         new Set(),
       ).map((row) => row.number),
     ).toEqual([1]);
+    expect(
+      filterPullRequestList(rows, DEFAULT_PR_LIST_CONTROLS, viewers, "author:@me", new Set()).map(
+        (row) => row.number,
+      ),
+    ).toEqual([1]);
   });
   it("combines label groups, exclusions, draft and review filters", () => {
     const rows = [

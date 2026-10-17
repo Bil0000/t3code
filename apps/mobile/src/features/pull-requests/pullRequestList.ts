@@ -1,6 +1,7 @@
 import { parsePullRequestQuery } from "@t3tools/client-runtime/pull-request-query";
 import {
   ProjectId,
+  resolvePullRequestAuthorFilter,
   type EnvironmentId,
   type PullRequestListEntry,
   type PullRequestListInput,
@@ -222,8 +223,8 @@ export function filterPullRequestList<
     if ((filters.draft === "only" && !entry.isDraft) || (filters.draft === "hide" && entry.isDraft))
       return false;
     if (filters.author) {
-      const author = filters.author === "me" ? viewer : filters.author;
-      if (!author || normalize(entry.author?.login ?? "") !== normalize(author)) return false;
+      const author = resolvePullRequestAuthorFilter(filters.author, viewer);
+      if (normalize(entry.author?.login ?? "") !== normalize(author)) return false;
     }
     if (filters.review && entry.reviewDecision && entry.reviewDecision !== filters.review)
       return false;
