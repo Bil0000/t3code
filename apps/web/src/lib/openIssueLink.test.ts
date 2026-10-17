@@ -42,9 +42,35 @@ const state = vi.hoisted(() => ({
   },
 }));
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => state.navigate }));
-vi.mock("@effect/atom-react", () => ({
-  useAtomValue: (atom: unknown) => (atom === state.permission ? state.editing : null),
-}));
+vi.mock("@effect/atom-react", async () => {
+  const { AtomRegistry } = await import("effect/reactivity");
+  const registry = AtomRegistry.make();
+  const derived = new Set(["markdown-server-config-fields", "pull-request-link-mode"]);
+  return {
+    useAtomValue: (atom: { readonly label?: readonly [string, ...unknown[]] }) =>
+      atom === state.permission
+        ? state.editing
+        : derived.has(atom.label?.[0] ?? "")
+          ? registry.get(atom as never)
+          : null,
+  };
+});
+vi.mock("../state/server", async () => {
+  const { Atom } = await import("effect/reactivity");
+  const noConfig = Atom.make(null);
+  return {
+    serverEnvironment: { configValueAtom: () => noConfig },
+    environmentServerConfigsAtom: Atom.make(
+      () =>
+        new Map(
+          ["env-a", "env-b"].map((id) => [
+            id,
+            { environment: { capabilities: { issues: state.supported } } },
+          ]),
+        ),
+    ),
+  };
+});
 vi.mock("../hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
 vi.mock("../state/use-atom-query-runner", () => ({ useAtomQueryRunner: () => vi.fn() }));
 vi.mock("../state/session", async (importOriginal) => ({
@@ -117,6 +143,8 @@ import ChatMarkdown from "../components/ChatMarkdown";
 import { IssueCommentContent } from "../components/issue/IssueConversation";
 import { writeIssueListPreferences } from "../components/issue/issueListPreferences";
 import { useOpenIssueLink, type IssueLinkContext } from "./openIssueLink";
+import { appAtomRegistry } from "../rpc/atomRegistry";
+import { environmentServerConfigsAtom } from "../state/server";
 
 const decodeRepositoryIdentity = Schema.decodeSync(RepositoryIdentity);
 const threadRef = { environmentId: EnvironmentId.make("env-a"), threadId: ThreadId.make("thread") };
@@ -156,6 +184,7 @@ beforeEach(async () => {
   state.editing = false;
   localStorage.clear();
   state.supported = true;
+  appAtomRegistry.refresh(environmentServerConfigsAtom);
   state.previewGrant = false;
   state.shell = { projectId: "project-a" };
   state.identity = {
@@ -190,6 +219,24 @@ const event = (patch = {}) => ({
 });
 
 describe("native chat issue links", () => {
+  it("reads revoked and restored issue support at click time without a new handler", async () => {
+    const handler = open;
+    const url = "https://linear.app/workspace/issue/ENG-42";
+    state.supported = false;
+    appAtomRegistry.refresh(environmentServerConfigsAtom);
+    const click = event();
+    expect(handler(click, url)).toBe(false);
+    expect(click.preventDefault).not.toHaveBeenCalled();
+    expect(state.resolve).not.toHaveBeenCalled();
+    state.supported = true;
+    appAtomRegistry.refresh(environmentServerConfigsAtom);
+    await act(async () => expect(handler(event(), url)).toBe(true));
+    expect(state.resolve).toHaveBeenCalledExactlyOnceWith({
+      environmentId: threadRef.environmentId,
+      input: { url, projectId: "project-a" },
+    });
+    expect(open).toBe(handler);
+  });
   it.each(["not a URL", "ssh://ssh.acme.test/team/repo"])(
     "keeps the legacy HTTPS authority when a resolved web URL is unusable (%s)",
     async (webUrl) => {
@@ -702,6 +749,7 @@ describe("native chat issue links", () => {
 
   it("keeps unsupported environments on the existing external path", async () => {
     state.supported = false;
+    appAtomRegistry.refresh(environmentServerConfigsAtom);
     await act(async () => {
       renderer.update(createElement(Hook));
     });

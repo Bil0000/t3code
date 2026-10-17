@@ -35,7 +35,8 @@ import { getSyntaxHighlighterPromise } from "../lib/syntaxHighlighting";
 import { GitHubIcon } from "./Icons";
 import { Button } from "./ui/button";
 import { setMarkdownTaskChecked } from "./files/filePreviewMode";
-import { AppAtomRegistryProvider } from "../rpc/atomRegistry";
+import { AppAtomRegistryProvider, appAtomRegistry } from "../rpc/atomRegistry";
+import { environmentServerConfigsAtom } from "../state/server";
 import { ISSUES_PANEL_REF, useRightPanelStore, type RightPanelSurface } from "../rightPanelStore";
 import { PullRequestMarkdown } from "./pullRequest/PullRequestMarkdown";
 import { PullRequestCommentBody } from "./pullRequest/PullRequestCommentBody";
@@ -132,10 +133,36 @@ vi.mock("@t3tools/client-runtime/state/session", async (importOriginal) => {
 });
 
 vi.mock("../hooks/useFileMetadata", () => ({ useFileMetadata: () => null }));
-vi.mock("@effect/atom-react", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@effect/atom-react")>()),
-  useAtomValue: () => null,
-}));
+// Atoms derived from the server config run in a real registry over a missing
+// config; every other subscription reads nothing.
+vi.mock("@effect/atom-react", async (importOriginal) => {
+  const { AtomRegistry } = await import("effect/reactivity");
+  const registry = AtomRegistry.make();
+  const derived = new Set(["markdown-server-config-fields", "pull-request-link-mode"]);
+  return {
+    ...(await importOriginal<typeof import("@effect/atom-react")>()),
+    useAtomValue: (atom: { readonly label?: readonly [string, ...unknown[]] }) =>
+      derived.has(atom.label?.[0] ?? "") ? registry.get(atom as never) : null,
+  };
+});
+vi.mock("../state/server", async () => {
+  const { Atom } = await import("effect/reactivity");
+  const noConfig = Atom.make(null);
+  return {
+    serverEnvironment: { configValueAtom: () => noConfig },
+    environmentServerConfigsAtom: Atom.make(
+      () =>
+        new Map(
+          issueLinks.enabled
+            ? ["env-a", "env-b"].map((id) => [
+                id,
+                { environment: { capabilities: { issues: true } } },
+              ])
+            : [],
+        ),
+    ),
+  };
+});
 vi.mock("./chat/MermaidDiagram", () => ({
   // Real Mermaid needs layout APIs jsdom lacks; a rendered diagram is an SVG.
   MermaidDiagram: () => <svg aria-label="Diagram" />,
@@ -175,7 +202,6 @@ vi.mock("../state/session", async (importOriginal) => {
     ...actual,
     useEnvironmentScope: hasScope,
     readEnvironmentScope: hasScope,
-    usePreparedConnection: () => ({ _tag: "Loading" }),
   };
 });
 vi.mock("../state/entities", () => ({
@@ -254,6 +280,7 @@ describe("pull request Markdown issue destinations", () => {
   beforeEach(() => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     issueLinks.enabled = true;
+    appAtomRegistry.refresh(environmentServerConfigsAtom);
     issueLinks.navigate.mockReset();
     issueLinks.resolve.mockReset().mockImplementation(({ input }) => ({
       projectId: ProjectId.make("resolved-project"),
@@ -275,6 +302,7 @@ describe("pull request Markdown issue destinations", () => {
     element.remove();
     useRightPanelStore.setState(useRightPanelStore.getInitialState(), true);
     issueLinks.enabled = false;
+    appAtomRegistry.refresh(environmentServerConfigsAtom);
     vi.unstubAllGlobals();
   });
 

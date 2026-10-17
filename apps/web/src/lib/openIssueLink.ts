@@ -13,7 +13,9 @@ import { readIssueListPreferences } from "../components/issue/issueListPreferenc
 import { toastManager } from "../components/ui/toast";
 import { readLocalApi } from "../localApi";
 import { ISSUES_PANEL_REF, useRightPanelStore } from "../rightPanelStore";
-import { readThreadShell, useProjects, useServerConfigs } from "../state/entities";
+import { appAtomRegistry } from "../rpc/atomRegistry";
+import { readThreadShell, useProjects } from "../state/entities";
+import { environmentServerConfigsAtom } from "../state/server";
 import { issueEnvironment } from "../state/issues";
 import { useAtomCommand } from "../state/use-atom-command";
 import { issueUrlConnectionId } from "./issueUrlConnection";
@@ -45,7 +47,6 @@ export function useOpenIssueLink(
   targetEnvironmentId?: EnvironmentId,
 ) => boolean {
   const navigate = useNavigate();
-  const serverConfigs = useServerConfigs();
   const projects = useProjects();
   const openLink = useOpenLink(threadRef);
   const resolveUrl = useAtomCommand(issueEnvironment.resolveUrl, { reportFailure: false });
@@ -55,6 +56,7 @@ export function useOpenIssueLink(
     const environmentId =
       targetEnvironmentId ?? issueLinkContext?.environmentId ?? threadRef?.environmentId;
     if (resolvedPanelRef === undefined || environmentId === undefined) return false;
+    const serverConfigs = appAtomRegistry.get(environmentServerConfigsAtom);
     if (serverConfigs.get(environmentId)?.environment.capabilities.issues !== true) return false;
     const source = issueLinkContext?.environmentId === environmentId ? issueLinkContext : undefined;
     const candidate =
