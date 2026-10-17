@@ -216,6 +216,17 @@ describe("structured JSON field", () => {
     expect(byLabel("Payload type").textContent).toContain("Select…");
   });
 
+  it("sets and clears a native field named __proto__", async () => {
+    await render([{ ...json(), id: "__proto__" }], { other: "kept" });
+    await choose("Payload type", "List");
+    expect(Object.hasOwn(latest, "__proto__")).toBe(true);
+    expect(latest["__proto__"]).toBe("[]");
+    expect(Object.getPrototypeOf(latest)).toBe(Object.prototype);
+    await click(button("Clear"));
+    expect(Object.hasOwn(latest, "__proto__")).toBe(false);
+    expect(latest).toEqual({ other: "kept" });
+  });
+
   it("disables every control", async () => {
     await render([json(), cascade()], { payload: '{"a":[1]}', area: '{"id":"10"}' }, true);
     const controls = [

@@ -224,29 +224,27 @@ function TrackerRow({
     if (!canEdit || busy || unavailable) return;
     setBusy(true);
     setFailure(null);
-    try {
-      const result = await connect({
-        environmentId,
-        input: {
-          tracker: tracker.tracker,
-          token: multipleAccounts ? { value: token } : token,
-          ...(adding
-            ? { addAccount: true }
-            : selected?.connectionId === undefined
-              ? {}
-              : { connectionId: selected.connectionId }),
-        },
-      });
-      if (result._tag === "Success") {
-        setScopeState((current) => ({ ...current, pages: {} }));
-        setDraft({});
-        setAdding(false);
-        return;
-      }
-      setFailure(connectFailureMessage(squashAtomCommandFailure(result)));
-    } finally {
+    const result = await connect({
+      environmentId,
+      input: {
+        tracker: tracker.tracker,
+        token: multipleAccounts ? { value: token } : token,
+        ...(adding
+          ? { addAccount: true }
+          : selected?.connectionId === undefined
+            ? {}
+            : { connectionId: selected.connectionId }),
+      },
+    }).finally(() => {
       setBusy(false);
+    });
+    if (result._tag === "Success") {
+      setScopeState((current) => ({ ...current, pages: {} }));
+      setDraft({});
+      setAdding(false);
+      return;
     }
+    setFailure(connectFailureMessage(squashAtomCommandFailure(result)));
   };
 
   const status = unavailable ? (
@@ -563,32 +561,30 @@ function ProjectBindingRow({
             scope,
             ...(account?.connectionId === undefined ? {} : { connectionId: account.connectionId }),
           };
-    try {
-      const result = await bind({
-        environmentId,
-        input: {
-          projectId,
-          ...(scope === UNBOUND && multipleAccounts
-            ? {
-                tracker: tracker.tracker,
-              }
-            : {}),
-          ...(multipleAccounts &&
-          binding?.connectionId !== undefined &&
-          (scope === UNBOUND || account?.connectionId === undefined)
-            ? { connectionId: binding.connectionId }
-            : {}),
-          binding: multipleAccounts ? { value: nextBinding } : nextBinding,
-        },
-      });
-      if (result._tag === "Success") {
-        setKeys((current) => ({ ...current, [selected]: "" }));
-        return;
-      }
-      setFailure(connectionFailureDetail(squashAtomCommandFailure(result)));
-    } finally {
+    const result = await bind({
+      environmentId,
+      input: {
+        projectId,
+        ...(scope === UNBOUND && multipleAccounts
+          ? {
+              tracker: tracker.tracker,
+            }
+          : {}),
+        ...(multipleAccounts &&
+        binding?.connectionId !== undefined &&
+        (scope === UNBOUND || account?.connectionId === undefined)
+          ? { connectionId: binding.connectionId }
+          : {}),
+        binding: multipleAccounts ? { value: nextBinding } : nextBinding,
+      },
+    }).finally(() => {
       setBusy(false);
+    });
+    if (result._tag === "Success") {
+      setKeys((current) => ({ ...current, [selected]: "" }));
+      return;
     }
+    setFailure(connectionFailureDetail(squashAtomCommandFailure(result)));
   };
 
   return (

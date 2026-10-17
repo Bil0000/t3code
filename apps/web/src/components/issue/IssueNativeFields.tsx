@@ -100,8 +100,9 @@ export function IssueNativeFields({
         const text = typeof value === "string" ? value : "";
         const multiple = field.kind === "multiselect";
         const set = (next: string | readonly string[] | undefined) => {
-          const { [field.id]: _previous, ...rest } = values;
-          onChange(next === undefined ? rest : { ...values, [field.id]: next });
+          const updated = { ...values };
+          delete updated[field.id];
+          onChange(next === undefined ? updated : { ...values, [field.id]: next });
         };
         const cascade =
           field.kind === "cascading-select" && text ? cascadeChoice(field, text) : null;
