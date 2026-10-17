@@ -23,22 +23,36 @@ const state = vi.hoisted(() => ({
   ),
 }));
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => state.navigate }));
-vi.mock("@effect/atom-react", () => ({
-  useAtomValue: (atom: unknown) =>
-    atom === "edit-permission"
-      ? true
-      : typeof atom === "object" && atom !== null && "configEnvironment" in atom
-        ? (state.configs.get(String(atom.configEnvironment)) ?? null)
-        : null,
-}));
+vi.mock("@effect/atom-react", async () => {
+  const { AtomRegistry } = await import("effect/reactivity");
+  const registry = AtomRegistry.make();
+  const derived = new Set([
+    "markdown-server-config-fields",
+    "pull-request-link-mode",
+    "source-link-server-config",
+  ]);
+  return {
+    useAtomValue: (atom: { readonly label?: readonly [string, ...unknown[]] } | string) =>
+      atom === "edit-permission"
+        ? true
+        : typeof atom === "object" && derived.has(atom.label?.[0] ?? "")
+          ? registry.get(atom as never)
+          : null,
+  };
+});
 vi.mock("../state/server", async (importOriginal) => {
   const original = await importOriginal<typeof import("../state/server")>();
+  const { Atom } = await import("effect/reactivity");
   return {
     ...original,
-    environmentServerConfigsAtom: (await import("effect/reactivity")).Atom.make(state.configs),
+    environmentServerConfigsAtom: Atom.make(state.configs),
     serverEnvironment: {
       ...original.serverEnvironment,
-      configValueAtom: (configEnvironment: string) => ({ configEnvironment }),
+      configValueAtom: Atom.family((configEnvironment: string) =>
+        Atom.make(() => state.configs.get(configEnvironment) ?? null).pipe(
+          Atom.withLabel("source-link-server-config"),
+        ),
+      ),
     },
   };
 });
