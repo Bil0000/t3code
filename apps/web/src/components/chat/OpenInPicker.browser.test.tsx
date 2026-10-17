@@ -195,7 +195,7 @@ describe("host editor access", () => {
     expect(menuItems().length).toBeGreaterThan(0);
     state.allowed.delete(selected);
     await renderPicker();
-    expect(menuItems()).toHaveLength(0);
+    await expect.poll(menuItems).toHaveLength(0);
     state.allowed.add(selected);
     await renderPicker();
     expect(menuItems()).toHaveLength(0);

@@ -12,7 +12,10 @@ import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { selectThreadRightPanelState, useRightPanelStore } from "../rightPanelStore";
 
 vi.mock("~/hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "light" }) }));
-vi.mock("~/browser/browserDefaults", () => ({ useBrowserDefaults: () => ({ profiles: [] }) }));
+vi.mock(import("~/browser/browserDefaults"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  useBrowserDefaults: (() => ({ profiles: [] })) as never,
+}));
 
 let root: Root;
 let container: HTMLDivElement;
