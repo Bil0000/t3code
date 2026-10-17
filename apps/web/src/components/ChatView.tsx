@@ -3136,10 +3136,10 @@ export default function ChatView(props: ChatViewProps) {
       ? `${draftId}:${autoScratchPlan.environmentId}`
       : null;
   // Invalidate before passive effects, without mutating request state during render.
-  useLayoutEffect(() => autoScratchRequest.sync(autoScratchRequestKey), [
-    autoScratchRequest,
-    autoScratchRequestKey,
-  ]);
+  useLayoutEffect(
+    () => autoScratchRequest.sync(autoScratchRequestKey),
+    [autoScratchRequest, autoScratchRequestKey],
+  );
   useEffect(() => {
     const plan = sendInFlightRef.current ? null : autoScratchPlan;
     if (!plan || !draftId) return;

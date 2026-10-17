@@ -1936,9 +1936,7 @@ describe("composerDraftStore project draft thread mapping", () => {
     expect(store.getDraftSessionByLogicalProjectKey(remoteScratchLogicalKey)?.draftId).toBe(
       draftId,
     );
-    expect(
-      store.getDraftSessionByLogicalProjectKey(scopedProjectKey(projectRef)),
-    ).toBeNull();
+    expect(store.getDraftSessionByLogicalProjectKey(scopedProjectKey(projectRef))).toBeNull();
     const draft = store.getComposerDraft(draftId);
     expect(draft?.modelSelectionExplicit).toBe(true);
     expect(draft?.modelSelectionByProvider[CODEX_INSTANCE]).toEqual(
