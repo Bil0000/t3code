@@ -1634,7 +1634,9 @@ function PullRequestsRouteView() {
     </div>
   );
   const carriedToNothing =
-    showingCarried && listQuery.isPending && shownCount === 0 && typedQuery.length === 0;
+    shownCount === 0 &&
+    typedQuery.length === 0 &&
+    (!querySettled || (showingCarried && listQuery.isPending));
   const listBody = (
     <>
       {!capabilityKnown ? (
