@@ -30,9 +30,9 @@ current checkout, a new worktree, and the previous worktree when available.
 Use `mod+shift+l` to reuse the previous worktree directly.
 
 To change effort one step without opening the picker, bind
-`composer.increaseEffort` and `composer.decreaseEffort` in Keybindings. Both are
-unbound by default. Increase wraps from the highest level to the lowest, and
-decrease wraps from the lowest level to the highest.
+**Composer: Increase Effort** and **Composer: Decrease Effort** in Keybindings.
+Both are unbound by default. Increase wraps from the highest level to the
+lowest, and decrease wraps from the lowest level to the highest.
 
 In the model picker, press Left in an empty search field or Shift+Tab to reach
 the provider list. Use Up/Down to move and Enter to choose. Right returns to

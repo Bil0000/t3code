@@ -520,6 +520,7 @@ describe("getComposerReasoningStep", () => {
       models: modelWith([selectDescriptor("reasoningEffort", LEVELS)]),
       modelOptions: undefined,
       prompt: "Fix the bug",
+      cursor: 0,
       planModeEnabled: true,
       direction: 1,
       ...input,
@@ -549,7 +550,7 @@ describe("getComposerReasoningStep", () => {
         `${from} by ${direction}`,
       ).toStrictEqual({
         prompt: "Fix the bug",
-        cursorOffset: 0,
+        cursor: 0,
         modelOptions: selections(["contextWindow", "1m"], ["reasoningEffort", to]),
       });
     }
@@ -561,7 +562,7 @@ describe("getComposerReasoningStep", () => {
         prompt: "  Fix the bug \n",
         modelOptions: selections(["effort", "high"]),
         direction: 1,
-        expected: { prompt: "Ultrathink:\nFix the bug", cursorOffset: 10 },
+        expected: { prompt: "Ultrathink:\nFix the bug", cursor: 20 },
       },
       {
         // The prefix, not the draft's Medium, is the current level.
@@ -570,21 +571,36 @@ describe("getComposerReasoningStep", () => {
         direction: -1,
         expected: {
           prompt: "Fix the bug",
-          cursorOffset: -14,
+          cursor: 8,
           modelOptions: selections(["effort", "high"]),
         },
       },
     ] as const) {
-      const result = step({ ...CLAUDE, prompt, modelOptions, direction });
+      const result = step({
+        ...CLAUDE,
+        prompt,
+        cursor: prompt.indexOf("bug"),
+        modelOptions,
+        direction,
+      });
       expect(result).toStrictEqual(expected);
-      const caret = prompt.indexOf("bug") + (result?.cursorOffset ?? 0);
-      expect(result?.prompt.slice(caret)).toMatch(/^bug/);
+      expect(result?.prompt.slice(result.cursor)).toMatch(/^bug/);
     }
+    // A caret in leading whitespace must not land inside the new prefix.
+    expect(
+      step({ ...CLAUDE, prompt: "   Fix", modelOptions: selections(["effort", "high"]) })?.cursor,
+    ).toBe("Ultrathink:\n".length);
   });
 
-  it("does nothing when the Ultrathink prefix cannot be added or removed", () => {
+  it("skips Ultrathink for slash commands and does nothing when the prompt locks it", () => {
+    expect(
+      step({ ...CLAUDE, prompt: "/review", modelOptions: selections(["effort", "high"]) }),
+    ).toStrictEqual({
+      prompt: "/review",
+      cursor: 0,
+      modelOptions: selections(["effort", "medium"]),
+    });
     for (const [prompt, direction] of [
-      ["/review", 1],
       ["Please ultrathink harder", 1],
       ["Ultrathink:\nPlease ultrathink harder", -1],
     ] as const) {
@@ -638,6 +654,16 @@ describe("getComposerReasoningStep", () => {
         modelOptions: selections(["reasoningEffort", "low"]),
         reportedModelSelection: reported,
         to: "medium",
+      },
+      {
+        // OpenCode reports "default" when no variant was chosen.
+        label: "reported value outside the catalog",
+        modelOptions: undefined,
+        reportedModelSelection: {
+          ...reported,
+          options: selections(["reasoningEffort", "default"]),
+        },
+        to: "high",
       },
     ]) {
       expect(step({ modelOptions, reportedModelSelection })?.modelOptions, label).toStrictEqual(

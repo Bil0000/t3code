@@ -323,24 +323,33 @@ export function getReasoningTraitStep(input: {
   const current =
     isPrimary && selected.ultrathinkPromptControlled
       ? "ultrathink"
-      : (getDescriptorStringValue(
+      : getDescriptorStringValue(
           descriptor,
           { instanceId: input.instanceId, model: input.model, options: input.modelOptions ?? [] },
           input.reportedModelSelection,
-        ) ?? getDescriptorStringValue(descriptor));
-  const index = descriptor.options.findIndex((option) => option.id === current);
-  if (index < 0) return null;
-  const count = descriptor.options.length;
-  const next = descriptor.options[(index + input.direction + count) % count];
-  const change = next ? getTraitSelectChange(selected, descriptor, input.prompt, next.id) : null;
-  if (!change) return null;
-  if ("modelOptions" in change) {
-    return change.modelOptions
-      ? { prompt: change.prompt, modelOptions: change.modelOptions }
-      : null;
+        );
+  const ordered = input.direction > 0 ? descriptor.options : descriptor.options.toReversed();
+  // A reported value outside the catalog, such as OpenCode's "default", steps
+  // from the catalog default, or from the end when there is none.
+  const position =
+    [current, getDescriptorStringValue(descriptor)]
+      .map((value) => ordered.findIndex((option) => option.id === value))
+      .find((index) => index >= 0) ?? -1;
+  for (const option of [
+    ...ordered.slice(position + 1),
+    ...ordered.slice(0, Math.max(position, 0)),
+  ]) {
+    const change = getTraitSelectChange(selected, descriptor, input.prompt, option.id);
+    if (!change) return null;
+    if ("modelOptions" in change) {
+      return change.modelOptions
+        ? { prompt: change.prompt, modelOptions: change.modelOptions }
+        : null;
+    }
+    // A slash command refuses the Ultrathink prefix, so skip that level.
+    if (change.prompt.startsWith(ULTRATHINK_PROMPT_PREFIX)) return change;
   }
-  // A slash command refuses the Ultrathink prefix, so the step would change nothing.
-  return change.prompt.startsWith(ULTRATHINK_PROMPT_PREFIX) ? change : null;
+  return null;
 }
 
 export function shouldRenderTraitsControls(input: {

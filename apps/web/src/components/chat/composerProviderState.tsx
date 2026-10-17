@@ -163,9 +163,8 @@ export function getComposerProviderState(input: ComposerProviderStateInput): Com
 }
 
 /**
- * `cursorOffset` is the shift an expanded caret needs to stay on the same
- * character after the Ultrathink prefix is added or removed; 0 when the prompt
- * is unchanged.
+ * `cursor` is an expanded caret in `prompt`; the result's `cursor` keeps it on
+ * the same character when the Ultrathink prefix is added or removed.
  */
 export function getComposerReasoningStep(input: {
   provider: ProviderDriverKind;
@@ -175,14 +174,15 @@ export function getComposerReasoningStep(input: {
   modelOptions: ReadonlyArray<ProviderOptionSelection> | null | undefined;
   reportedModelSelection?: ModelSelection | null | undefined;
   prompt: string;
+  cursor: number;
   planModeEnabled: boolean;
   direction: 1 | -1;
 }): {
   prompt: string;
-  cursorOffset: number;
+  cursor: number;
   modelOptions?: ReadonlyArray<ProviderOptionSelection>;
 } | null {
-  const { prompt } = input;
+  const { prompt, cursor } = input;
   const { selections } = resolveComposerOptionSelections(
     input.models,
     input.model,
@@ -202,19 +202,18 @@ export function getComposerReasoningStep(input: {
     direction: input.direction,
   });
   if (!step) return null;
-  // Adding the prefix also trims the prompt, so leading whitespace shifts the caret back.
-  const prefixLength = step.prompt.length - prompt.trim().length;
-  const leadingWhitespaceLength = prompt.length - prompt.trimStart().length;
-  const cursorOffset =
-    step.prompt === prompt
-      ? 0
-      : "modelOptions" in step
-        ? step.prompt.length - prompt.length
-        : prefixLength - leadingWhitespaceLength;
+  const modelOptions = "modelOptions" in step ? { modelOptions: step.modelOptions } : {};
+  if (step.prompt === prompt) return { prompt, cursor, ...modelOptions };
+  // Adding the prefix also trims the prompt, so the kept text starts right after the prefix.
+  const keptStart = "modelOptions" in step ? 0 : step.prompt.length - prompt.trim().length;
+  const offset =
+    "modelOptions" in step
+      ? step.prompt.length - prompt.length
+      : keptStart - (prompt.length - prompt.trimStart().length);
   return {
     prompt: step.prompt,
-    cursorOffset,
-    ...("modelOptions" in step ? { modelOptions: step.modelOptions } : {}),
+    cursor: Math.min(step.prompt.length, Math.max(keptStart, cursor + offset)),
+    ...modelOptions,
   };
 }
 

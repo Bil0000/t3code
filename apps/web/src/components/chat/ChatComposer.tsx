@@ -6093,7 +6093,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         ),
       openModelPicker: openModelPickerStable,
       stepReasoningEffort: (direction) => {
-        if (noProviderAvailable || isComposerApprovalState || pendingUserInputs.length > 0) return;
+        if (
+          noProviderAvailable ||
+          isComposerApprovalState ||
+          pendingUserInputs.length > 0 ||
+          // A queued-message edit draft is discarded when the edit ends.
+          isEditingQueuedMessage
+        ) {
+          return;
+        }
         const change = getComposerReasoningStep({
           provider: selectedProvider,
           instanceId: selectedInstanceId,
@@ -6102,6 +6110,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           modelOptions: composerModelOptions?.[selectedInstanceId],
           reportedModelSelection,
           prompt: promptRef.current,
+          cursor: readComposerSnapshotStable().expandedCursor,
           planModeEnabled: settings.planModeEnabled,
           direction,
         });
@@ -6117,10 +6126,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         }
         if (change.prompt !== promptRef.current) {
           applyPromptReplacementStable(0, promptRef.current.length, change.prompt, {
-            expandedCursorAfterReplace: Math.max(
-              0,
-              readComposerSnapshotStable().expandedCursor + change.cursorOffset,
-            ),
+            expandedCursorAfterReplace: change.cursor,
           });
         }
       },
@@ -6264,6 +6270,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       foldPastedText,
       composerDraftTarget,
       composerModelOptions,
+      isEditingQueuedMessage,
       composerCursor,
       activePendingProgress,
       composerTerminalContexts,
