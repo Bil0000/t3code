@@ -1,3 +1,5 @@
+import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
+
 export type WorkspaceTab = "threads" | "pullRequests" | "issues";
 export type WorkspaceSearchMode = "resting" | "active" | "expanded";
 
@@ -86,7 +88,7 @@ export const WORKSPACE_TAB_PRESENTATION = {
   pullRequests: {
     title: "Pull requests",
     label: "PRs",
-    icon: "arrow.triangle.pull",
+    icon: PullRequestGlyph.pullRequest,
     search: "Search pull requests",
   },
   issues: {
