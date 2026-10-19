@@ -171,12 +171,14 @@ vi.mock("~/state/query", async (importOriginal) => ({
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => state.write }));
 vi.mock("~/state/issues", async (importOriginal) => {
   const original = await importOriginal<typeof import("~/state/issues")>();
-  const { Atom } = await import("effect/reactivity");
+  const { Atom, AsyncResult } = await import("effect/reactivity");
+  const detail = Atom.make(AsyncResult.initial()).pipe(Atom.keepAlive);
   const command = { permissionAtom: () => Atom.make(state.writeAllowed ?? state.allowed) };
   const historyRevisions = Atom.family((_key: string) => Atom.make(0).pipe(Atom.keepAlive));
   return {
     issueEnvironment: {
-      detail: () => ({ kind: "detail" }),
+      detail: () => detail,
+      commentPages: original.issueEnvironment.commentPages,
       historyRefresh: (target: unknown) => historyRevisions(JSON.stringify(target)),
       candidates: (target: unknown) => {
         state.candidatesRead(target);

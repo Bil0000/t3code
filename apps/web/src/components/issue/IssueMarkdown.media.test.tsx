@@ -96,6 +96,7 @@ vi.mock("~/state/entities", () => ({
   readEnvironmentSupportsServerBrowser: () => false,
   readThreadShell: () => null,
   useThreadShell: () => null,
+  useQuietThreadShell: () => null,
   useProjects: () => [],
   useServerConfigs: () => new Map(),
 }));

@@ -276,6 +276,7 @@ beforeEach(() => {
 });
 afterEach(async () => {
   await act(async () => root.unmount());
+  vi.useRealTimers();
   container.remove();
   appAtomRegistry.reset();
   vi.unstubAllGlobals();
@@ -1525,13 +1526,22 @@ it("starts oldest comments without a cursor, drops a stale newest tail, and keep
   expect(state.writes).not.toHaveBeenCalled();
 });
 
-it.each(["viewer", null])(
-  "keeps same-viewer pages but fences a fresh unknown-viewer seed (%s)",
-  async (viewer) => {
+it.each([
+  { viewer: "viewer", seedChanged: true, tailChanged: true, deferred: false },
+  { viewer: null, seedChanged: true, tailChanged: true, deferred: false },
+  { viewer: "viewer", seedChanged: false, tailChanged: true, deferred: false },
+  { viewer: null, seedChanged: false, tailChanged: true, deferred: false },
+  { viewer: null, seedChanged: false, tailChanged: true, deferred: true },
+  { viewer: null, seedChanged: false, tailChanged: false, deferred: false },
+])(
+  "keeps same-viewer pages but fences unknown-viewer reads ($viewer, changed seed: $seedChanged, changed tail: $tailChanged, deferred: $deferred)",
+  async ({ viewer, seedChanged, tailChanged, deferred }) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
     const nativeRef = { ...reference, connectionId: "Account-B" };
     const decodeComments = Schema.decodeUnknownSync(IssueCommentsPage);
     let changed = false;
     let finish!: () => void;
+    let finishDetail!: () => void;
     const page = (current: boolean) =>
       decodeComments({
         comments: [
@@ -1544,17 +1554,15 @@ it.each(["viewer", null])(
         nextCursor: null,
       });
     state.read.mockImplementation((tag) => {
-      if (tag === WS_METHODS.issuesDetail)
-        return decodeDetail({
+      if (tag === WS_METHODS.issuesDetail) {
+        const detail = decodeDetail({
           ...issue,
           ...nativeRef,
           viewer,
-          comments: [
-            {
-              ...nativeComment("same-seed", 20),
-              body: changed ? "Refreshed seed" : "Original seed",
-            },
-          ],
+          comments: Array.from({ length: 50 }, (_, index) => ({
+            ...nativeComment(`same-seed-${index}`, 20),
+            body: changed && seedChanged ? "Refreshed seed" : "Original seed",
+          })),
           commentsCursor: "older",
           capabilities: {
             ...capabilities,
@@ -1563,10 +1571,16 @@ it.each(["viewer", null])(
             editComment: true,
           },
         });
+        if (changed && deferred)
+          return new Promise((resolve) => {
+            finishDetail = () => resolve(detail);
+          });
+        return detail;
+      }
       if (tag === WS_METHODS.issuesComments) {
         if (changed && viewer === null)
           return new Promise((resolve) => {
-            finish = () => resolve(page(false));
+            finish = () => resolve(page(!tailChanged));
           });
         return page(true);
       }
@@ -1593,21 +1607,34 @@ it.each(["viewer", null])(
     expect(older()?.querySelector('[aria-label^="thumbs up,"]')?.getAttribute("aria-pressed")).toBe(
       "true",
     );
+    expect(state.read.mock.calls.filter(([tag]) => tag === WS_METHODS.issuesComments)).toHaveLength(
+      1,
+    );
+    expect(state.read.mock.calls.filter(([tag]) => tag === WS_METHODS.issuesDetail)).toHaveLength(
+      1,
+    );
     changed = true;
     await act(async () =>
       appAtomRegistry.refresh(issueEnvironment.detail({ environmentId, input: nativeRef })),
     );
-    expect(container.textContent).toContain("Refreshed seed");
+    if (deferred) {
+      expect(
+        state.read.mock.calls.filter(([tag]) => tag === WS_METHODS.issuesComments),
+      ).toHaveLength(1);
+      expect(older()?.querySelector('[aria-label="Edit comment"]')).not.toBeNull();
+      await act(async () => finishDetail());
+    }
+    expect(container.textContent).toContain(seedChanged ? "Refreshed seed" : "Original seed");
     const reads = state.read.mock.calls.filter(([tag]) => tag === WS_METHODS.issuesComments);
     expect(reads).toHaveLength(viewer === null ? 2 : 1);
     if (viewer === null) {
       expect(older()).toBeUndefined();
       expect(typeof finish).toBe("function");
       await act(async () => finish());
-      expect(older()?.querySelector('[aria-label="Edit comment"]')).toBeNull();
+      expect(Boolean(older()?.querySelector('[aria-label="Edit comment"]'))).toBe(!tailChanged);
       expect(
         older()?.querySelector('[aria-label^="thumbs up,"]')?.getAttribute("aria-pressed"),
-      ).toBe("false");
+      ).toBe(tailChanged ? "false" : "true");
     } else {
       expect(older()?.querySelector('[aria-label="Edit comment"]')).not.toBeNull();
       expect(
@@ -1621,6 +1648,9 @@ it.each(["viewer", null])(
         cursor: "older",
         ...(viewer === null ? {} : { viewer }),
       });
+    expect(state.read.mock.calls.filter(([tag]) => tag === WS_METHODS.issuesDetail)).toHaveLength(
+      2,
+    );
     expect(state.writes).not.toHaveBeenCalled();
   },
 );

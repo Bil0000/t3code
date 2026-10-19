@@ -2,7 +2,7 @@ import { threadIssueKeyOf, type ScopedThreadRef } from "@t3tools/contracts";
 
 import { cn } from "~/lib/utils";
 import { useRightPanelStore } from "../../rightPanelStore";
-import { useThreadShell } from "../../state/entities";
+import { useQuietThreadShell } from "../../state/entities";
 
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { issueDisplayLabel } from "../issue/issueDetail.logic";
@@ -20,7 +20,7 @@ import {
  * row shows what the link itself carries.
  */
 export function ThreadDetailsIssueRows({ threadRef }: { threadRef: ScopedThreadRef }) {
-  const links = useThreadShell(threadRef)?.issues ?? [];
+  const links = useQuietThreadShell(threadRef)?.issues ?? [];
   if (links.length === 0) return null;
   return (
     <>
