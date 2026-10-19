@@ -1,6 +1,6 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import { useFocusEffect, useNavigation, type StaticScreenProps } from "@react-navigation/native";
-import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import {
   EnvironmentId,
   type IssueComment,
@@ -271,13 +271,12 @@ function IssueBody(props: {
     if (pending.current) return;
     pending.current = true;
     setBusy(true);
-    try {
-      await work();
-    } catch (cause) {
+    const result = await settlePromise(work);
+    pending.current = false;
+    setBusy(false);
+    if (result._tag === "Failure") {
+      const cause = squashAtomCommandFailure(result);
       Alert.alert(failure, cause instanceof Error ? cause.message : "Try again.");
-    } finally {
-      pending.current = false;
-      setBusy(false);
     }
   };
   const changeState = (state: IssueState, closeReason?: string) => {

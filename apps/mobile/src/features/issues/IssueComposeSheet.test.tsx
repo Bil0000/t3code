@@ -62,9 +62,15 @@ vi.mock("../../state/use-atom-command", () => ({
       : { _tag: "Success", value: undefined };
   },
 }));
-vi.mock("@t3tools/client-runtime/state/runtime", () => ({
-  squashAtomCommandFailure: (failure: { cause: Error }) => failure.cause,
-}));
+vi.mock("@t3tools/client-runtime/state/runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@t3tools/client-runtime/state/runtime")>();
+  const Cause = await import("effect/Cause");
+  return {
+    ...actual,
+    squashAtomCommandFailure: ({ cause }: { cause: unknown }) =>
+      Cause.isCause(cause) ? Cause.squash(cause) : cause,
+  };
+});
 vi.mock("./useIssueAccess", async () => {
   const { issueAccess } = await import("./issueDetail");
   const grants = { comment: true, update: true, setState: true, react: true };

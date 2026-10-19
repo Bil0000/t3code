@@ -240,168 +240,161 @@ export function useIssueList(targets: ReadonlyArray<IssueListTarget>) {
   const onRefresh = useCallback(() => refreshTargets(targets), [refreshTargets, targets]);
 
   const readSource = useCallback(
-    async function readWrittenSource(
+    async (
       sourceKey: string,
       write: IssueSourceWrite | Pick<IssueSourceWrite, "environmentId" | "source">,
       retry = false,
-    ): Promise<void> {
-      const { environmentId, source } = write;
-      if (activeScope.current !== scopeKey) return;
-      const selected = targets.filter((target) =>
-        issueListTargetIncludesSource(target, environmentId, source, currentHeld(target)),
-      );
-      if (!selected.length) return;
-      if ("revision" in write) {
-        requests.current.page?.abort();
-        delete requests.current.page;
-      }
-      const controller = new AbortController();
-      requests.current.sources.add(controller);
-      setLoading({
-        key: scopeKey,
-        page: !!requests.current.page,
-        refresh: true,
-        error: retry ? null : state.error,
-      });
-      const responses = await Promise.allSettled(
-        selected.map(async (target) => {
-          const query = issueEnvironment.list(target);
-          if (registry.get(query).waiting)
-            await executeAtomQuery(registry, query, {
-              signal: controller.signal,
-              reportFailure: false,
-            });
-          if (controller.signal.aborted || activeScope.current !== scopeKey) return;
-          const started = currentHeld(target);
-          const canonical = issueListCanonicalSource(started, source);
-          const currentWrite =
-            "revision" in write
-              ? {
-                  ...write,
-                  removedKeys: new Map([
-                    ...(started?.pendingWrites.get(sourceKey)?.removedKeys ?? []),
-                    ...write.removedKeys,
-                  ]),
-                }
-              : null;
-          const writes = currentWrite
-            ? new Map([[sourceKey, currentWrite]])
-            : new Map<string, IssueSourceWrite>();
-          if (started && currentWrite) {
-            const pending = new Map(started.pendingWrites);
-            if ((pending.get(sourceKey)?.revision ?? 0) < currentWrite.revision)
-              pending.set(sourceKey, currentWrite);
-            registry.set(pagesFamily(JSON.stringify(target)), {
-              ...started,
-              pendingWrites: pending,
-            });
-          }
-          if (!started || canonical.host === undefined) {
-            const response = await executeAtomQuery(registry, query, {
-              refresh: true,
-              signal: controller.signal,
-              reportFailure: false,
-            });
+    ): Promise<void> => {
+      let restart = true;
+      while (restart && activeScope.current === scopeKey) {
+        restart = false;
+        const { environmentId, source } = write;
+        if (activeScope.current !== scopeKey) return;
+        const selected = targets.filter((target) =>
+          issueListTargetIncludesSource(target, environmentId, source, currentHeld(target)),
+        );
+        if (!selected.length) return;
+        if ("revision" in write) {
+          requests.current.page?.abort();
+          delete requests.current.page;
+        }
+        const controller = new AbortController();
+        requests.current.sources.add(controller);
+        setLoading({
+          key: scopeKey,
+          page: !!requests.current.page,
+          refresh: true,
+          error: retry ? null : state.error,
+        });
+        const responses = await Promise.allSettled(
+          selected.map(async (target) => {
+            const query = issueEnvironment.list(target);
+            if (registry.get(query).waiting)
+              await executeAtomQuery(registry, query, {
+                signal: controller.signal,
+                reportFailure: false,
+              });
+            if (controller.signal.aborted || activeScope.current !== scopeKey) return;
+            const started = currentHeld(target);
+            const canonical = issueListCanonicalSource(started, source);
+            const currentWrite =
+              "revision" in write
+                ? {
+                    ...write,
+                    removedKeys: new Map([
+                      ...(started?.pendingWrites.get(sourceKey)?.removedKeys ?? []),
+                      ...write.removedKeys,
+                    ]),
+                  }
+                : null;
+            const writes = currentWrite
+              ? new Map([[sourceKey, currentWrite]])
+              : new Map<string, IssueSourceWrite>();
+            if (started && currentWrite) {
+              const pending = new Map(started.pendingWrites);
+              if ((pending.get(sourceKey)?.revision ?? 0) < currentWrite.revision)
+                pending.set(sourceKey, currentWrite);
+              registry.set(pagesFamily(JSON.stringify(target)), {
+                ...started,
+                pendingWrites: pending,
+              });
+            }
+            if (!started || canonical.host === undefined) {
+              const response = await executeAtomQuery(registry, query, {
+                refresh: true,
+                signal: controller.signal,
+                reportFailure: false,
+              });
+              if (controller.signal.aborted || activeScope.current !== scopeKey) return;
+              if (response._tag === "Failure") throw squashAtomCommandFailure(response);
+              const answer = issueListAnswer(target, response.value);
+              const refreshed = refreshWrittenIssueList(currentHeld(target), answer, writes);
+              registry.set(pagesFamily(JSON.stringify(target)), refreshed.held);
+              registry.update(
+                handledWritesFamily(JSON.stringify(target)),
+                (previous) => new Map([...previous, ...refreshed.handledWrites]),
+              );
+              if (answer.errors.length)
+                throw new Error(answer.errors.map((error) => error.message).join("\n"));
+              return;
+            }
+            const scope = {
+              ...(canonical.connectionId === undefined
+                ? {}
+                : { connectionId: canonical.connectionId }),
+              tracker: canonical.tracker,
+              projectId: canonical.projectId,
+              host: canonical.host,
+              scope: canonical.scope,
+            };
+            const { cursors: _cursors, ...input } = target.input;
+            const read = await readIssueListSourcePage(registry, query, () =>
+              runAtomCommand(
+                registry,
+                issueEnvironment.listPage,
+                {
+                  environmentId,
+                  input: {
+                    ...input,
+                    projectId: scope.projectId,
+                    host: scope.host,
+                    ...(scope.connectionId === undefined
+                      ? {}
+                      : { connectionId: scope.connectionId }),
+                    limit: ISSUE_LIST_PAGE_SIZE,
+                  },
+                },
+                { reportFailure: false },
+              ),
+            );
+            const response = read.result;
             if (controller.signal.aborted || activeScope.current !== scopeKey) return;
             if (response._tag === "Failure") throw squashAtomCommandFailure(response);
+            const latest = currentHeld(target);
+            if (!read.isCurrent() || !latest || latest.answer !== started.answer) {
+              restart = true;
+              return;
+            }
             const answer = issueListAnswer(target, response.value);
-            const refreshed = refreshWrittenIssueList(currentHeld(target), answer, writes);
-            registry.set(pagesFamily(JSON.stringify(target)), refreshed.held);
+            const refreshed = refreshWrittenIssueList(latest, answer, writes, scope);
+            registry.set(pagesFamily(JSON.stringify(target)), {
+              ...refreshed.held,
+              restartSources: latest.restartSources?.filter(
+                (pending) =>
+                  answer.errors.length > 0 ||
+                  issueScopeKey(environmentId, { ...pending, host: pending.host ?? "" }) !==
+                    sourceKey,
+              ),
+            });
             registry.update(
               handledWritesFamily(JSON.stringify(target)),
               (previous) => new Map([...previous, ...refreshed.handledWrites]),
             );
             if (answer.errors.length)
               throw new Error(answer.errors.map((error) => error.message).join("\n"));
-            return;
-          }
-          const scope = {
-            ...(canonical.connectionId === undefined
-              ? {}
-              : { connectionId: canonical.connectionId }),
-            tracker: canonical.tracker,
-            projectId: canonical.projectId,
-            host: canonical.host,
-            scope: canonical.scope,
-          };
-          const { cursors: _cursors, ...input } = target.input;
-          const read = await readIssueListSourcePage(registry, query, () =>
-            runAtomCommand(
-              registry,
-              issueEnvironment.listPage,
-              {
-                environmentId,
-                input: {
-                  ...input,
-                  projectId: scope.projectId,
-                  host: scope.host,
-                  ...(scope.connectionId === undefined ? {} : { connectionId: scope.connectionId }),
-                  limit: ISSUE_LIST_PAGE_SIZE,
-                },
-              },
-              { reportFailure: false },
-            ),
-          );
-          const response = read.result;
-          if (controller.signal.aborted || activeScope.current !== scopeKey) return;
-          if (response._tag === "Failure") throw squashAtomCommandFailure(response);
-          const latest = currentHeld(target);
-          if (!read.isCurrent() || !latest || latest.answer !== started.answer) {
-            void queueSourceRefresh(sourceKey, () =>
-              readWrittenSource(
-                sourceKey,
-                registry.get(issueWrites)?.sources.get(sourceKey) ?? write,
-                retry,
-              ),
+          }),
+        );
+        requests.current.sources.delete(controller);
+        if (!controller.signal.aborted && activeScope.current === scopeKey) {
+          for (const [index, response] of responses.entries()) {
+            if (response.status !== "rejected" || !("revision" in write)) continue;
+            const failedWrite = write;
+            const target = selected[index]!;
+            registry.update(pagesFamily(JSON.stringify(target)), (latest) =>
+              retainFailedIssueWrites(latest, new Map([[sourceKey, failedWrite]])),
             );
-            return;
           }
-          const answer = issueListAnswer(target, response.value);
-          const refreshed = refreshWrittenIssueList(latest, answer, writes, scope);
-          registry.set(pagesFamily(JSON.stringify(target)), {
-            ...refreshed.held,
-            restartSources: latest.restartSources?.filter(
-              (pending) =>
-                answer.errors.length > 0 ||
-                issueScopeKey(environmentId, { ...pending, host: pending.host ?? "" }) !==
-                  sourceKey,
-            ),
-          });
-          registry.update(
-            handledWritesFamily(JSON.stringify(target)),
-            (previous) => new Map([...previous, ...refreshed.handledWrites]),
-          );
-          if (answer.errors.length)
-            throw new Error(answer.errors.map((error) => error.message).join("\n"));
-        }),
-      );
-      requests.current.sources.delete(controller);
-      if (!controller.signal.aborted && activeScope.current === scopeKey) {
-        for (const [index, response] of responses.entries()) {
-          if (response.status !== "rejected" || !("revision" in write)) continue;
-          const target = selected[index]!;
-          registry.update(pagesFamily(JSON.stringify(target)), (latest) =>
-            retainFailedIssueWrites(latest, new Map([[sourceKey, write]])),
-          );
+          setLoading((previous) => ({
+            key: scopeKey,
+            page: !!requests.current.page,
+            refresh: !!requests.current.refresh || requests.current.sources.size > 0,
+            error: requestErrors(responses) ?? (previous.key === scopeKey ? previous.error : null),
+          }));
         }
-        setLoading((previous) => ({
-          key: scopeKey,
-          page: !!requests.current.page,
-          refresh: !!requests.current.refresh || requests.current.sources.size > 0,
-          error: requestErrors(responses) ?? (previous.key === scopeKey ? previous.error : null),
-        }));
+        if (restart) write = registry.get(issueWrites)?.sources.get(sourceKey) ?? write;
       }
     },
-    [
-      currentHeld,
-      queueSourceRefresh,
-      registry,
-      scopeKey,
-      state.error,
-      targets,
-      activeScope,
-      requests,
-    ],
+    [currentHeld, registry, scopeKey, state.error, targets, activeScope, requests],
   );
 
   const loadMore = useCallback(

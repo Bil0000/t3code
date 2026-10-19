@@ -983,3 +983,102 @@ effectIt.effect.each([false, true])(
       }
     }),
 );
+
+it("retries a stale written-source answer once in the selected native account", async () => {
+  const runtime = Atom.runtime(
+    Layer.succeed(
+      EnvironmentRegistry.EnvironmentRegistry,
+      EnvironmentRegistry.EnvironmentRegistry.of({
+        run: (_id, effect) =>
+          Effect.provideService(
+            effect,
+            EnvironmentSupervisor.EnvironmentSupervisor,
+            {} as EnvironmentSupervisor.EnvironmentSupervisor["Service"],
+          ),
+      } as EnvironmentRegistry.EnvironmentRegistry["Service"]),
+    ),
+  );
+  Object.assign(issueEnvironment, createIssueEnvironmentAtoms(runtime));
+  const current = row("first", { connectionId: "Account-A" });
+  const first: IssueListResult = {
+    entries: [current],
+    sources: [source(current)],
+    nextCursors: {},
+    viewers: { "@Account-A gitlab gitlab.example": "viewer" },
+    trackers: [],
+    errors: [],
+  };
+  const target: IssueListTarget = {
+    environmentId: EnvironmentId.make("stale-written-source"),
+    input: {
+      state: "all",
+      involvement: "all",
+      connectionId: current.connectionId,
+      host: current.host,
+      limit: 50,
+    },
+  };
+  const list = Atom.family((_target: IssueListTarget) =>
+    Atom.make<AsyncResult.AsyncResult<IssueListResult, Error>>(AsyncResult.success(first)),
+  );
+  issueEnvironment.list = list;
+  const stale = Promise.withResolvers<IssueListResult>();
+  const started = Promise.withResolvers<void>();
+  const retried = Promise.withResolvers<void>();
+  const page = vi.spyOn(RpcClient, "requestGuarded");
+  page.mockImplementation((() => {
+    if (page.mock.calls.length === 1) {
+      started.resolve();
+      return Effect.promise(() => stale.promise);
+    }
+    retried.resolve();
+    return Effect.succeed({ ...first, entries: [row("current-account-answer", current)] });
+  }) as unknown as Parameters<typeof page.mockImplementation>[0]);
+  const registry = AtomRegistry.make();
+  const root = createRoot(document.createElement("div"));
+  let result: ReturnType<typeof useIssueList>;
+  function Probe() {
+    const value = useIssueList([target]);
+    useLayoutEffect(() => {
+      result = value;
+    });
+    return null;
+  }
+  try {
+    await act(async () =>
+      root.render(
+        createElement(RegistryContext.Provider, { value: registry }, createElement(Probe)),
+      ),
+    );
+    await act(async () => {
+      markIssueWritten(registry, target.environmentId, current);
+      await started.promise;
+    });
+    await act(async () => {
+      registry.set(
+        list(target),
+        AsyncResult.success({ ...first, entries: [row("new-first-page", current)] }),
+      );
+      stale.resolve({ ...first, entries: [row("stale-answer", current)] });
+      await retried.promise;
+    });
+    expect(page.mock.calls).toEqual(
+      Array.from({ length: 2 }, () => [
+        "issues.list",
+        { ...target.input, projectId: current.projectId },
+      ]),
+    );
+    expect(result!.lists[0]!.held.entries.map((entry) => entry.key)).toEqual([
+      "current-account-answer",
+    ]);
+    expect(
+      result!.lists[0]!.held.entries.every((entry) => entry.connectionId === "Account-A"),
+    ).toBe(true);
+    expect(result!.refreshing).toBe(false);
+  } finally {
+    stale.resolve(first);
+    await act(async () => root.unmount());
+    registry.dispose();
+    page.mockRestore();
+  }
+});

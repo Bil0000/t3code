@@ -1,6 +1,6 @@
 import { RegistryContext } from "@effect/atom-react";
 import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
-import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { use, useLayoutEffect, useRef, useState } from "react";
 import { Linking, Platform } from "react-native";
 import { AppText as Text, AppTextInput as TextInput } from "../../components/ui/AppText";
@@ -52,7 +52,7 @@ export function IssueComposeSheet({
     pending.current = true;
     setBusy(true);
     setError(null);
-    try {
+    const result = await settlePromise(async () => {
       const response = editing
         ? await update({
             ...target,
@@ -66,16 +66,17 @@ export function IssueComposeSheet({
       if (response._tag === "Failure") throw squashAtomCommandFailure(response);
       markIssueTargetWritten(registry, params);
       if (currentSource.current === sourceKey) navigation.goBack();
-    } catch (cause) {
+    });
+    pending.current = false;
+    setBusy(false);
+    if (result._tag === "Failure") {
+      const cause = squashAtomCommandFailure(result);
       if (currentSource.current === sourceKey)
         setError({
           key: sourceKey,
           message:
             cause instanceof Error ? cause.message : "The tracker could not save this. Try again.",
         });
-    } finally {
-      pending.current = false;
-      setBusy(false);
     }
   };
   return (

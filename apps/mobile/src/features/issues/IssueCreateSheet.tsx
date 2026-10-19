@@ -7,7 +7,7 @@ import {
   missingRequiredTemplateFields,
   type IssueTemplateValues,
 } from "@t3tools/client-runtime/issue-form";
-import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { use, useRef, useState } from "react";
 import { Alert, Linking, Platform, Pressable, View } from "react-native";
 import { AppText as Text, AppTextInput as TextInput } from "../../components/ui/AppText";
@@ -208,7 +208,7 @@ export function IssueCreateSheet({
     pending.current = true;
     setBusy(true);
     setError(null);
-    try {
+    const result = await settlePromise(async () => {
       const response = await create({
         environmentId: scope.environmentId,
         input: {
@@ -238,11 +238,12 @@ export function IssueCreateSheet({
       });
       if (response.value.warnings?.length)
         Alert.alert(`Created ${response.value.displayKey}`, response.value.warnings.join("\n"));
-    } catch (cause) {
+    });
+    pending.current = false;
+    setBusy(false);
+    if (result._tag === "Failure") {
+      const cause = squashAtomCommandFailure(result);
       setError(cause instanceof Error ? cause.message : "The tracker refused it. Try again.");
-    } finally {
-      pending.current = false;
-      setBusy(false);
     }
   };
   const choice = (field: string, value: string, title: string, on: boolean) => ({
