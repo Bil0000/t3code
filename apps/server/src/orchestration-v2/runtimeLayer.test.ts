@@ -2470,8 +2470,12 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
             }),
           ),
           Layer.mock(IssueService.IssueService)({
-            sources: () => Effect.succeed([ref]),
-            resolveUrl: () => Effect.succeed({ ...ref, writable: true }),
+            resolveTarget: () =>
+              Effect.succeed({
+                ...ref,
+                url: target === "key" ? null : detail.url,
+                writable: true,
+              }),
             detail: () =>
               Effect.sync(() => {
                 reads++;

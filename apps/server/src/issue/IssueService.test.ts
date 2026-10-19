@@ -551,6 +551,151 @@ describe("resolveGitHostBinding", () => {
   });
 });
 
+describe("IssueService target resolution", () => {
+  it.effect("preserves key overrides and explicit read-only targets without provider reads", () =>
+    Effect.gen(function* () {
+      let bindingReads = 0;
+      const noProviderRead = () => Effect.die("Target resolution must not read a provider");
+      const current = project({ id: "web", repository: "acme/web" });
+      const service = yield* makeService({
+        projects: [current],
+        trackers: [fakeTracker({ getViewer: noProviderRead, getIssue: noProviderRead })],
+        onBindingsRead: () => {
+          bindingReads++;
+        },
+      });
+      const ref = {
+        projectId: current.id,
+        tracker: GITHUB,
+        host: "github.com",
+        scope: "acme/web",
+        key: "7",
+      };
+      expect(yield* service.resolveTarget({ projectId: current.id, key: "7" })).toEqual({
+        ...ref,
+        url: null,
+        writable: true,
+      });
+      expect(
+        yield* service.resolveTarget({ projectId: current.id, key: "7", scope: "acme/other" }),
+      ).toEqual({
+        ...ref,
+        scope: "acme/other",
+        url: null,
+        writable: true,
+      });
+      expect(bindingReads).toBe(2);
+      expect(
+        yield* service.resolveTarget({ ...ref, host: "external.example", scope: "other/repo" }),
+      ).toEqual({
+        ...ref,
+        host: "external.example",
+        scope: "other/repo",
+        url: null,
+        writable: false,
+      });
+      expect(bindingReads).toBe(2);
+      const url = "https://github.com/acme/other/issues/7";
+      expect(yield* service.resolveTarget({ projectId: current.id, url })).toEqual({
+        ...ref,
+        scope: "acme/other",
+        url,
+        writable: false,
+      });
+      expect(bindingReads).toBe(3);
+    }),
+  );
+
+  it.effect("keeps exact account selection and refuses the default or a different case", () =>
+    Effect.gen(function* () {
+      const current = project({ id: "notes" });
+      const binding = {
+        tracker: LINEAR,
+        scope: "acme/ENG",
+        host: "linear.app",
+        connectionId: "Account",
+      };
+      const service = yield* makeService({
+        projects: [current],
+        trackers: [fakeStandaloneTracker()],
+        bindings: { notes: binding },
+      });
+      for (const connectionId of [undefined, "account"]) {
+        expect(
+          yield* service
+            .resolveSource({ projectId: current.id, tracker: LINEAR, connectionId })
+            .pipe(Effect.flip),
+        ).toMatchObject({
+          _tag: "IssueSourceSelectionError",
+          projectId: current.id,
+          tracker: LINEAR,
+          sources: [binding],
+        });
+      }
+      expect(
+        yield* service.resolveTarget({
+          projectId: current.id,
+          key: "ENG-7",
+          connectionId: "Account",
+        }),
+      ).toEqual({
+        projectId: current.id,
+        ...binding,
+        key: "ENG-7",
+        url: null,
+        writable: true,
+      });
+    }),
+  );
+
+  it.effect("keeps missing project, source and identity failures distinct", () =>
+    Effect.gen(function* () {
+      const current = project({ id: "web", repository: "acme/web" });
+      const service = yield* makeService({ projects: [current], trackers: [] });
+      expect(yield* service.resolveTarget({}).pipe(Effect.flip)).toMatchObject({
+        _tag: "IssueTargetIncompleteError",
+      });
+      expect(yield* service.resolveTarget({ key: "7" }).pipe(Effect.flip)).toMatchObject({
+        _tag: "IssueProjectRequiredError",
+      });
+      for (const projectId of [current.id, ProjectId.make("missing")]) {
+        expect(yield* service.resolveSource({ projectId }).pipe(Effect.flip)).toMatchObject({
+          _tag: "IssueProjectNotFoundError",
+          projectId,
+        });
+      }
+    }),
+  );
+
+  it.effect("requires one source and honors the explicit tracker", () =>
+    Effect.gen(function* () {
+      const current = project({ id: "web", repository: "acme/web" });
+      const binding = { tracker: LINEAR, scope: "ENG" };
+      const service = yield* makeService({
+        projects: [current],
+        trackers: [fakeTracker(), fakeStandaloneTracker()],
+        bindings: { web: binding },
+      });
+      expect(
+        yield* service.resolveSource({ projectId: current.id }).pipe(Effect.flip),
+      ).toMatchObject({
+        _tag: "IssueSourceSelectionError",
+        projectId: current.id,
+        sources: [
+          { tracker: GITHUB, host: "github.com", scope: "acme/web" },
+          { ...binding, host: "linear.app" },
+        ],
+      });
+      expect(
+        (yield* service.resolveSource({ projectId: current.id, tracker: LINEAR })).binding,
+      ).toEqual({
+        ...binding,
+        host: "linear.app",
+      });
+    }),
+  );
+});
+
 describe("IssueService", () => {
   it.effect(
     "discovers project source metadata with native scope filters and no provider reads",

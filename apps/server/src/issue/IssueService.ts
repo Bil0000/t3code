@@ -17,6 +17,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import {
   issueListCursorKey,
   issueHostKey,
@@ -55,7 +56,7 @@ import {
   type IssueListResult,
   type IssueReactionInput,
   type IssueRef,
-  type IssueScopeRef,
+  IssueScopeRef,
   type IssueSetStateInput,
   type IssueTemplateList,
   type IssueTemplatesInput,
@@ -64,7 +65,7 @@ import {
   type IssueUpdateInput,
   type IssueViewerPermissions,
   type OrchestrationProjectShell,
-  type ProjectId,
+  ProjectId,
 } from "@t3tools/contracts";
 import { sourceControlRepositorySelector } from "@t3tools/shared/sourceControl";
 import { azureDevOpsIssueScope, parseIssueUrl } from "@t3tools/shared/issueUrl";
@@ -81,6 +82,88 @@ import * as IssueTrackerBindings from "../persistence/IssueTrackerBindings.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as IssueTrackerRegistry from "./IssueTrackerRegistry.ts";
+
+export class IssueTargetIncompleteError extends Schema.TaggedError<IssueTargetIncompleteError>()(
+  "IssueTargetIncompleteError",
+  {},
+) {
+  override get message(): string {
+    return "Pass either url, or key (with projectId when not running inside a T3 thread).";
+  }
+}
+
+export class IssueProjectRequiredError extends Schema.TaggedError<IssueProjectRequiredError>()(
+  "IssueProjectRequiredError",
+  {},
+) {
+  override get message(): string {
+    return "Pass projectId: this MCP client is not running inside a T3 thread.";
+  }
+}
+
+export class IssueProjectNotFoundError extends Schema.TaggedError<IssueProjectNotFoundError>()(
+  "IssueProjectNotFoundError",
+  { projectId: Schema.String },
+) {
+  override get message(): string {
+    return `Project ${this.projectId} was not found or has no issue tracker.`;
+  }
+}
+
+export class IssueLinkFailedError extends Schema.TaggedError<IssueLinkFailedError>()(
+  "IssueLinkFailedError",
+  { cause: Schema.Defect() },
+) {
+  override get message(): string {
+    return "Could not change the issue link.";
+  }
+}
+
+export class IssueSourceSelectionError extends Schema.TaggedError<IssueSourceSelectionError>()(
+  "IssueSourceSelectionError",
+  {
+    projectId: ProjectId,
+    tracker: Schema.optional(IssueTrackerKind),
+    sources: Schema.Array(
+      Schema.Struct({
+        connectionId: IssueScopeRef.fields.connectionId,
+        tracker: IssueTrackerKind,
+        host: Schema.String,
+        scope: Schema.String,
+      }),
+    ),
+  },
+) {
+  override get message(): string {
+    return this.tracker === undefined
+      ? "This project has multiple issue sources. Pass tracker and the saved account connectionId from the available sources."
+      : "The selected tracker does not identify one issue source. Choose tracker and the saved account connectionId from the available sources.";
+  }
+}
+
+export interface ResolveIssueTargetInput {
+  readonly projectId?: ProjectId | undefined;
+  readonly tracker?: IssueTrackerKind | undefined;
+  readonly connectionId?: string | undefined;
+  readonly host?: string | undefined;
+  readonly scope?: string | undefined;
+  readonly key?: string | undefined;
+  readonly url?: string | undefined;
+}
+
+export interface ResolvedIssueTarget extends IssueRef {
+  readonly host: string;
+  readonly url: string | null;
+  readonly writable: boolean;
+}
+
+export type IssueTargetResolutionError =
+  | IssueError
+  | IssueTargetIncompleteError
+  | IssueProjectRequiredError
+  | IssueProjectNotFoundError
+  | IssueSourceSelectionError
+  | IssueLinkFailedError;
 
 const DEFAULT_LIST_LIMIT = 50;
 const SCOPE_CONCURRENCY = 4;
@@ -203,6 +286,15 @@ const unsupported = (operation: string, what: string) =>
 export class IssueService extends Context.Service<
   IssueService,
   {
+    readonly resolveSource: (
+      input: Pick<ResolveIssueTargetInput, "projectId" | "tracker" | "connectionId">,
+    ) => Effect.Effect<
+      { readonly project: OrchestrationProjectShell; readonly binding: ProjectTrackerBinding },
+      IssueTargetResolutionError
+    >;
+    readonly resolveTarget: (
+      input: ResolveIssueTargetInput,
+    ) => Effect.Effect<ResolvedIssueTarget, IssueTargetResolutionError>;
     readonly sources: (
       projectId: ProjectId,
     ) => Effect.Effect<ReadonlyArray<ProjectTrackerBinding>, IssueError>;
@@ -1417,7 +1509,74 @@ export const make = Effect.gen(function* () {
       };
     });
 
+  const requireReferenceProject = Effect.fn("IssueService.requireReferenceProject")(function* (
+    projectId: ProjectId | undefined,
+  ) {
+    if (projectId === undefined) return yield* new IssueProjectRequiredError();
+    const project = yield* projects
+      .getShell(projectId)
+      .pipe(Effect.mapError((cause) => new IssueLinkFailedError({ cause })));
+    if (Option.isNone(project)) return yield* new IssueProjectNotFoundError({ projectId });
+    return project.value;
+  });
+
+  const resolveSource: IssueService["Service"]["resolveSource"] = (input) =>
+    Effect.gen(function* () {
+      const project = yield* requireReferenceProject(input.projectId);
+      const available = yield* sources(project.id);
+      if (available.length === 0)
+        return yield* new IssueProjectNotFoundError({ projectId: project.id });
+      const matches =
+        input.tracker === undefined
+          ? available
+          : available.filter((source) => source.tracker === input.tracker);
+      const selected = matches.filter((source) => source.connectionId === input.connectionId);
+      const binding = selected.length === 1 ? selected[0] : undefined;
+      if (binding === undefined)
+        return yield* new IssueSourceSelectionError({
+          projectId: project.id,
+          ...(input.tracker === undefined ? {} : { tracker: input.tracker }),
+          sources: available,
+        });
+      return { project, binding };
+    });
+
+  const resolveTarget: IssueService["Service"]["resolveTarget"] = (input) =>
+    Effect.gen(function* () {
+      if (input.url !== undefined) {
+        const resolved = yield* resolveUrl(input.url, input.projectId, input.connectionId);
+        return { ...resolved, url: input.url };
+      }
+      if (input.key === undefined) return yield* new IssueTargetIncompleteError();
+      if (input.scope !== undefined && input.tracker !== undefined && input.host !== undefined) {
+        const project = yield* requireReferenceProject(input.projectId);
+        return {
+          projectId: project.id,
+          tracker: input.tracker,
+          ...(input.connectionId === undefined ? {} : { connectionId: input.connectionId }),
+          host: input.host,
+          scope: input.scope,
+          key: input.key,
+          url: null,
+          writable: false,
+        };
+      }
+      const { project, binding } = yield* resolveSource(input);
+      return {
+        projectId: project.id,
+        tracker: binding.tracker,
+        ...(binding.connectionId === undefined ? {} : { connectionId: binding.connectionId }),
+        host: input.host ?? binding.host,
+        scope: input.scope ?? binding.scope,
+        key: input.key,
+        url: null,
+        writable: true,
+      };
+    });
+
   return IssueService.of({
+    resolveSource,
+    resolveTarget,
     sources,
     listSources,
     list,

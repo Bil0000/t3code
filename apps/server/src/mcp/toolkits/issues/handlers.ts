@@ -1,13 +1,10 @@
 import {
-  IssueOperationError,
-  threadIssueKeysEqual,
   type IssueDetail,
   type IssueRef,
   type IssueTrackerKind,
   type OrchestrationV2ThreadShell,
   type ProjectId,
   type ThreadId,
-  type ThreadIssueLink,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
@@ -20,24 +17,11 @@ import * as ProjectService from "../../../project/ProjectService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import {
-  IssueLinkFailedError,
-  IssueProjectNotFoundError,
-  IssueProjectRequiredError,
-  IssueSourceSelectionError,
   IssuesToolkit,
-  IssueTargetIncompleteError,
   type IssueTargetInput,
-  IssueThreadNotFoundError,
   IssueThreadRequiredError,
   type ListThreadIssuesResult,
 } from "./tools.ts";
-
-/** A resolved reference, with the host the link stores and whether it may be written. */
-interface ResolvedTarget extends IssueRef {
-  readonly host: string;
-  readonly url: string | null;
-  readonly writable: boolean;
-}
 
 function listThreadIssues(
   thread: Pick<OrchestrationV2ThreadShell, "issues">,
@@ -85,9 +69,9 @@ const make = Effect.gen(function* () {
     const thread = yield* engine
       .getThreadShell(threadId)
       .pipe(Effect.map(Option.fromNullishOr))
-      .pipe(Effect.mapError((cause) => new IssueLinkFailedError({ cause })));
+      .pipe(Effect.mapError((cause) => new IssueService.IssueLinkFailedError({ cause })));
     if (Option.isNone(thread) || thread.value.deletedAt !== null) {
-      return yield* new IssueThreadNotFoundError({ threadId });
+      return yield* new ThreadIssueService.IssueThreadNotFoundError({ threadId });
     }
     return thread.value;
   });
@@ -98,12 +82,12 @@ const make = Effect.gen(function* () {
   ) {
     yield* McpInvocationContext.requireMcpCapability("issues");
     const projectId = requested ?? (yield* callerThread())?.projectId;
-    if (projectId === undefined) return yield* new IssueProjectRequiredError();
+    if (projectId === undefined) return yield* new IssueService.IssueProjectRequiredError();
     const project = yield* projects
       .getShell(projectId)
-      .pipe(Effect.mapError((cause) => new IssueLinkFailedError({ cause })));
+      .pipe(Effect.mapError((cause) => new IssueService.IssueLinkFailedError({ cause })));
     if (Option.isNone(project)) {
-      return yield* new IssueProjectNotFoundError({ projectId });
+      return yield* new IssueService.IssueProjectNotFoundError({ projectId });
     }
     return { project: project.value };
   });
@@ -113,72 +97,23 @@ const make = Effect.gen(function* () {
     requestedTracker: IssueTrackerKind | undefined,
     connectionId: string | undefined,
   ) {
-    const { project } = yield* requireProject(requestedProject);
-    const sources = yield* issues.sources(project.id);
-    if (sources.length === 0)
-      return yield* new IssueProjectNotFoundError({ projectId: project.id });
-    const matches =
-      requestedTracker === undefined
-        ? sources
-        : sources.filter((source) => source.tracker === requestedTracker);
-    const selected = matches.filter((source) => source.connectionId === connectionId);
-    const binding = selected.length === 1 ? selected[0] : undefined;
-    if (binding === undefined)
-      return yield* new IssueSourceSelectionError({
-        projectId: project.id,
-        ...(requestedTracker === undefined ? {} : { tracker: requestedTracker }),
-        sources,
-      });
-    return { project, binding };
+    yield* McpInvocationContext.requireMcpCapability("issues");
+    const projectId = requestedProject ?? (yield* callerThread())?.projectId;
+    return yield* issues.resolveSource({ projectId, tracker: requestedTracker, connectionId });
   });
 
-  /**
-   * Turns whichever shape the agent passed into one reference. A URL resolves through whichever
-   * project here is a checkout of its repository; a key is completed with the named project's
-   * binding, or the caller's thread's project.
-   */
   const resolveTarget = Effect.fn("IssuesToolkit.resolveTarget")(function* (
     input: IssueTargetInput,
   ) {
     yield* McpInvocationContext.requireMcpCapability("issues");
-    if (input.url !== undefined) {
-      const preferred = input.projectId ?? (yield* callerThread())?.projectId;
-      const resolved = yield* issues.resolveUrl(input.url, preferred, input.connectionId);
-      return { ...resolved, url: input.url } satisfies ResolvedTarget;
-    }
-    if (input.key === undefined) return yield* new IssueTargetIncompleteError();
-    if (input.scope !== undefined && input.tracker !== undefined && input.host !== undefined) {
-      const { project } = yield* requireProject(input.projectId);
-      return {
-        projectId: project.id,
-        tracker: input.tracker,
-        ...(input.connectionId === undefined ? {} : { connectionId: input.connectionId }),
-        host: input.host,
-        scope: input.scope,
-        key: input.key,
-        url: null,
-        writable: false,
-      } satisfies ResolvedTarget;
-    }
-    const { project, binding } = yield* requireSource(
-      input.projectId,
-      input.tracker,
-      input.connectionId,
-    );
-    return {
-      projectId: project.id,
-      tracker: binding.tracker,
-      ...(binding.connectionId === undefined ? {} : { connectionId: binding.connectionId }),
-      host: input.host ?? binding.host,
-      scope: input.scope ?? binding.scope,
-      key: input.key,
-      url: null,
-      writable: true,
-    } satisfies ResolvedTarget;
+    const needsProject = input.url !== undefined || input.key !== undefined;
+    const projectId =
+      input.projectId ?? (needsProject ? (yield* callerThread())?.projectId : undefined);
+    return yield* issues.resolveTarget({ ...input, projectId });
   });
 
   const identityOf = (
-    target: Omit<ResolvedTarget, "writable">,
+    target: Omit<IssueService.ResolvedIssueTarget, "writable">,
     detail?: Pick<IssueDetail, "url">,
   ) => ({
     projectId: target.projectId,
@@ -190,7 +125,9 @@ const make = Effect.gen(function* () {
     url: target.url ?? detail?.url ?? "",
   });
 
-  const refOf = (target: ResolvedTarget): IssueRef & { readonly host: string } => ({
+  const refOf = (
+    target: IssueService.ResolvedIssueTarget,
+  ): IssueRef & { readonly host: string } => ({
     projectId: target.projectId,
     tracker: target.tracker,
     ...(target.connectionId === undefined ? {} : { connectionId: target.connectionId }),
@@ -202,7 +139,7 @@ const make = Effect.gen(function* () {
   const linkFailure = <E>(cause: Cause.Cause<E>) =>
     Cause.hasInterruptsOnly(cause)
       ? Effect.failCause(cause as Cause.Cause<never>)
-      : Effect.fail(new IssueLinkFailedError({ cause }));
+      : Effect.fail(new IssueService.IssueLinkFailedError({ cause }));
 
   /** A tool that changes `threadId`, or the caller's own thread when it is omitted. */
   const writesThread = <P extends { readonly threadId?: ThreadId | undefined }, A, E, R>(
@@ -215,7 +152,8 @@ const make = Effect.gen(function* () {
         const scope = yield* McpInvocationContext.requireMcpCapability("issues");
         const projectId = input.projectId ?? (yield* callerThread())?.projectId;
         if (projectId !== undefined) yield* requireProject(projectId);
-        else if (scope.thread !== undefined) return yield* new IssueProjectRequiredError();
+        else if (scope.thread !== undefined)
+          return yield* new IssueService.IssueProjectRequiredError();
         return {
           sources: yield* issues.listSources({
             ...input,
@@ -624,44 +562,11 @@ const make = Effect.gen(function* () {
     ),
     unlink_issue: writesThread((input) =>
       Effect.gen(function* () {
-        const thread = yield* requireThread(input.threadId);
-        const matchesExplicitFields = (link: ThreadIssueLink) =>
-          ((input.url !== undefined && input.projectId === undefined) ||
-            link.projectId === (input.projectId ?? thread.projectId)) &&
-          threadIssueKeysEqual(link, {
-            tracker: input.tracker ?? link.tracker,
-            ...(input.connectionId === undefined ? {} : { connectionId: input.connectionId }),
-            host: input.host ?? link.host,
-            scope: input.scope ?? link.scope,
-            key: input.key ?? link.key,
-          });
-        const matches = (thread.issues ?? []).filter(
-          (link) =>
-            (input.url !== undefined ? link.url === input.url : input.key !== undefined) &&
-            matchesExplicitFields(link),
-        );
-        if (matches.length > 1)
-          return yield* new IssueOperationError({
-            operation: "unlink",
-            detail:
-              "Multiple saved issue links match. Pass projectId, tracker and key, or a unique url from list_thread_issues.",
-          });
-        const target =
-          matches[0] ??
-          (yield* resolveTarget({
-            ...input,
-            projectId: input.projectId ?? thread.projectId,
-          }));
-        const existing =
-          matches[0] ??
-          (thread.issues ?? []).find(
-            (link) => matchesExplicitFields(link) && threadIssueKeysEqual(link, target),
-          );
-        if (existing === undefined) return { ...identityOf(target), wasLinked: false };
-        const { wasLinked } = yield* threadIssues
-          .unlink({ threadId: thread.id, key: existing })
-          .pipe(Effect.catchCause(linkFailure));
-        return { ...identityOf(target), url: existing.url, wasLinked };
+        const scope = yield* McpInvocationContext.requireMcpCapability("issues");
+        const threadId = input.threadId ?? scope.thread?.threadId;
+        if (threadId === undefined) return yield* new IssueThreadRequiredError();
+        const result = yield* threadIssues.unlinkByIdentity({ threadId, identity: input });
+        return { ...identityOf(result), wasLinked: result.wasLinked };
       }),
     ),
     list_thread_issues: McpToolAccess.reads((input) =>

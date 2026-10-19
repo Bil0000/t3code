@@ -105,24 +105,6 @@ const ThreadTargetInput = Schema.Struct({
   ),
 });
 
-export class IssueTargetIncompleteError extends Schema.TaggedError<IssueTargetIncompleteError>()(
-  "IssueTargetIncompleteError",
-  {},
-) {
-  override get message(): string {
-    return "Pass either url, or key (with projectId when not running inside a T3 thread).";
-  }
-}
-
-export class IssueProjectRequiredError extends Schema.TaggedError<IssueProjectRequiredError>()(
-  "IssueProjectRequiredError",
-  {},
-) {
-  override get message(): string {
-    return "Pass projectId: this MCP client is not running inside a T3 thread.";
-  }
-}
-
 export class IssueThreadRequiredError extends Schema.TaggedError<IssueThreadRequiredError>()(
   "IssueThreadRequiredError",
   {},
@@ -132,67 +114,18 @@ export class IssueThreadRequiredError extends Schema.TaggedError<IssueThreadRequ
   }
 }
 
-export class IssueThreadNotFoundError extends Schema.TaggedError<IssueThreadNotFoundError>()(
-  "IssueThreadNotFoundError",
-  { threadId: Schema.String },
-) {
-  override get message(): string {
-    return `Thread ${this.threadId} was not found.`;
-  }
-}
-
-export class IssueProjectNotFoundError extends Schema.TaggedError<IssueProjectNotFoundError>()(
-  "IssueProjectNotFoundError",
-  { projectId: Schema.String },
-) {
-  override get message(): string {
-    return `Project ${this.projectId} was not found or has no issue tracker.`;
-  }
-}
-
-export class IssueLinkFailedError extends Schema.TaggedError<IssueLinkFailedError>()(
-  "IssueLinkFailedError",
-  { cause: Schema.Defect() },
-) {
-  override get message(): string {
-    return "Could not change the issue link.";
-  }
-}
-
-export class IssueSourceSelectionError extends Schema.TaggedError<IssueSourceSelectionError>()(
-  "IssueSourceSelectionError",
-  {
-    projectId: ProjectId,
-    tracker: Schema.optional(IssueTrackerKind),
-    sources: Schema.Array(
-      Schema.Struct({
-        connectionId: IssueScopeRef.fields.connectionId,
-        tracker: IssueTrackerKind,
-        host: Schema.String,
-        scope: Schema.String,
-      }),
-    ),
-  },
-) {
-  override get message(): string {
-    return this.tracker === undefined
-      ? "This project has multiple issue sources. Pass tracker and the saved account connectionId from the available sources."
-      : "The selected tracker does not identify one issue source. Choose tracker and the saved account connectionId from the available sources.";
-  }
-}
-
 export const IssueToolError = Schema.Union([
   OrchestratorMcpFailure,
   McpCapabilityUnavailableError,
   IssueUnavailableError,
   IssueOperationError,
-  IssueTargetIncompleteError,
-  IssueProjectRequiredError,
+  IssueService.IssueTargetIncompleteError,
+  IssueService.IssueProjectRequiredError,
   IssueThreadRequiredError,
-  IssueThreadNotFoundError,
-  IssueProjectNotFoundError,
-  IssueLinkFailedError,
-  IssueSourceSelectionError,
+  ThreadIssueService.IssueThreadNotFoundError,
+  IssueService.IssueProjectNotFoundError,
+  IssueService.IssueLinkFailedError,
+  IssueService.IssueSourceSelectionError,
 ]);
 export type IssueToolError = typeof IssueToolError.Type;
 

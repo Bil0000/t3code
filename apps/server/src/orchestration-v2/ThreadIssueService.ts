@@ -33,6 +33,7 @@ import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
@@ -57,6 +58,15 @@ export interface UnlinkThreadIssueInput {
   readonly key: ThreadIssueKey;
 }
 
+export class IssueThreadNotFoundError extends Schema.TaggedError<IssueThreadNotFoundError>()(
+  "IssueThreadNotFoundError",
+  { threadId: Schema.String },
+) {
+  override get message(): string {
+    return `Thread ${this.threadId} was not found.`;
+  }
+}
+
 export class ThreadIssueService extends Context.Service<
   ThreadIssueService,
   {
@@ -67,6 +77,13 @@ export class ThreadIssueService extends Context.Service<
     readonly unlink: (
       input: UnlinkThreadIssueInput,
     ) => Effect.Effect<{ readonly wasLinked: boolean }, Orchestrator.OrchestratorV2Error>;
+    readonly unlinkByIdentity: (input: {
+      readonly threadId: ThreadId;
+      readonly identity: IssueService.ResolveIssueTargetInput;
+    }) => Effect.Effect<
+      Omit<IssueService.ResolvedIssueTarget, "writable"> & { readonly wasLinked: boolean },
+      IssueService.IssueTargetResolutionError | IssueThreadNotFoundError
+    >;
     /** Re-reads every link's snapshot now; `staleOnly` skips ones read recently. */
     readonly refresh: (
       threadId: ThreadId,
@@ -278,6 +295,58 @@ const make = Effect.gen(function* () {
       return { wasLinked: true };
     });
 
+  const unlinkByIdentity: ThreadIssueService["Service"]["unlinkByIdentity"] = (request) =>
+    Effect.gen(function* () {
+      const thread = yield* orchestrator
+        .getThreadShell(request.threadId)
+        .pipe(Effect.mapError((cause) => new IssueService.IssueLinkFailedError({ cause })));
+      if (thread === null || thread.deletedAt !== null) {
+        return yield* new IssueThreadNotFoundError({ threadId: request.threadId });
+      }
+      const input = request.identity;
+      const matchesExplicitFields = (link: ThreadIssueLink) =>
+        ((input.url !== undefined && input.projectId === undefined) ||
+          link.projectId === (input.projectId ?? thread.projectId)) &&
+        threadIssueKeysEqual(link, {
+          tracker: input.tracker ?? link.tracker,
+          ...(input.connectionId === undefined ? {} : { connectionId: input.connectionId }),
+          host: input.host ?? link.host,
+          scope: input.scope ?? link.scope,
+          key: input.key ?? link.key,
+        });
+      const matches = (thread.issues ?? []).filter(
+        (link) =>
+          (input.url !== undefined ? link.url === input.url : input.key !== undefined) &&
+          matchesExplicitFields(link),
+      );
+      if (matches.length > 1)
+        return yield* new IssueOperationError({
+          operation: "unlink",
+          detail:
+            "Multiple saved issue links match. Pass projectId, tracker and key, or a unique url from list_thread_issues.",
+        });
+      const target =
+        matches[0] ??
+        (yield* issues.resolveTarget({
+          ...input,
+          projectId: input.projectId ?? thread.projectId,
+        }));
+      const existing =
+        matches[0] ??
+        (thread.issues ?? []).find(
+          (link) => matchesExplicitFields(link) && threadIssueKeysEqual(link, target),
+        );
+      if (existing === undefined) return { ...target, wasLinked: false };
+      const result = yield* unlink({ threadId: thread.id, key: existing }).pipe(
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.failCause(cause as Cause.Cause<never>)
+            : Effect.fail(new IssueService.IssueLinkFailedError({ cause })),
+        ),
+      );
+      return { ...target, url: existing.url, wasLinked: result.wasLinked };
+    });
+
   const refresh: ThreadIssueService["Service"]["refresh"] = (threadId, options) =>
     worker.enqueue({ threadId, staleOnly: options?.staleOnly ?? false });
 
@@ -311,7 +380,14 @@ const make = Effect.gen(function* () {
     },
   );
 
-  return ThreadIssueService.of({ link, unlink, refresh, start, drain: worker.drain });
+  return ThreadIssueService.of({
+    link,
+    unlink,
+    unlinkByIdentity,
+    refresh,
+    start,
+    drain: worker.drain,
+  });
 });
 
 export const layer = Layer.effect(ThreadIssueService, make);
