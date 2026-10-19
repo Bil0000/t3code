@@ -600,27 +600,23 @@ it.effect("registers native issue choices and guards reads and typed creation wi
       ],
       nextCursor: "next-comment-page",
     };
+    const project = {
+      id: projectId,
+      title: "Issues",
+      workspaceRoot: "/fixture",
+      defaultModelSelection: null,
+      scripts: [],
+      createdAt: "2026-10-14T00:00:00Z",
+      updatedAt: "2026-10-14T00:00:00Z",
+    };
     const services = Layer.mergeAll(
       Layer.mock(Orchestrator.OrchestratorV2)({}),
       Layer.mock(ThreadIssueService.ThreadIssueService)({}),
       Layer.mock(ProjectService.ProjectService)({
-        getShell: () =>
-          Effect.succeedSome({
-            id: projectId,
-            title: "Issues",
-            workspaceRoot: "/fixture",
-            defaultModelSelection: null,
-            scripts: [],
-            createdAt: "2026-10-14T00:00:00Z",
-            updatedAt: "2026-10-14T00:00:00Z",
-          }),
+        getShell: () => Effect.succeedSome(project),
       }),
       Layer.mock(IssueService.IssueService)({
-        sources: () =>
-          Effect.succeed([
-            { tracker: IssueTrackerKind.make("github"), host: "github.com", scope: "owner/repo" },
-            binding,
-          ]),
+        resolveSource: () => Effect.succeed({ project, binding }),
         candidates: () =>
           Ref.update(candidateReads, (count) => count + 1).pipe(Effect.as(candidates)),
         comments: (input) =>
