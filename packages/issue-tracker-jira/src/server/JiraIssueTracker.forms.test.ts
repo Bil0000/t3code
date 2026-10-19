@@ -108,7 +108,15 @@ function fixture(
         !input.path.endsWith("/comment/c1") &&
         input.path !== "/search/jql";
       return Schema.decodeEffect(input.schema)(empty ? undefined : raw).pipe(
-        Effect.mapError(() => JiraApi.failed(input.operation, "Invalid fixture response.")),
+        Effect.mapError(
+          () =>
+            new IssueTrackerError({
+              tracker: JiraApi.KIND,
+              operation: input.operation,
+              reason: "failed",
+              detail: "Invalid fixture response.",
+            }),
+        ),
       );
     },
     probeCredential: () => Effect.die("unused"),
@@ -732,7 +740,12 @@ it.effect.each(["[]", "null", '{"type":"doc","version":2,"content":[]}'])(
 it.effect("reports remote link permission errors and refuses oversized results", () =>
   Effect.gen(function* () {
     for (const reply of [
-      JiraApi.failed("getIssue", "Jira returned HTTP 403."),
+      new IssueTrackerError({
+        tracker: JiraApi.KIND,
+        operation: "getIssue",
+        reason: "failed",
+        detail: "Jira returned HTTP 403.",
+      }),
       Array.from({ length: 101 }, () => ({
         object: { title: "Link", url: "https://example.test" },
       })),
@@ -840,7 +853,14 @@ it.effect(
     Effect.gen(function* () {
       const richBody = { format: "adf" as const, document: JSON.stringify(document) };
       const denied = fixture((_path, method) =>
-        method === "PUT" ? JiraApi.failed("update", "Jira returned HTTP 403.") : undefined,
+        method === "PUT"
+          ? new IssueTrackerError({
+              tracker: JiraApi.KIND,
+              operation: "update",
+              reason: "failed",
+              detail: "Jira returned HTTP 403.",
+            })
+          : undefined,
       );
       const api = yield* denied.api;
       expect(

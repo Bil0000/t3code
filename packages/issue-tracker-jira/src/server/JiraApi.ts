@@ -84,16 +84,16 @@ function parseJiraCredential(value: string) {
   };
 }
 
-export const failed = (
-  operation: string,
-  detail: string,
-  reason: IssueTrackerError["reason"] = "failed",
-) => new IssueTrackerError({ tracker: KIND, operation, reason, detail });
-
 export const attempt = <A>(operation: string, run: () => A) =>
   Effect.try({
     try: run,
-    catch: () => failed(operation, "Jira returned invalid or unsupported data."),
+    catch: () =>
+      new IssueTrackerError({
+        tracker: KIND,
+        operation,
+        reason: "failed",
+        detail: "Jira returned invalid or unsupported data.",
+      }),
   });
 export const isHttpStatus = (error: IssueTrackerError, status: number) =>
   typeof error.cause === "object" &&
@@ -156,52 +156,62 @@ export const make = Effect.gen(function* () {
     return Effect.gen(function* () {
       const stored =
         input.credential === undefined
-          ? yield* host.credentials
-              .get(KIND)
-              .pipe(
-                Effect.flatMap(
-                  Effect.fromOption(() =>
-                    failed(
-                      input.operation,
-                      "Jira is not connected on this server.",
-                      "unauthenticated",
-                    ),
-                  ),
+          ? yield* host.credentials.get(KIND).pipe(
+              Effect.flatMap(
+                Effect.fromOption(
+                  () =>
+                    new IssueTrackerError({
+                      tracker: KIND,
+                      operation: input.operation,
+                      reason: "unauthenticated",
+                      detail: "Jira is not connected on this server.",
+                    }),
                 ),
-              )
+              ),
+            )
           : input.credential;
       const credential = yield* Effect.try({
         try: () => parseJiraCredential(stored),
         catch: () =>
-          failed(
-            input.operation,
-            "Enter a Jira Cloud site, account email and a standard site API token.",
-            "unauthenticated",
-          ),
+          new IssueTrackerError({
+            tracker: KIND,
+            operation: input.operation,
+            reason: "unauthenticated",
+            detail: "Enter a Jira Cloud site, account email and a standard site API token.",
+          }),
       });
       const requestedHost = yield* Effect.try({
         try: () =>
           credential.deployment === "cloud"
             ? normalizeJiraHost(input.host)
             : normalizeJiraInstanceHost(input.host),
-        catch: () => failed(input.operation, "This is not a Jira Cloud tenant host."),
+        catch: () =>
+          new IssueTrackerError({
+            tracker: KIND,
+            operation: input.operation,
+            reason: "failed",
+            detail: "This is not a Jira Cloud tenant host.",
+          }),
       });
       if (requestedHost !== credential.host)
-        return yield* failed(
-          input.operation,
-          "This Jira credential belongs to another site.",
-          "unauthenticated",
-        );
+        return yield* new IssueTrackerError({
+          tracker: KIND,
+          operation: input.operation,
+          reason: "unauthenticated",
+          detail: "This Jira credential belongs to another site.",
+        });
       if (
         credential.deployment === "data-center" &&
         input.operation === "setParent" &&
         input.method !== "GET" &&
         !(input.method === "POST" && /^\/agile\/1\.0\/epic\/[^/]+\/issue$/u.test(input.path))
       )
-        return yield* failed(
-          input.operation,
-          "Use Jira Software's epic operation to change this Data Center parent.",
-        );
+        return yield* new IssueTrackerError({
+          tracker: KIND,
+          operation: input.operation,
+          reason: "failed",
+          detail: "Use Jira Software's epic operation to change this Data Center parent.",
+        });
       let native =
         credential.deployment === "data-center"
           ? yield* attempt(input.operation, () => dataCenterRequest(input))
@@ -220,7 +230,12 @@ export const make = Effect.gen(function* () {
           schema: Schema.Struct({ accountId: Text, name: Text }),
         });
         if (user.accountId !== selected)
-          return yield* failed(input.operation, "Jira returned another user for this account key.");
+          return yield* new IssueTrackerError({
+            tracker: KIND,
+            operation: input.operation,
+            reason: "failed",
+            detail: "Jira returned another user for this account key.",
+          });
         native = yield* attempt(input.operation, () =>
           dataCenterRequest({ ...input, assigneeName: user.name }),
         );
@@ -229,8 +244,14 @@ export const make = Effect.gen(function* () {
         .digest("SHA-256", new TextEncoder().encode(credential.token))
         .pipe(
           Effect.map(Hex.encode),
-          Effect.mapError(() =>
-            failed(input.operation, "The Jira credential scope could not be read."),
+          Effect.mapError(
+            () =>
+              new IssueTrackerError({
+                tracker: KIND,
+                operation: input.operation,
+                reason: "failed",
+                detail: "The Jira credential scope could not be read.",
+              }),
           ),
         );
       return yield* Effect.gen(function* () {
@@ -260,7 +281,17 @@ export const make = Effect.gen(function* () {
         const body = native === undefined ? input.body : native.body;
         const response = yield* http
           .execute(body === undefined ? base : base.pipe(HttpClientRequest.bodyJsonUnsafe(body)))
-          .pipe(Effect.mapError(() => failed(input.operation, "Jira could not be reached.")));
+          .pipe(
+            Effect.mapError(
+              () =>
+                new IssueTrackerError({
+                  tracker: KIND,
+                  operation: input.operation,
+                  reason: "failed",
+                  detail: "Jira could not be reached.",
+                }),
+            ),
+          );
         const now = yield* Clock.currentTimeMillis;
         const retryAt =
           retryAtFromHeader(response.headers["retry-after"], now) ??
@@ -291,8 +322,14 @@ export const make = Effect.gen(function* () {
         if (response.status === 429) yield* limits.recordRateLimit({ ...key, lease, retryAt });
         if (response.status === 204) {
           const result = yield* decodeEmpty(undefined).pipe(
-            Effect.mapError(() =>
-              failed(input.operation, "Jira returned an unexpected empty response."),
+            Effect.mapError(
+              () =>
+                new IssueTrackerError({
+                  tracker: KIND,
+                  operation: input.operation,
+                  reason: "failed",
+                  detail: "Jira returned an unexpected empty response.",
+                }),
             ),
           );
           yield* limits.recordSuccess({ ...key, lease });
@@ -303,44 +340,84 @@ export const make = Effect.gen(function* () {
           maxBytes: 2 * 1024 * 1024,
         }).pipe(
           Effect.mapError(
-            () => nativeError ?? failed(input.operation, "The Jira response could not be read."),
+            () =>
+              nativeError ??
+              new IssueTrackerError({
+                tracker: KIND,
+                operation: input.operation,
+                reason: "failed",
+                detail: "The Jira response could not be read.",
+              }),
           ),
         );
         if (nativeError) return yield* nativeError;
         if (collected.truncated || collected.invalidUtf8)
-          return yield* failed(input.operation, "Jira returned an oversized or invalid response.");
+          return yield* new IssueTrackerError({
+            tracker: KIND,
+            operation: input.operation,
+            reason: "failed",
+            detail: "Jira returned an oversized or invalid response.",
+          });
         const result = yield* (
           credential.deployment === "cloud"
             ? decodeJson(collected.text)
             : attempt(input.operation, () =>
                 dataCenterResponse(input.path, input.body, JSON.parse(collected.text)),
               ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(input.schema)))
-        ).pipe(Effect.mapError(() => failed(input.operation, "Jira returned unexpected data.")));
+        ).pipe(
+          Effect.mapError(
+            () =>
+              new IssueTrackerError({
+                tracker: KIND,
+                operation: input.operation,
+                reason: "failed",
+                detail: "Jira returned unexpected data.",
+              }),
+          ),
+        );
         yield* limits.recordSuccess({ ...key, lease });
         return result;
       }).pipe(Effect.provideService(SourceControlRateLimit.CredentialScope, fingerprint));
     }).pipe(
       Effect.timeoutOrElse({
         duration: "30 seconds",
-        orElse: () => Effect.fail(failed(input.operation, "Jira request timed out.")),
+        orElse: () =>
+          Effect.fail(
+            new IssueTrackerError({
+              tracker: KIND,
+              operation: input.operation,
+              reason: "failed",
+              detail: "Jira request timed out.",
+            }),
+          ),
       }),
     );
   };
 
   const deploymentFor = (requestedHost: string) =>
     Effect.gen(function* () {
-      const packed = yield* host.credentials
-        .get(KIND)
-        .pipe(
-          Effect.flatMap(
-            Effect.fromOption(() =>
-              failed("deploymentFor", "Jira is not connected on this server.", "unauthenticated"),
-            ),
+      const packed = yield* host.credentials.get(KIND).pipe(
+        Effect.flatMap(
+          Effect.fromOption(
+            () =>
+              new IssueTrackerError({
+                tracker: KIND,
+                operation: "deploymentFor",
+                reason: "unauthenticated",
+                detail: "Jira is not connected on this server.",
+              }),
           ),
-        );
+        ),
+      );
       const credential = yield* Effect.try({
         try: () => parseJiraCredential(packed),
-        catch: () => failed("deploymentFor", "The Jira credential is invalid.", "unauthenticated"),
+        catch: () =>
+          new IssueTrackerError({
+            tracker: KIND,
+            operation: "deploymentFor",
+            reason: "unauthenticated",
+            detail: "The Jira credential is invalid.",
+          }),
       });
       const normalized = yield* Effect.try({
         try: () =>
@@ -348,18 +425,20 @@ export const make = Effect.gen(function* () {
             ? normalizeJiraHost(requestedHost)
             : normalizeJiraInstanceHost(requestedHost),
         catch: () =>
-          failed(
-            "deploymentFor",
-            "This Jira credential belongs to another site.",
-            "unauthenticated",
-          ),
+          new IssueTrackerError({
+            tracker: KIND,
+            operation: "deploymentFor",
+            reason: "unauthenticated",
+            detail: "This Jira credential belongs to another site.",
+          }),
       });
       if (normalized !== credential.host)
-        return yield* failed(
-          "deploymentFor",
-          "This Jira credential belongs to another site.",
-          "unauthenticated",
-        );
+        return yield* new IssueTrackerError({
+          tracker: KIND,
+          operation: "deploymentFor",
+          reason: "unauthenticated",
+          detail: "This Jira credential belongs to another site.",
+        });
       return credential.deployment;
     });
 
@@ -376,15 +455,21 @@ export const make = Effect.gen(function* () {
         cursor.length > 4096 ||
         !Number.isSafeInteger(startAt)
       )
-        return yield* failed(operation, "Invalid Jira scope page.");
+        return yield* new IssueTrackerError({
+          tracker: KIND,
+          operation,
+          reason: "failed",
+          detail: "Invalid Jira scope page.",
+        });
       const credential = yield* Effect.try({
         try: () => parseJiraCredential(packed),
         catch: () =>
-          failed(
+          new IssueTrackerError({
+            tracker: KIND,
             operation,
-            "Enter a Jira Cloud site, account email and a standard site API token.",
-            "unauthenticated",
-          ),
+            reason: "unauthenticated",
+            detail: "Enter a Jira Cloud site, account email and a standard site API token.",
+          }),
       });
       const projects = yield* request({
         host: credential.host,
@@ -402,7 +487,12 @@ export const make = Effect.gen(function* () {
         !Number.isSafeInteger(next) ||
         (projects.values.length === 0 && next < projects.total)
       )
-        return yield* failed(operation, "Jira returned an inconsistent project page.");
+        return yield* new IssueTrackerError({
+          tracker: KIND,
+          operation,
+          reason: "failed",
+          detail: "Jira returned an inconsistent project page.",
+        });
       return {
         items: projects.values.map((project) => ({ key: project.key, name: project.name })),
         nextCursor: next < projects.total ? String(next) : null,
@@ -414,11 +504,12 @@ export const make = Effect.gen(function* () {
       const credential = yield* Effect.try({
         try: () => parseJiraCredential(packed),
         catch: () =>
-          failed(
-            "probeCredential",
-            "Enter a Jira Cloud site, account email and a standard site API token.",
-            "unauthenticated",
-          ),
+          new IssueTrackerError({
+            tracker: KIND,
+            operation: "probeCredential",
+            reason: "unauthenticated",
+            detail: "Enter a Jira Cloud site, account email and a standard site API token.",
+          }),
       });
       const viewer = yield* request({
         host: credential.host,
@@ -443,11 +534,12 @@ export const make = Effect.gen(function* () {
       const credential = yield* Effect.try({
         try: () => parseJiraCredential(packed),
         catch: () =>
-          failed(
-            "getScope",
-            "Enter a Jira Cloud site, account email and a standard site API token.",
-            "unauthenticated",
-          ),
+          new IssueTrackerError({
+            tracker: KIND,
+            operation: "getScope",
+            reason: "unauthenticated",
+            detail: "Enter a Jira Cloud site, account email and a standard site API token.",
+          }),
       });
       const project = yield* request({
         host: credential.host,

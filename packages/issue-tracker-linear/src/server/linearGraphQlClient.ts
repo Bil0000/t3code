@@ -46,21 +46,6 @@ export class LinearGraphQlAuth extends GraphQLMiddleware.Service<
   }
 >()("@t3tools/issue-tracker-linear/server/linearGraphQlClient/LinearGraphQlAuth") {}
 
-const fail = (
-  operation: string,
-  reason: IssueTrackerError["reason"],
-  detail: string,
-  extra: { readonly retryAt?: number; readonly cause?: unknown } = {},
-) =>
-  new IssueTrackerError({
-    tracker: KIND,
-    operation,
-    reason,
-    detail,
-    ...(extra.retryAt === undefined ? {} : { retryAt: extra.retryAt }),
-    ...(extra.cause === undefined ? {} : { cause: extra.cause }),
-  });
-
 const isRateLimited = (errors: ReadonlyArray<GraphQLClientError.GraphQLError> | undefined) =>
   errors?.some((error) => error.extensions?.code === "RATELIMITED") === true;
 
@@ -107,15 +92,19 @@ export const make = Effect.gen(function* () {
       .pipe(Effect.provideService(RateLimit.CredentialScope, scopeFor(identity, endpoint)));
 
   const storedToken = (operation: string) =>
-    host.credentials
-      .get(KIND)
-      .pipe(
-        Effect.flatMap(
-          Effect.fromOption(() =>
-            fail(operation, "unauthenticated", "Linear is not connected on this server."),
-          ),
+    host.credentials.get(KIND).pipe(
+      Effect.flatMap(
+        Effect.fromOption(
+          () =>
+            new IssueTrackerError({
+              tracker: KIND,
+              operation,
+              reason: "unauthenticated",
+              detail: "Linear is not connected on this server.",
+            }),
         ),
-      );
+      ),
+    );
 
   const call = <A>(
     operation: string,
@@ -137,7 +126,11 @@ export const make = Effect.gen(function* () {
         result._tag === "Failure" ? [result.failure.retryAt] : [],
       );
       if (paused.length > 0)
-        return yield* fail(operation, "rate-limited", "Linear's rate limit was reached.", {
+        return yield* new IssueTrackerError({
+          tracker: KIND,
+          operation,
+          reason: "rate-limited",
+          detail: "Linear's rate limit was reached.",
           retryAt: Math.max(...paused),
         });
       const leases = new Map(
@@ -171,7 +164,12 @@ export const make = Effect.gen(function* () {
       );
       const response = observation.response;
       if (response === undefined)
-        return yield* fail(operation, "failed", "Linear could not be reached.");
+        return yield* new IssueTrackerError({
+          tracker: KIND,
+          operation,
+          reason: "failed",
+          detail: "Linear could not be reached.",
+        });
       const now = yield* Clock.currentTimeMillis;
       const exhausted = ["requests", "complexity", "endpoint-requests"].filter((window) => {
         const remaining = response.headers[`x-ratelimit-${window}-remaining`]?.trim();
@@ -209,36 +207,53 @@ export const make = Effect.gen(function* () {
       const rateLimited = (cause?: string) =>
         Effect.gen(function* () {
           yield* recordLimits(true);
-          return yield* fail(operation, "rate-limited", "Linear's rate limit was reached.", {
+          return yield* new IssueTrackerError({
+            tracker: KIND,
+            operation,
+            reason: "rate-limited",
+            detail: "Linear's rate limit was reached.",
             ...(retryAt === undefined ? {} : { retryAt }),
             ...(cause === undefined ? {} : { cause }),
           });
         });
       if (response.status === 429) return yield* rateLimited();
       if (response.status === 401 || response.status === 403) {
-        return yield* fail(operation, "unauthenticated", "Linear rejected the API key.");
+        return yield* new IssueTrackerError({
+          tracker: KIND,
+          operation,
+          reason: "unauthenticated",
+          detail: "Linear rejected the API key.",
+        });
       }
       if (observation.failure !== undefined)
-        return yield* fail(
+        return yield* new IssueTrackerError({
+          tracker: KIND,
           operation,
-          "failed",
-          observation.failure === "read"
-            ? "Linear response could not be read."
-            : "Linear returned an oversized or invalid response.",
-        );
+          reason: "failed",
+          detail:
+            observation.failure === "read"
+              ? "Linear response could not be read."
+              : "Linear returned an oversized or invalid response.",
+        });
       const envelope = observation.answer;
       if (envelope === undefined) {
         yield* recordLimits();
-        return yield* fail(
+        return yield* new IssueTrackerError({
+          tracker: KIND,
           operation,
-          "failed",
-          `Linear returned HTTP ${response.status} with an unexpected body.`,
-        );
+          reason: "failed",
+          detail: `Linear returned HTTP ${response.status} with an unexpected body.`,
+        });
       }
       if (isRateLimited(envelope.errors)) return yield* rateLimited(observation.text);
       if (isUnauthenticated(envelope.errors)) {
-        return yield* fail(operation, "unauthenticated", "Linear rejected the API key.", {
-          cause: observation.text,
+        const cause = observation.text;
+        return yield* new IssueTrackerError({
+          tracker: KIND,
+          operation,
+          reason: "unauthenticated",
+          detail: "Linear rejected the API key.",
+          ...(cause === undefined ? {} : { cause }),
         });
       }
       if (
@@ -255,18 +270,25 @@ export const make = Effect.gen(function* () {
           envelope.data == null &&
           envelope.errors?.length === 1 &&
           /^Entity not found: Issue(?:$| - )/.test(envelope.errors[0]?.message ?? "");
-        return yield* fail(
+        const cause = observation.text;
+        return yield* new IssueTrackerError({
+          tracker: KIND,
           operation,
-          missingIssue ? "not-found" : "failed",
-          missingIssue
+          reason: missingIssue ? "not-found" : "failed",
+          detail: missingIssue
             ? "Linear has no issue by that identifier, or this account cannot see it."
             : errorDetail(envelope.errors, `Linear returned HTTP ${response.status}.`),
-          { cause: observation.text },
-        );
+          ...(cause === undefined ? {} : { cause }),
+        });
       }
       if (result._tag === "Failure") {
         yield* recordLimits();
-        return yield* fail(operation, "failed", "Linear returned an unexpected response.");
+        return yield* new IssueTrackerError({
+          tracker: KIND,
+          operation,
+          reason: "failed",
+          detail: "Linear returned an unexpected response.",
+        });
       }
       const decoded = result.success;
       const viewer = decodeViewerId(decoded);
@@ -281,8 +303,15 @@ export const make = Effect.gen(function* () {
         }
         for (const scope of scopes)
           yield* checkLimit(viewer.value.viewer.id, scope).pipe(
-            Effect.mapError((error) =>
-              fail(operation, "rate-limited", error.detail, { retryAt: error.retryAt }),
+            Effect.mapError(
+              ({ detail, retryAt }) =>
+                new IssueTrackerError({
+                  tracker: KIND,
+                  operation,
+                  reason: "rate-limited",
+                  detail,
+                  ...(retryAt === undefined ? {} : { retryAt }),
+                }),
             ),
           );
       }
@@ -302,7 +331,15 @@ export const make = Effect.gen(function* () {
     }).pipe(
       Effect.timeoutOrElse({
         duration: "30 seconds",
-        orElse: () => Effect.fail(fail(operation, "failed", "Linear request timed out.")),
+        orElse: () =>
+          Effect.fail(
+            new IssueTrackerError({
+              tracker: KIND,
+              operation,
+              reason: "failed",
+              detail: "Linear request timed out.",
+            }),
+          ),
       }),
     );
 

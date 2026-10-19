@@ -8,10 +8,11 @@ import type {
   IssueViewerPermissions,
   StandaloneIssueTrackerDescriptor,
 } from "@t3tools/contracts";
-import type {
-  IssueTarget,
-  IssueScopeTarget,
-  StandaloneIssueTrackerApi,
+import {
+  IssueTrackerError,
+  type IssueTarget,
+  type IssueScopeTarget,
+  type StandaloneIssueTrackerApi,
 } from "@t3tools/issue-tracker-core/server/IssueTracker";
 
 import * as JiraApi from "./JiraApi.ts";
@@ -289,10 +290,12 @@ const formAttempt = <A>(operation: string, run: () => A) =>
   Effect.try({
     try: run,
     catch: () =>
-      JiraApi.failed(
+      new IssueTrackerError({
+        tracker: JiraApi.KIND,
         operation,
-        "Check extra required fields and allowed values in this Jira form.",
-      ),
+        reason: "failed",
+        detail: "Check extra required fields and allowed values in this Jira form.",
+      }),
   });
 
 export const make = Effect.gen(function* () {
@@ -317,11 +320,12 @@ export const make = Effect.gen(function* () {
         !issue.fields.project ||
         (issue.fields.project.key !== input.scope && issue.fields.project.id !== input.scope)
       )
-        return yield* JiraApi.failed(
-          "getIssue",
-          "This issue is outside the selected Jira project.",
-          "not-found",
-        );
+        return yield* new IssueTrackerError({
+          tracker: JiraApi.KIND,
+          operation: "getIssue",
+          reason: "not-found",
+          detail: "This issue is outside the selected Jira project.",
+        });
       return issue;
     });
   const requireScopeIssue = (
@@ -344,11 +348,12 @@ export const make = Effect.gen(function* () {
         schema: ScopeIssue,
       });
       if (issue.fields.project.key !== input.scope && issue.fields.project.id !== input.scope)
-        return yield* JiraApi.failed(
+        return yield* new IssueTrackerError({
+          tracker: JiraApi.KIND,
           operation,
-          "This issue is outside the selected Jira project.",
-          "not-found",
-        );
+          reason: "not-found",
+          detail: "This issue is outside the selected Jira project.",
+        });
       return issue;
     });
   const dataCenterParentContext = (input: IssueTarget, selected: typeof JiraIssue.Type) =>
@@ -371,7 +376,12 @@ export const make = Effect.gen(function* () {
         current.fields.project?.id !== selected.fields.project?.id ||
         current.fields.issuetype?.subtask !== false
       )
-        return yield* JiraApi.failed("getHierarchy", "Jira returned inconsistent epic membership.");
+        return yield* new IssueTrackerError({
+          tracker: JiraApi.KIND,
+          operation: "getHierarchy",
+          reason: "failed",
+          detail: "Jira returned inconsistent epic membership.",
+        });
       const ownEpic = yield* jira
         .request({
           host: input.host,
@@ -387,7 +397,12 @@ export const make = Effect.gen(function* () {
           ),
         );
       if (ownEpic !== null && ownEpic.key !== selected.key)
-        return yield* JiraApi.failed("getHierarchy", "Jira returned a different epic.");
+        return yield* new IssueTrackerError({
+          tracker: JiraApi.KIND,
+          operation: "getHierarchy",
+          reason: "failed",
+          detail: "Jira returned a different epic.",
+        });
       return { current, ownEpic };
     }).pipe(
       Effect.catchIf(
@@ -524,7 +539,12 @@ export const make = Effect.gen(function* () {
                 : Date.parse(row.created) < Date.parse(page.comments[index - 1]!.created))),
         )
       )
-        return yield* JiraApi.failed("getComments", "Jira returned an inconsistent comment page.");
+        return yield* new IssueTrackerError({
+          tracker: JiraApi.KIND,
+          operation: "getComments",
+          reason: "failed",
+          detail: "Jira returned an inconsistent comment page.",
+        });
       return yield* commentResult(input, page, granted, deployment, order);
     });
   const history = (
@@ -561,7 +581,12 @@ export const make = Effect.gen(function* () {
           (metadata.isLast !== undefined &&
             metadata.isLast !== (metadata.values.length === metadata.total))
         )
-          return yield* JiraApi.failed(operation, "Jira returned inconsistent history metadata.");
+          return yield* new IssueTrackerError({
+            tracker: JiraApi.KIND,
+            operation,
+            reason: "failed",
+            detail: "Jira returned inconsistent history metadata.",
+          });
       }
       if (
         metadata?.total !== undefined &&
@@ -569,7 +594,12 @@ export const make = Effect.gen(function* () {
           (metadata.startAt ?? 0) > metadata.total ||
           metadata.values.length > metadata.total - (metadata.startAt ?? 0))
       )
-        return yield* JiraApi.failed(operation, "Jira returned inconsistent history metadata.");
+        return yield* new IssueTrackerError({
+          tracker: JiraApi.KIND,
+          operation,
+          reason: "failed",
+          detail: "Jira returned inconsistent history metadata.",
+        });
       const total = previous?.total ?? metadata?.total;
       const end = previous?.position ?? total;
       const startAt = order === "desc" ? Math.max(0, end! - limit) : (previous?.position ?? 0);
@@ -609,7 +639,12 @@ export const make = Effect.gen(function* () {
         new Set(page.values.map((row) => row.id)).size !== page.values.length ||
         page.values.some((row) => row.id === previous?.boundary)
       )
-        return yield* JiraApi.failed(operation, "Jira returned an inconsistent history page.");
+        return yield* new IssueTrackerError({
+          tracker: JiraApi.KIND,
+          operation,
+          reason: "failed",
+          detail: "Jira returned an inconsistent history page.",
+        });
       const bound = total ?? actualTotal;
       const position = order === "desc" ? startAt : startAt + page.values.length;
       const values = order === "desc" ? page.values.toReversed() : page.values;
@@ -647,7 +682,12 @@ export const make = Effect.gen(function* () {
         types.push(...page.issueTypes);
       } while (more);
       if (new Set(types.map((type) => type.id)).size !== types.length)
-        return yield* JiraApi.failed("issueTypes", "Jira returned duplicate issue types.");
+        return yield* new IssueTrackerError({
+          tracker: JiraApi.KIND,
+          operation: "issueTypes",
+          reason: "failed",
+          detail: "Jira returned duplicate issue types.",
+        });
       return types;
     });
   const createFields = (input: IssueScopeTarget, issueType: string, operation: string) =>
@@ -698,7 +738,14 @@ export const make = Effect.gen(function* () {
       limit < 1 ||
       limit > 200 ||
       (input.cursor !== undefined && (!input.cursor || input.cursor.length > 4096))
-      ? Effect.fail(JiraApi.failed(operation, "Invalid Jira page."))
+      ? Effect.fail(
+          new IssueTrackerError({
+            tracker: JiraApi.KIND,
+            operation,
+            reason: "failed",
+            detail: "Invalid Jira page.",
+          }),
+        )
       : Effect.succeed(limit);
   };
   const relation = (issue: typeof JiraIssue.Type, host: string, scope: string): IssueRelation => ({
@@ -732,17 +779,33 @@ export const make = Effect.gen(function* () {
     listIssues: (input) =>
       Effect.gen(function* () {
         if (input.scope.trim() === "")
-          return yield* JiraApi.failed("listIssues", "Choose a Jira project.");
+          return yield* new IssueTrackerError({
+            tracker: JiraApi.KIND,
+            operation: "listIssues",
+            reason: "failed",
+            detail: "Choose a Jira project.",
+          });
         if (
           !Number.isInteger(input.limit) ||
           input.limit < 1 ||
           input.limit > 200 ||
           (input.cursor !== undefined && (!input.cursor || input.cursor.length > 4096))
         )
-          return yield* JiraApi.failed("listIssues", "Invalid Jira issue page.");
+          return yield* new IssueTrackerError({
+            tracker: JiraApi.KIND,
+            operation: "listIssues",
+            reason: "failed",
+            detail: "Invalid Jira issue page.",
+          });
         const jql = yield* Effect.try({
           try: () => buildJql(input),
-          catch: () => JiraApi.failed("listIssues", "Jira does not support mention filtering."),
+          catch: () =>
+            new IssueTrackerError({
+              tracker: JiraApi.KIND,
+              operation: "listIssues",
+              reason: "failed",
+              detail: "Jira does not support mention filtering.",
+            }),
         });
         if (jql === null) return { items: [], nextCursor: null };
         const page = yield* jira.request({
@@ -768,7 +831,12 @@ export const make = Effect.gen(function* () {
               (issue.fields.project.key !== input.scope && issue.fields.project.id !== input.scope),
           )
         )
-          return yield* JiraApi.failed("listIssues", "Jira returned an inconsistent issue page.");
+          return yield* new IssueTrackerError({
+            tracker: JiraApi.KIND,
+            operation: "listIssues",
+            reason: "failed",
+            detail: "Jira returned an inconsistent issue page.",
+          });
         return {
           items: yield* JiraApi.attempt("listIssues", () =>
             page.issues.map((issue) => normalizeJiraIssue(issue, input.host)),
@@ -874,7 +942,12 @@ export const make = Effect.gen(function* () {
     create: (input) =>
       Effect.gen(function* () {
         if (input.assignees.length > 1)
-          return yield* JiraApi.failed("create", "A Jira issue can have only one assignee.");
+          return yield* new IssueTrackerError({
+            tracker: JiraApi.KIND,
+            operation: "create",
+            reason: "failed",
+            detail: "A Jira issue can have only one assignee.",
+          });
         const parent =
           input.parentKey === undefined
             ? null
@@ -888,22 +961,39 @@ export const make = Effect.gen(function* () {
               ? availableTypes[0]
               : undefined
             : types.find((type) => type.id === input.issueType);
-        if (!selected) return yield* JiraApi.failed("create", "Select a Jira issue type first.");
+        if (!selected)
+          return yield* new IssueTrackerError({
+            tracker: JiraApi.KIND,
+            operation: "create",
+            reason: "failed",
+            detail: "Select a Jira issue type first.",
+          });
         if (selected.subtask === true && parent === null)
-          return yield* JiraApi.failed("create", "Select a parent issue for this Jira subtask.");
+          return yield* new IssueTrackerError({
+            tracker: JiraApi.KIND,
+            operation: "create",
+            reason: "failed",
+            detail: "Select a parent issue for this Jira subtask.",
+          });
         if (
           selected.subtask === true &&
           parent !== null &&
           parent.fields.project?.key !== input.scope &&
           parent.fields.project?.id !== input.scope
         )
-          return yield* JiraApi.failed(
-            "getIssue",
-            "This issue is outside the selected Jira project.",
-            "not-found",
-          );
+          return yield* new IssueTrackerError({
+            tracker: JiraApi.KIND,
+            operation: "getIssue",
+            reason: "not-found",
+            detail: "This issue is outside the selected Jira project.",
+          });
         if (input.templateKey !== undefined)
-          return yield* JiraApi.failed("create", "Jira issue templates are not supported.");
+          return yield* new IssueTrackerError({
+            tracker: JiraApi.KIND,
+            operation: "create",
+            reason: "failed",
+            detail: "Jira issue templates are not supported.",
+          });
         const metadata = yield* createFields(input, selected.id, "create");
         const cloud = (yield* jira.deploymentFor(input.host)) === "cloud";
         const nativeFields = yield* formAttempt("create", () =>
@@ -934,10 +1024,13 @@ export const make = Effect.gen(function* () {
           (input.labels.length > 0 && !fields.has("labels")) ||
           (input.assignees.length > 0 && !fields.has("assignee"))
         )
-          return yield* JiraApi.failed(
-            "create",
-            "This Jira issue type does not allow the selected description, labels or assignee on creation.",
-          );
+          return yield* new IssueTrackerError({
+            tracker: JiraApi.KIND,
+            operation: "create",
+            reason: "failed",
+            detail:
+              "This Jira issue type does not allow the selected description, labels or assignee on creation.",
+          });
         const body = yield* JiraApi.attempt("create", () =>
           cloud ? textToAdf(input.body) : input.body,
         );
@@ -1011,10 +1104,13 @@ export const make = Effect.gen(function* () {
           input.richBody === undefined &&
           (!cloud || !(yield* JiraApi.attempt("editComment", () => jiraBodyEditable(comment.body))))
         )
-          return yield* JiraApi.failed(
-            "editComment",
-            "This comment has rich content. Edit it in Jira to preserve its formatting and attachments.",
-          );
+          return yield* new IssueTrackerError({
+            tracker: JiraApi.KIND,
+            operation: "editComment",
+            reason: "failed",
+            detail:
+              "This comment has rich content. Edit it in Jira to preserve its formatting and attachments.",
+          });
         const body =
           input.richBody === undefined
             ? yield* JiraApi.attempt("editComment", () =>
@@ -1084,10 +1180,12 @@ export const make = Effect.gen(function* () {
           ) ||
           (parent !== null && parent.fields.project === undefined)
         )
-          return yield* JiraApi.failed(
-            "getHierarchy",
-            "Jira returned an inconsistent child issue page.",
-          );
+          return yield* new IssueTrackerError({
+            tracker: JiraApi.KIND,
+            operation: "getHierarchy",
+            reason: "failed",
+            detail: "Jira returned an inconsistent child issue page.",
+          });
         const items = page.issues.map((child) => relation(child, input.host, input.scope));
         let nextCursor = page.isLast === true ? null : (page.nextPageToken ?? null);
         if (epic != null && nextCursor === null) {
@@ -1128,10 +1226,12 @@ export const make = Effect.gen(function* () {
                   child.fields.epic?.key !== current.key || child.fields.project === undefined,
               )
             )
-              return yield* JiraApi.failed(
-                "getHierarchy",
-                "Jira returned inconsistent epic children.",
-              );
+              return yield* new IssueTrackerError({
+                tracker: JiraApi.KIND,
+                operation: "getHierarchy",
+                reason: "failed",
+                detail: "Jira returned inconsistent epic children.",
+              });
             items.push(
               ...children.issues
                 .filter((child) => child.fields.issuetype?.subtask !== true)
@@ -1156,22 +1256,31 @@ export const make = Effect.gen(function* () {
         const deployment = yield* jira.deploymentFor(input.host);
         const selected = yield* requireIssue(input);
         if (input.parentKey === null && selected.fields.issuetype?.subtask === true)
-          return yield* JiraApi.failed(
-            "setParent",
-            "Jira subtasks must have a parent. Change the issue type in Jira first.",
-          );
+          return yield* new IssueTrackerError({
+            tracker: JiraApi.KIND,
+            operation: "setParent",
+            reason: "failed",
+            detail: "Jira subtasks must have a parent. Change the issue type in Jira first.",
+          });
         if (deployment === "data-center") {
           const context = yield* dataCenterParentContext(input, selected);
           if (context === null || context.ownEpic !== null)
-            return yield* JiraApi.failed(
-              "setParent",
-              "Only base issues can change their Jira Software epic here.",
-            );
+            return yield* new IssueTrackerError({
+              tracker: JiraApi.KIND,
+              operation: "setParent",
+              reason: "failed",
+              detail: "Only base issues can change their Jira Software epic here.",
+            });
         }
         const parent =
           input.parentKey === null ? null : yield* readIssue({ ...input, key: input.parentKey });
         if (parent?.key === selected.key)
-          return yield* JiraApi.failed("setParent", "An issue cannot be its own parent.");
+          return yield* new IssueTrackerError({
+            tracker: JiraApi.KIND,
+            operation: "setParent",
+            reason: "failed",
+            detail: "An issue cannot be its own parent.",
+          });
         if (deployment === "data-center") {
           if (parent !== null) {
             const epic = yield* jira.request({
@@ -1182,7 +1291,12 @@ export const make = Effect.gen(function* () {
               schema: Epic,
             });
             if (epic.key !== parent.key)
-              return yield* JiraApi.failed("setParent", "Jira returned a different epic.");
+              return yield* new IssueTrackerError({
+                tracker: JiraApi.KIND,
+                operation: "setParent",
+                reason: "failed",
+                detail: "Jira returned a different epic.",
+              });
           }
           yield* jira.request({
             host: input.host,
@@ -1257,10 +1371,12 @@ export const make = Effect.gen(function* () {
               (issue.fields.project.key !== input.scope && issue.fields.project.id !== input.scope),
           )
         )
-          return yield* JiraApi.failed(
-            "listLabelCandidates",
-            "Jira returned labels outside this project or an inconsistent page.",
-          );
+          return yield* new IssueTrackerError({
+            tracker: JiraApi.KIND,
+            operation: "listLabelCandidates",
+            reason: "failed",
+            detail: "Jira returned labels outside this project or an inconsistent page.",
+          });
         return {
           items: [...new Set(page.issues.flatMap((issue) => issue.fields.labels ?? []))].map(
             (name) => ({ name, color: null, description: null }),
@@ -1276,15 +1392,19 @@ export const make = Effect.gen(function* () {
         );
         const cloud = (yield* jira.deploymentFor(input.host)) === "cloud";
         if (!cloud && startAt !== 0)
-          return yield* JiraApi.failed(
-            "listAssigneeCandidates",
-            "Jira Data Center assignee search has no next page.",
-          );
+          return yield* new IssueTrackerError({
+            tracker: JiraApi.KIND,
+            operation: "listAssigneeCandidates",
+            reason: "failed",
+            detail: "Jira Data Center assignee search has no next page.",
+          });
         if (startAt >= 1000)
-          return yield* JiraApi.failed(
-            "listAssigneeCandidates",
-            "Jira assignee search is limited to the first 1000 users.",
-          );
+          return yield* new IssueTrackerError({
+            tracker: JiraApi.KIND,
+            operation: "listAssigneeCandidates",
+            reason: "failed",
+            detail: "Jira assignee search is limited to the first 1000 users.",
+          });
         const window = Math.min(limit, cloud ? 1000 - startAt : 100);
         const users = yield* jira.request({
           host: input.host,
@@ -1300,10 +1420,12 @@ export const make = Effect.gen(function* () {
           schema: bounded(JiraUser, 200),
         });
         if (users.length > window)
-          return yield* JiraApi.failed(
-            "listAssigneeCandidates",
-            "Jira returned too many assignees.",
-          );
+          return yield* new IssueTrackerError({
+            tracker: JiraApi.KIND,
+            operation: "listAssigneeCandidates",
+            reason: "failed",
+            detail: "Jira returned too many assignees.",
+          });
         return {
           items: users.map(jiraActor),
           nextCursor: cloud && startAt + window < 1000 ? String(startAt + window) : null,
@@ -1319,7 +1441,12 @@ export const make = Effect.gen(function* () {
     update: (input) =>
       Effect.gen(function* () {
         if (input.assignees !== undefined && input.assignees.length > 1)
-          return yield* JiraApi.failed("update", "A Jira issue can have only one assignee.");
+          return yield* new IssueTrackerError({
+            tracker: JiraApi.KIND,
+            operation: "update",
+            reason: "failed",
+            detail: "A Jira issue can have only one assignee.",
+          });
         const issue = yield* requireScopeIssue(
           input,
           "update",
@@ -1332,10 +1459,13 @@ export const make = Effect.gen(function* () {
           (!cloud ||
             !(yield* JiraApi.attempt("update", () => jiraBodyEditable(issue.fields.description))))
         )
-          return yield* JiraApi.failed(
-            "update",
-            "This description has rich content. Edit it in Jira to preserve its formatting and attachments.",
-          );
+          return yield* new IssueTrackerError({
+            tracker: JiraApi.KIND,
+            operation: "update",
+            reason: "failed",
+            detail:
+              "This description has rich content. Edit it in Jira to preserve its formatting and attachments.",
+          });
         const text = input.body;
         const body =
           input.richBody !== undefined
@@ -1368,10 +1498,12 @@ export const make = Effect.gen(function* () {
     setState: (input) =>
       Effect.gen(function* () {
         if (input.closeReason !== undefined)
-          return yield* JiraApi.failed(
-            "setState",
-            "Choose a Jira workflow transition without a close reason.",
-          );
+          return yield* new IssueTrackerError({
+            tracker: JiraApi.KIND,
+            operation: "setState",
+            reason: "failed",
+            detail: "Choose a Jira workflow transition without a close reason.",
+          });
         const issue = yield* requireScopeIssue(input, "setState");
         if (
           input.transitionId === undefined &&
@@ -1394,10 +1526,12 @@ export const make = Effect.gen(function* () {
         );
         const transition = candidates.length === 1 ? candidates[0] : undefined;
         if (!transition)
-          return yield* JiraApi.failed(
-            "setState",
-            "Choose one available Jira workflow transition.",
-          );
+          return yield* new IssueTrackerError({
+            tracker: JiraApi.KIND,
+            operation: "setState",
+            reason: "failed",
+            detail: "Choose one available Jira workflow transition.",
+          });
         const cloud = (yield* jira.deploymentFor(input.host)) === "cloud";
         const fields = yield* formAttempt("setState", () =>
           jiraFieldValues(
@@ -1452,10 +1586,12 @@ export const make = Effect.gen(function* () {
               issue.fields.project.key !== input.scope && issue.fields.project.id !== input.scope,
           )
         )
-          return yield* JiraApi.failed(
-            "listCandidates",
-            "Jira returned labels outside this project.",
-          );
+          return yield* new IssueTrackerError({
+            tracker: JiraApi.KIND,
+            operation: "listCandidates",
+            reason: "failed",
+            detail: "Jira returned labels outside this project.",
+          });
         const users = allowed(raw, "ASSIGN_ISSUES")
           ? yield* jira.request({
               host: input.host,
@@ -1470,7 +1606,12 @@ export const make = Effect.gen(function* () {
           : [];
         const types = allowed(raw, "CREATE_ISSUES") ? yield* issueTypes(input) : [];
         if (input.issueType !== undefined && !types.some((type) => type.id === input.issueType))
-          return yield* JiraApi.failed("listCandidates", "Select an available Jira issue type.");
+          return yield* new IssueTrackerError({
+            tracker: JiraApi.KIND,
+            operation: "listCandidates",
+            reason: "failed",
+            detail: "Select an available Jira issue type.",
+          });
         const fields =
           input.issueType === undefined
             ? undefined
@@ -1493,10 +1634,12 @@ export const make = Effect.gen(function* () {
             : [];
         const nativeStates = [...new Map(statuses.map((status) => [status.id, status])).values()];
         if (nativeStates.length > 100)
-          return yield* JiraApi.failed(
-            "listCandidates",
-            "This Jira project has too many states to load here.",
-          );
+          return yield* new IssueTrackerError({
+            tracker: JiraApi.KIND,
+            operation: "listCandidates",
+            reason: "failed",
+            detail: "This Jira project has too many states to load here.",
+          });
         return {
           states:
             available === null
