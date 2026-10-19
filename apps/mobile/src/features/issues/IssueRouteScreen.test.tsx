@@ -1,17 +1,12 @@
 // @vitest-environment jsdom
+import { makeIssueDetail } from "./issue-test-fixtures";
 import { RegistryContext } from "@effect/atom-react";
 import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import * as Effect from "effect/Effect";
 import { AtomRegistry } from "effect/reactivity";
 import { afterEach, expect, it, vi } from "vite-plus/test";
-import {
-  IssueOperationError,
-  IssueTrackerKind,
-  ProjectId,
-  WS_METHODS,
-  type IssueDetail,
-} from "@t3tools/contracts";
+import { IssueOperationError, WS_METHODS, type IssueDetail } from "@t3tools/contracts";
 import { Alert, Linking } from "react-native";
 import type {
   EnvironmentRegistry as Registry,
@@ -233,47 +228,7 @@ import { IssueRouteScreen } from "./IssueRouteScreen";
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 function detail(title: string): IssueDetail {
-  return {
-    tracker: IssueTrackerKind.make("github"),
-    host: "github.com",
-    scope: "org/repo",
-    key: "1",
-    displayKey: "#1",
-    projectId: ProjectId.make("project"),
-    projectTitle: "Project",
-    title,
-    url: "https://example.com/issue",
-    author: null,
-    state: { category: "open", name: "Open" },
-    createdAt: "2026-10-01T00:00:00Z",
-    updatedAt: "2026-10-01T00:00:00Z",
-    closedAt: null,
-    assignees: [],
-    labels: [],
-    commentCount: 0,
-    writable: true,
-    viewer: "viewer",
-    body: "",
-    comments: [],
-    commentsCursor: null,
-    events: [],
-    linkedPullRequests: [],
-    capabilities: {
-      create: true,
-      edit: true,
-      comment: true,
-      labels: true,
-      assignees: true,
-      reactions: false,
-      templates: false,
-      linkedPullRequests: false,
-      events: false,
-      search: true,
-      states: [],
-      closeReasons: [],
-    },
-    viewerPermissions: { setState: true, comment: true, edit: true, labels: true, assignees: true },
-  };
+  return makeIssueDetail({ title });
 }
 
 const request = vi.spyOn(RpcClient, "request");

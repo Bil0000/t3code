@@ -2490,40 +2490,7 @@ describe("LinearIssueTracker", () => {
   it.effect("closes through the team's completed state and reports a missing key", () =>
     Effect.gen(function* () {
       const updates: Array<Record<string, unknown>> = [];
-      const { tracker } = fakeLinear(
-        {
-          T3TeamStates: () => ({
-            organization: ORGANIZATION,
-            teams: {
-              nodes: [
-                {
-                  id: "team_eng",
-                  key: "ENG",
-                  name: "Engineering",
-                  states: {
-                    nodes: [
-                      state("Canceled", "canceled", 3),
-                      state("Done", "completed", 2),
-                      state("Todo", "unstarted", 1),
-                    ],
-                    pageInfo: { hasNextPage: false, endCursor: null },
-                  },
-                  labels: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
-                  members: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
-                  ancestors: [],
-                  templates: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
-                },
-              ],
-            },
-            issueLabels: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
-          }),
-          T3IssueUpdate: (variables) => {
-            updates.push(variables);
-            return { issueUpdate: { success: true } };
-          },
-        },
-        null,
-      );
+      const { tracker } = fakeLinear({}, null);
       const api = yield* tracker;
       const unauthenticated = yield* Effect.flip(
         api.setState({ ...target, key: "ENG-1", state: "closed" }),

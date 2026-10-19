@@ -8,19 +8,14 @@ import {
   WS_METHODS,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
-import * as Stream from "effect/Stream";
-import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { expect, it, vi } from "@effect/vitest";
 
-import * as EnvironmentRegistry from "../connection/registry.ts";
-import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as RpcClient from "../rpc/client.ts";
 import * as Session from "./session.ts";
 import { createIssueEnvironmentAtoms } from "./issues.ts";
 import { executeAtomQuery } from "./runtime.ts";
+import { makeIssueTestRuntime } from "./issues.testkit.ts";
 
 it.effect.each([
   "github-state",
@@ -43,20 +38,8 @@ it.effect.each([
   "create",
 ])("refreshes only affected mounted first history pages after %s", (kind) =>
   Effect.gen(function* () {
-    const supervisor = {
-      state: yield* SubscriptionRef.make({ phase: "connected" }),
-      session: yield* SubscriptionRef.make(Option.some({})),
-    } as unknown as EnvironmentSupervisor.EnvironmentSupervisor["Service"];
+    const runtime = yield* makeIssueTestRuntime;
     yield* Effect.promise(async () => {
-      const environment = EnvironmentRegistry.EnvironmentRegistry.of({
-        run: (_id, effect) =>
-          Effect.provideService(effect, EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
-        followStream: (_id, stream) =>
-          Stream.provideService(stream, EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
-      } as EnvironmentRegistry.EnvironmentRegistry["Service"]);
-      const runtime = Atom.runtime(
-        Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, environment),
-      );
       const session: AuthSessionState = {
         authenticated: true,
         auth: {
@@ -285,27 +268,8 @@ it.effect.each(
   "refreshes only affected issue candidates after $operation for $connectionId",
   ({ connectionId, operation }) =>
     Effect.gen(function* () {
-      const supervisor = {
-        state: yield* SubscriptionRef.make({ phase: "connected" }),
-        session: yield* SubscriptionRef.make(Option.some({})),
-      } as unknown as EnvironmentSupervisor.EnvironmentSupervisor["Service"];
+      const runtime = yield* makeIssueTestRuntime;
       yield* Effect.promise(async () => {
-        const runtime = Atom.runtime(
-          Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, {
-            run: (_id, effect) =>
-              Effect.provideService(
-                effect,
-                EnvironmentSupervisor.EnvironmentSupervisor,
-                supervisor,
-              ),
-            followStream: (_id, stream) =>
-              Stream.provideService(
-                stream,
-                EnvironmentSupervisor.EnvironmentSupervisor,
-                supervisor,
-              ),
-          } as EnvironmentRegistry.EnvironmentRegistry["Service"]),
-        );
         const session: AuthSessionState = {
           authenticated: true,
           auth: {
@@ -434,19 +398,8 @@ it.effect.each(
 
 it.effect("isolates late activity pages by account and order", () =>
   Effect.gen(function* () {
-    const supervisor = {
-      state: yield* SubscriptionRef.make({ phase: "connected" }),
-      session: yield* SubscriptionRef.make(Option.some({})),
-    } as unknown as EnvironmentSupervisor.EnvironmentSupervisor["Service"];
+    const runtime = yield* makeIssueTestRuntime;
     yield* Effect.promise(async () => {
-      const runtime = Atom.runtime(
-        Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, {
-          run: (_id, effect) =>
-            Effect.provideService(effect, EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
-          followStream: (_id, stream) =>
-            Stream.provideService(stream, EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
-        } as EnvironmentRegistry.EnvironmentRegistry["Service"]),
-      );
       const started = Promise.withResolvers<void>();
       const pending: Array<{ input: { connectionId: string; order: string }; finish: () => void }> =
         [];

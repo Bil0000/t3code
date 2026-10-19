@@ -66,6 +66,30 @@ const cursor = "gitlab gitlab.example group/app";
 const failedCursor = "gitlab gitlab.example group/failed";
 const otherCursor = "github github.example group/other";
 
+function initializeConnectedIssueEnvironment() {
+  const runtime = Atom.runtime(
+    Layer.effect(
+      EnvironmentRegistry.EnvironmentRegistry,
+      Effect.gen(function* () {
+        const supervisor = {
+          state: yield* SubscriptionRef.make({
+            ...AVAILABLE_CONNECTION_STATE,
+            phase: "connected" as const,
+          }),
+          session: yield* SubscriptionRef.make(Option.some({} as RpcSession)),
+        } as EnvironmentSupervisor.EnvironmentSupervisor["Service"];
+        return EnvironmentRegistry.EnvironmentRegistry.of({
+          run: (_id, effect) =>
+            Effect.provideService(effect, EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+          followStream: (_id, stream) =>
+            Stream.provideService(stream, EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        } as EnvironmentRegistry.EnvironmentRegistry["Service"]);
+      }),
+    ),
+  );
+  Object.assign(issueEnvironment, createIssueEnvironmentAtoms(runtime));
+}
+
 it.each([
   { viewer: "A", switchFilter: false, companion: null },
   { viewer: "B", switchFilter: false, companion: null },
@@ -545,35 +569,7 @@ effectIt.effect(
         ],
         nextCursors: { [otherCursor]: "O2" },
       };
-      const runtime = Atom.runtime(
-        Layer.effect(
-          EnvironmentRegistry.EnvironmentRegistry,
-          Effect.gen(function* () {
-            const supervisor = {
-              state: yield* SubscriptionRef.make({
-                ...AVAILABLE_CONNECTION_STATE,
-                phase: "connected" as const,
-              }),
-              session: yield* SubscriptionRef.make(Option.some({} as RpcSession)),
-            } as EnvironmentSupervisor.EnvironmentSupervisor["Service"];
-            return EnvironmentRegistry.EnvironmentRegistry.of({
-              run: (_id, effect) =>
-                Effect.provideService(
-                  effect,
-                  EnvironmentSupervisor.EnvironmentSupervisor,
-                  supervisor,
-                ),
-              followStream: (_id, stream) =>
-                Stream.provideService(
-                  stream,
-                  EnvironmentSupervisor.EnvironmentSupervisor,
-                  supervisor,
-                ),
-            } as EnvironmentRegistry.EnvironmentRegistry["Service"]);
-          }),
-        ),
-      );
-      Object.assign(issueEnvironment, createIssueEnvironmentAtoms(runtime));
+      initializeConnectedIssueEnvironment();
       let reads = 0;
       const request = vi.spyOn(RpcClient, "request");
       request.mockImplementation((() =>
@@ -666,35 +662,7 @@ effectIt.effect.each([undefined, "Account-A"])(
   "keeps an exhausted native list terminal after a first-page refresh for account %s",
   (connectionId) =>
     Effect.gen(function* () {
-      const runtime = Atom.runtime(
-        Layer.effect(
-          EnvironmentRegistry.EnvironmentRegistry,
-          Effect.gen(function* () {
-            const supervisor = {
-              state: yield* SubscriptionRef.make({
-                ...AVAILABLE_CONNECTION_STATE,
-                phase: "connected" as const,
-              }),
-              session: yield* SubscriptionRef.make(Option.some({} as RpcSession)),
-            } as EnvironmentSupervisor.EnvironmentSupervisor["Service"];
-            return EnvironmentRegistry.EnvironmentRegistry.of({
-              run: (_id, effect) =>
-                Effect.provideService(
-                  effect,
-                  EnvironmentSupervisor.EnvironmentSupervisor,
-                  supervisor,
-                ),
-              followStream: (_id, stream) =>
-                Stream.provideService(
-                  stream,
-                  EnvironmentSupervisor.EnvironmentSupervisor,
-                  supervisor,
-                ),
-            } as EnvironmentRegistry.EnvironmentRegistry["Service"]);
-          }),
-        ),
-      );
-      Object.assign(issueEnvironment, createIssueEnvironmentAtoms(runtime));
+      initializeConnectedIssueEnvironment();
       const rows = Array.from({ length: 75 }, (_, index) =>
         row(String(index + 1), {
           updatedAt: `2026-10-01T00:00:00.${String(999 - index).padStart(3, "0")}Z`,
@@ -786,35 +754,7 @@ effectIt.effect.each([false, true])(
   "keeps explicit default account paging and writes separate from All accounts: %s",
   (defaultAccount) =>
     Effect.gen(function* () {
-      const runtime = Atom.runtime(
-        Layer.effect(
-          EnvironmentRegistry.EnvironmentRegistry,
-          Effect.gen(function* () {
-            const supervisor = {
-              state: yield* SubscriptionRef.make({
-                ...AVAILABLE_CONNECTION_STATE,
-                phase: "connected" as const,
-              }),
-              session: yield* SubscriptionRef.make(Option.some({} as RpcSession)),
-            } as EnvironmentSupervisor.EnvironmentSupervisor["Service"];
-            return EnvironmentRegistry.EnvironmentRegistry.of({
-              run: (_id, effect) =>
-                Effect.provideService(
-                  effect,
-                  EnvironmentSupervisor.EnvironmentSupervisor,
-                  supervisor,
-                ),
-              followStream: (_id, stream) =>
-                Stream.provideService(
-                  stream,
-                  EnvironmentSupervisor.EnvironmentSupervisor,
-                  supervisor,
-                ),
-            } as EnvironmentRegistry.EnvironmentRegistry["Service"]);
-          }),
-        ),
-      );
-      Object.assign(issueEnvironment, createIssueEnvironmentAtoms(runtime));
+      initializeConnectedIssueEnvironment();
 
       const environmentId = EnvironmentId.make(defaultAccount ? "default-only" : "all-accounts");
       const nativeTracker = IssueTrackerKind.make("linear");

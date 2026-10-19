@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
+import { makeIssueDetail } from "./issue-test-fixtures";
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
-import { IssueTrackerKind, ProjectId, type IssueDetail } from "@t3tools/contracts";
+import { IssueTrackerKind, type IssueDetail } from "@t3tools/contracts";
 
 type Props = Record<string, unknown> & { readonly children?: ReactNode };
 
@@ -92,48 +93,18 @@ import { IssueComposeSheet } from "./IssueComposeSheet";
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 function detail(bodyEditable?: boolean): IssueDetail {
-  return {
+  return makeIssueDetail({
     tracker: IssueTrackerKind.make("jira"),
     host: "acme.atlassian.net",
     scope: "ENG",
     key: "ENG-1",
     displayKey: "ENG-1",
-    projectId: ProjectId.make("project"),
-    projectTitle: "Project",
     title: "Old title",
     url: "https://acme.atlassian.net/browse/ENG-1",
-    author: null,
     state: { category: "open", name: "To Do" },
-    createdAt: "2026-10-01T00:00:00Z",
-    updatedAt: "2026-10-01T00:00:00Z",
-    closedAt: null,
-    assignees: [],
-    labels: [],
-    commentCount: 0,
-    writable: true,
-    viewer: "viewer",
     body: "Rich *body*",
     ...(bodyEditable === undefined ? {} : { bodyEditable }),
-    comments: [],
-    commentsCursor: null,
-    events: [],
-    linkedPullRequests: [],
-    capabilities: {
-      create: true,
-      edit: true,
-      comment: true,
-      labels: true,
-      assignees: true,
-      reactions: false,
-      templates: false,
-      linkedPullRequests: false,
-      events: false,
-      search: true,
-      states: [],
-      closeReasons: [],
-    },
-    viewerPermissions: { setState: true, comment: true, edit: true, labels: true, assignees: true },
-  };
+  });
 }
 
 let root: Root;

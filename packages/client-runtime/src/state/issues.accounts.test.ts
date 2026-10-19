@@ -13,18 +13,13 @@ import {
 } from "@t3tools/contracts";
 import { expect, it, vi } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import * as Stream from "effect/Stream";
-import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 
-import * as EnvironmentRegistry from "../connection/registry.ts";
-import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as RpcClient from "../rpc/client.ts";
 import * as Session from "./session.ts";
 import { executeAtomQuery } from "./runtime.ts";
+import { makeIssueTestRuntime } from "./issues.testkit.ts";
 import {
   continueIssueListPage,
   createIssueEnvironmentAtoms,
@@ -232,30 +227,8 @@ it.effect(
   "refreshes only the selected account's mounted detail, history and hierarchy after a write",
   () =>
     Effect.gen(function* () {
-      const supervisor = {
-        state: yield* SubscriptionRef.make({ phase: "connected" } as const),
-        session: yield* SubscriptionRef.make(Option.some({})),
-      } as unknown as EnvironmentSupervisor.EnvironmentSupervisor["Service"];
+      const runtime = yield* makeIssueTestRuntime;
       yield* Effect.promise(async () => {
-        const runtime = Atom.runtime(
-          Layer.succeed(
-            EnvironmentRegistry.EnvironmentRegistry,
-            EnvironmentRegistry.EnvironmentRegistry.of({
-              run: (_id, effect) =>
-                Effect.provideService(
-                  effect,
-                  EnvironmentSupervisor.EnvironmentSupervisor,
-                  supervisor,
-                ),
-              followStream: (_id, stream) =>
-                Stream.provideService(
-                  stream,
-                  EnvironmentSupervisor.EnvironmentSupervisor,
-                  supervisor,
-                ),
-            } as EnvironmentRegistry.EnvironmentRegistry["Service"]),
-          ),
-        );
         const session: AuthSessionState = {
           authenticated: true,
           auth: {
