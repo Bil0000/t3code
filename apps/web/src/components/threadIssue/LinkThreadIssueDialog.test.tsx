@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
+import { createIssueTestRoot } from "../issue/issueTestUtils";
 
 import { act, createElement } from "react";
-import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vite-plus/test";
 import {
   EnvironmentId,
@@ -134,9 +134,7 @@ it("blocks a removed account and keeps drafts for explicitly choosing its replac
   state.read.mockReset().mockResolvedValue({ _tag: "Success", value: rowB });
   state.link.mockReset().mockResolvedValue({ _tag: "Failure" });
   state.resolve.mockReset();
-  const container = document.createElement("div");
-  document.body.append(container);
-  const root = createRoot(container);
+  const { container, root } = createIssueTestRoot();
   const render = () =>
     root.render(
       createElement(AppAtomRegistryProvider, null, createElement(LinkThreadIssueDialogHost)),
@@ -334,9 +332,7 @@ it.each([
     guarded.mockImplementation(
       respond as unknown as Parameters<typeof guarded.mockImplementation>[0],
     );
-    const container = document.createElement("div");
-    document.body.append(container);
-    const root = createRoot(container);
+    const { container, root } = createIssueTestRoot();
     const button = (label: string) =>
       [...document.querySelectorAll<HTMLButtonElement>("button")].find(
         (candidate) => candidate.textContent === label,
@@ -491,9 +487,7 @@ it("refreshes the dialog twice over its last first-page result", async () => {
   guarded.mockImplementation(
     respond as unknown as Parameters<typeof guarded.mockImplementation>[0],
   );
-  const container = document.createElement("div");
-  document.body.append(container);
-  const root = createRoot(container);
+  const { container, root } = createIssueTestRoot();
   const button = (label: string) =>
     [...document.querySelectorAll<HTMLButtonElement>("button")].find(
       (candidate) => candidate.textContent === label,
@@ -553,9 +547,7 @@ it("ignores a changed viewer page after the dialog's query changed", async () =>
       finish = resolve;
     }),
   );
-  const container = document.createElement("div");
-  document.body.append(container);
-  const root = createRoot(container);
+  const { container, root } = createIssueTestRoot();
   try {
     openLinkThreadIssueDialog({
       environmentId: EnvironmentId.make("stale-environment"),
@@ -676,9 +668,7 @@ it.each([false, true])(
         limit: 50,
       },
     };
-    const container = document.createElement("div");
-    document.body.append(container);
-    const root = createRoot(container);
+    const { container, root } = createIssueTestRoot();
     try {
       openLinkThreadIssueDialog({
         environmentId: target.environmentId,
@@ -730,9 +720,7 @@ it("can load later issues when every issue on the first page is already linked",
       errors: [],
     },
   });
-  const container = document.createElement("div");
-  document.body.append(container);
-  const root = createRoot(container);
+  const { container, root } = createIssueTestRoot();
   try {
     openLinkThreadIssueDialog({
       environmentId: EnvironmentId.make("environment"),
@@ -790,9 +778,7 @@ it("shows a source page failure and retries its qualified cursor without paging 
         errors: [],
       },
     });
-  const container = document.createElement("div");
-  document.body.append(container);
-  const root = createRoot(container);
+  const { container, root } = createIssueTestRoot();
   try {
     openLinkThreadIssueDialog({
       environmentId: EnvironmentId.make("environment"),
@@ -866,9 +852,7 @@ it.each([false, true])(
         },
       })
       .mockResolvedValueOnce({ _tag: "Success", value: page("B-retried", "B", null) });
-    const container = document.createElement("div");
-    document.body.append(container);
-    const root = createRoot(container);
+    const { container, root } = createIssueTestRoot();
     const more = () =>
       [...document.querySelectorAll<HTMLButtonElement>("button")].find(
         (button) => button.textContent === "Load more",
@@ -949,9 +933,7 @@ it.each(["key", "url", "listed", "unsupported-url"])(
             },
           },
     );
-    const container = document.createElement("div");
-    document.body.append(container);
-    const root = createRoot(container);
+    const { container, root } = createIssueTestRoot();
     try {
       openLinkThreadIssueDialog({
         environmentId: EnvironmentId.make("environment"),
@@ -1085,9 +1067,7 @@ it.each([
     });
     state.link.mockReset().mockResolvedValue(AsyncResult.success(undefined));
     state.read.mockReset();
-    const container = document.createElement("div");
-    document.body.append(container);
-    const root = createRoot(container);
+    const { container, root } = createIssueTestRoot();
     try {
       openLinkThreadIssueDialog({
         environmentId: EnvironmentId.make("environment"),

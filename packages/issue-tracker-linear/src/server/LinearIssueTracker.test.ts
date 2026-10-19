@@ -57,6 +57,23 @@ const labelFixture = <
   isGroup: input.isGroup ?? false,
 });
 
+function teamFixture<T extends object>(overrides: T) {
+  const defaults = {
+    id: "team_eng",
+    key: "ENG",
+    name: "Engineering",
+    private: true,
+    visibility: "private",
+    restrictedBy: null,
+    ancestors: [],
+    states: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+    labels: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+    members: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+    templates: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+  };
+  return { ...defaults, ...overrides } as Omit<typeof defaults, keyof T> & T;
+}
+
 const issue = (
   identifier: string,
   overrides: Partial<Record<string, unknown>> = {},
@@ -356,19 +373,12 @@ it.effect.each([
           issueLabels: empty,
           teams: {
             nodes: [
-              {
-                id: "team_eng",
-                key: "ENG",
-                name: "Engineering",
-                private: true,
-                visibility: "private",
-                restrictedBy: null,
-                ancestors: [],
+              teamFixture({
                 states: empty,
                 labels: empty,
                 members: { ...empty, nodes: [THEO, JULIUS] },
                 templates: { ...empty, nodes: [preset] },
-              },
+              }),
             ],
           },
         }),
@@ -688,21 +698,7 @@ describe("LinearIssueTracker", () => {
         T3Team: () => ({
           organization: other,
           teams: {
-            nodes: [
-              {
-                id: "team_eng",
-                key: "ENG",
-                name: "Engineering",
-                private: true,
-                visibility: "private",
-                restrictedBy: null,
-                states: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
-                labels: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
-                members: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
-                ancestors: [],
-                templates: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
-              },
-            ],
+            nodes: [teamFixture({})],
           },
           issueLabels: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
         }),
@@ -1793,13 +1789,10 @@ describe("LinearIssueTracker", () => {
             issueLabels: empty,
             teams: {
               nodes: [
-                {
+                teamFixture({
                   id: "team",
-                  key: "ENG",
-                  name: "Engineering",
                   private: false,
                   visibility: "public",
-                  restrictedBy: null,
                   states: empty,
                   labels: empty,
                   members: empty,
@@ -1822,7 +1815,7 @@ describe("LinearIssueTracker", () => {
                           templates: empty,
                         }))
                       : [],
-                },
+                }),
               ],
             },
           }),
@@ -2169,15 +2162,7 @@ describe("LinearIssueTracker", () => {
           organization: ORGANIZATION,
           teams: {
             nodes: [
-              {
-                id: "team_eng",
-                key: "ENG",
-                name: "Engineering",
-                private: true,
-                visibility: "private",
-                restrictedBy: null,
-                states: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
-                labels: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+              teamFixture({
                 members: {
                   nodes: [
                     user("usr_imposter", "usr_display"),
@@ -2187,9 +2172,7 @@ describe("LinearIssueTracker", () => {
                   ],
                   pageInfo: { hasNextPage: false, endCursor: null },
                 },
-                ancestors: [],
-                templates: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
-              },
+              }),
             ],
           },
           issueLabels: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
@@ -2251,19 +2234,9 @@ describe("LinearIssueTracker", () => {
           organization: ORGANIZATION,
           teams: {
             nodes: [
-              {
-                id: "team_eng",
-                key: "ENG",
-                name: "Engineering",
-                private: true,
-                visibility: "private",
-                restrictedBy: null,
-                states: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+              teamFixture({
                 labels: { nodes: [label], pageInfo: { hasNextPage: false, endCursor: null } },
-                members: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
-                ancestors: [],
-                templates: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
-              },
+              }),
             ],
           },
           issueLabels: {
@@ -2321,14 +2294,7 @@ describe("LinearIssueTracker", () => {
           organization: ORGANIZATION,
           teams: {
             nodes: [
-              {
-                id: "team_eng",
-                key: "ENG",
-                name: "Engineering",
-                private: true,
-                visibility: "private",
-                restrictedBy: null,
-                states: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+              teamFixture({
                 labels: {
                   nodes: test.requests
                     .at(-1)
@@ -2339,10 +2305,7 @@ describe("LinearIssueTracker", () => {
                     : [group, bug],
                   pageInfo: { hasNextPage: false, endCursor: null },
                 },
-                members: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
-                ancestors: [],
-                templates: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
-              },
+              }),
             ],
           },
           issueLabels: {
@@ -2416,15 +2379,7 @@ describe("LinearIssueTracker", () => {
             organization: ORGANIZATION,
             teams: {
               nodes: [
-                {
-                  id: "team_eng",
-                  key: "ENG",
-                  name: "Engineering",
-                  private: true,
-                  visibility: "private",
-                  restrictedBy: null,
-                  states: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
-                  labels: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+                teamFixture({
                   members: {
                     nodes: [
                       { ...user("usr_first", "Sam"), email: "first@acme.test" },
@@ -2433,9 +2388,7 @@ describe("LinearIssueTracker", () => {
                     ],
                     pageInfo: { hasNextPage: partial, endCursor: partial ? "more-members" : null },
                   },
-                  ancestors: [],
-                  templates: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
-                },
+                }),
               ],
             },
             issueLabels: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
@@ -2940,21 +2893,7 @@ it.effect("pages label and member candidates with native cursors and workspace c
         organization: ORGANIZATION,
         issueLabels: empty,
         teams: {
-          nodes: [
-            {
-              id: "team-1",
-              key: "ENG",
-              name: "Engineering",
-              private: true,
-              visibility: "private",
-              restrictedBy: null,
-              ancestors: [],
-              states: empty,
-              labels: empty,
-              members: empty,
-              templates: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
-            },
-          ],
+          nodes: [teamFixture({ id: "team-1", states: empty, labels: empty, members: empty })],
         },
       }),
       T3LabelCandidates: () => ({
@@ -3041,17 +2980,11 @@ it.effect("creates an issue with a checked parent and a plain native template", 
         organization: ORGANIZATION,
         teams: {
           nodes: [
-            {
+            teamFixture({
               id: "team-1",
-              key: "ENG",
-              name: "Engineering",
-              private: true,
-              visibility: "private",
-              restrictedBy: null,
               states: empty,
               labels: empty,
               members: empty,
-              ancestors: [],
               templates: {
                 pageInfo: empty.pageInfo,
                 nodes: [
@@ -3066,7 +2999,7 @@ it.effect("creates an issue with a checked parent and a plain native template", 
                   },
                 ],
               },
-            },
+            }),
           ],
         },
         issueLabels: empty,
@@ -3270,19 +3203,11 @@ it.effect.each(["create", "update"] as const)(
         isGroup: false,
       }));
       const members = Array.from({ length: 250 }, (_, n) => user(`member-${n}`, "Same"));
-      const team = {
-        id: "team_eng",
-        key: "ENG",
-        name: "Engineering",
-        private: true,
-        visibility: "private",
-        restrictedBy: null,
+      const team = teamFixture({
         states: empty,
         labels: { nodes: labels, pageInfo: { hasNextPage: true, endCursor: "labels-250" } },
         members: { nodes: members, pageInfo: { hasNextPage: true, endCursor: "members-250" } },
-        ancestors: [],
-        templates: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
-      };
+      });
       const test = fakeLinear({
         T3IssueReference: () => ({ issue: issue("ENG-7") }),
         T3Team: () => ({
@@ -3381,19 +3306,11 @@ it.effect.each([
 ] as const)("refuses invalid selected label IDs without a mutation: %s", (failure) =>
   Effect.gen(function* () {
     const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
-    const team = {
-      id: "team_eng",
-      key: "ENG",
-      name: "Engineering",
-      private: true,
-      visibility: "private",
-      restrictedBy: null,
+    const team = teamFixture({
       states: empty,
       labels: { ...empty, pageInfo: { hasNextPage: true, endCursor: "more" } },
       members: empty,
-      ancestors: [],
-      templates: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
-    };
+    });
     const test = fakeLinear({
       T3IssueReference: () => ({ issue: issue("ENG-7") }),
       T3Team: () => ({
@@ -3458,19 +3375,11 @@ it.effect.each(["foreign", "partial", "inactive", "wrong-id"] as const)(
   (failure) =>
     Effect.gen(function* () {
       const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
-      const team = {
-        id: "team_eng",
-        key: "ENG",
-        name: "Engineering",
-        private: true,
-        visibility: "private",
-        restrictedBy: null,
+      const team = teamFixture({
         states: empty,
         labels: empty,
         members: { ...empty, pageInfo: { hasNextPage: true, endCursor: "more" } },
-        ancestors: [],
-        templates: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
-      };
+      });
       const test = fakeLinear({
         T3IssueReference: () => ({ issue: issue("ENG-7") }),
         T3Team: () => ({
@@ -3607,17 +3516,10 @@ it.effect.each([false, true])(
       const childLabel = { ...parentLabel, id: "child-security" };
       const other = labelFixture({ id: "other", name: "Other", color: "#000" });
       const written: unknown[] = [];
-      const team = {
-        id: "team_eng",
-        key: "ENG",
-        name: "Engineering",
-        private: true,
-        visibility: "private",
-        restrictedBy: null,
+      const team = teamFixture({
         states: empty,
         members: empty,
         labels: { ...empty, nodes: [childLabel, other] },
-        templates: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
         ancestors: [
           {
             id: "team_parent",
@@ -3633,7 +3535,7 @@ it.effect.each([false, true])(
             },
           },
         ],
-      };
+      });
       const test = fakeLinear({
         T3Team: () => ({
           organization: ORGANIZATION,
@@ -3779,17 +3681,10 @@ it.effect.each([5, 6])("bounds native Linear ancestor catalogs at five teams: %s
         issueLabels: empty,
         teams: {
           nodes: [
-            {
-              id: "team_eng",
-              key: "ENG",
-              name: "Engineering",
-              private: true,
-              visibility: "private",
-              restrictedBy: null,
+            teamFixture({
               states: empty,
               labels: empty,
               members: empty,
-              templates: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
               ancestors: Array.from({ length: count }, (_, n) => ({
                 id: `parent-${n}`,
                 key: `P${n}`,
@@ -3800,7 +3695,7 @@ it.effect.each([5, 6])("bounds native Linear ancestor catalogs at five teams: %s
                 templates: empty,
                 labels: empty,
               })),
-            },
+            }),
           ],
         },
       }),
@@ -3836,13 +3731,7 @@ it.effect.each(["workspace", "ancestor"] as const)(
             issueLabels: empty,
             teams: {
               nodes: [
-                {
-                  id: "team_eng",
-                  key: "ENG",
-                  name: "Engineering",
-                  private: true,
-                  visibility: "private",
-                  restrictedBy: null,
+                teamFixture({
                   states: empty,
                   labels: empty,
                   members: empty,
@@ -3861,7 +3750,7 @@ it.effect.each(["workspace", "ancestor"] as const)(
                           },
                         ]
                       : [],
-                },
+                }),
               ],
             },
           };
@@ -3925,13 +3814,7 @@ it.effect.each(["workspace", "team", "ancestor"] as const)(
           issueLabels: empty,
           teams: {
             nodes: [
-              {
-                id: "team_eng",
-                key: "ENG",
-                name: "Engineering",
-                private: true,
-                visibility: "private",
-                restrictedBy: null,
+              teamFixture({
                 states: empty,
                 labels: empty,
                 members: empty,
@@ -3948,7 +3831,7 @@ it.effect.each(["workspace", "team", "ancestor"] as const)(
                     templates: partial === "ancestor" ? catalog : empty,
                   },
                 ],
-              },
+              }),
             ],
           },
         }),
@@ -3981,21 +3864,7 @@ it.effect.each([100, 101])("bounds native workspace template catalogs: %s", (cou
         },
         issueLabels: empty,
         teams: {
-          nodes: [
-            {
-              id: "team_eng",
-              key: "ENG",
-              name: "Engineering",
-              private: true,
-              visibility: "private",
-              restrictedBy: null,
-              ancestors: [],
-              states: empty,
-              labels: empty,
-              members: empty,
-              templates: empty,
-            },
-          ],
+          nodes: [teamFixture({ states: empty, labels: empty, members: empty, templates: empty })],
         },
       }),
     });
@@ -4042,19 +3911,7 @@ it.effect("uses workspace-scoped native templates without accepting another team
           issueLabels: empty,
           teams: {
             nodes: [
-              {
-                id: "team_eng",
-                key: "ENG",
-                name: "Engineering",
-                private: true,
-                visibility: "private",
-                restrictedBy: null,
-                ancestors: [],
-                states: empty,
-                labels: empty,
-                members: empty,
-                templates: empty,
-              },
+              teamFixture({ states: empty, labels: empty, members: empty, templates: empty }),
             ],
           },
         };
@@ -4104,13 +3961,7 @@ it.effect.each(["create", "assignee", "clearLabels", "labelPage", "missingLabels
             issueLabels: empty,
             teams: {
               nodes: [
-                {
-                  id: "team_eng",
-                  key: "ENG",
-                  name: "Engineering",
-                  private: true,
-                  visibility: "private",
-                  restrictedBy: null,
+                teamFixture({
                   states: empty,
                   labels: empty,
                   members: { ...empty, nodes: [THEO] },
@@ -4126,7 +3977,7 @@ it.effect.each(["create", "assignee", "clearLabels", "labelPage", "missingLabels
                       templates: empty,
                     },
                   ],
-                },
+                }),
               ],
             },
           };
@@ -4200,19 +4051,14 @@ it.effect.each([false, true])(
   (privateTeam) =>
     Effect.gen(function* () {
       const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
-      const team = {
-        id: "team_eng",
-        key: "ENG",
-        name: "Engineering",
+      const team = teamFixture({
         private: privateTeam,
         visibility: privateTeam ? "private" : "public",
-        restrictedBy: null,
-        ancestors: [],
         states: empty,
         labels: empty,
         templates: empty,
         members: { ...empty, nodes: [JULIUS] },
-      };
+      });
       const template = {
         id: "outsider-template",
         name: "Assigned",
@@ -4311,19 +4157,14 @@ it.effect.each(["ENG", "acme/ENG"])(
           issueLabels: empty,
           teams: {
             nodes: [
-              {
-                id: "team_eng",
-                key: "ENG",
-                name: "Engineering",
+              teamFixture({
                 private: false,
                 visibility: "public",
-                restrictedBy: null,
-                ancestors: [],
                 states: empty,
                 labels: empty,
                 members: empty,
                 templates: empty,
-              },
+              }),
             ],
           },
         }),
@@ -4396,19 +4237,14 @@ it.effect.each(["create", "update"] as const)(
   (operation) =>
     Effect.gen(function* () {
       const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
-      const team = {
-        id: "team_eng",
-        key: "ENG",
-        name: "Engineering",
+      const team = teamFixture({
         private: false,
         visibility: "public",
-        restrictedBy: null,
-        ancestors: [],
         states: empty,
         labels: empty,
         templates: empty,
         members: empty,
-      };
+      });
       const test = fakeLinear({
         T3Team: () => ({
           organization: ORGANIZATION,
@@ -4581,19 +4417,14 @@ it.effect.each([401, 429])(
   (status) =>
     Effect.gen(function* () {
       const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
-      const team = {
-        id: "team_eng",
-        key: "ENG",
-        name: "Engineering",
+      const team = teamFixture({
         private: false,
         visibility: "public",
-        restrictedBy: null,
-        ancestors: [],
         states: empty,
         labels: empty,
         templates: empty,
         members: empty,
-      };
+      });
       const test = fakeLinear({
         T3Team: () => ({
           organization: ORGANIZATION,
@@ -4683,10 +4514,7 @@ it.effect.each(["boundary", "child-guest", "parent-guest"] as const)(
         type: "issue",
         templateData: { assigneeId: selected.id },
       };
-      const team = {
-        id: "team_eng",
-        key: "ENG",
-        name: "Engineering",
+      const team = teamFixture({
         private: false,
         visibility: "restricted",
         restrictedBy: { id: boundary.id },
@@ -4695,7 +4523,7 @@ it.effect.each(["boundary", "child-guest", "parent-guest"] as const)(
         labels: empty,
         templates: { ...empty, nodes: [template] },
         members: { ...empty, nodes: membership === "child-guest" ? [selected] : [] },
-      };
+      });
       let beyondPreview = false;
       let failure: string | null = null;
       const nativeTeam = (userPage = false) => ({

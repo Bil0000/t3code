@@ -14,6 +14,8 @@ import { HttpClient, HttpClientResponse } from "effect/http";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import * as GitHubIssueTracker from "./GitHubIssueTracker.ts";
 
+import { templateEntry } from "./issue-test-fixtures.ts";
+
 const decodeDetailWire = Schema.decodeEffect(IssueDetail);
 
 /** A detail answer as GitHub's GraphQL API shapes it, with every section populated once. */
@@ -234,20 +236,14 @@ describe("GitHubIssueTracker", () => {
                     __typename: "Tree",
                     oid: "a".repeat(40),
                     entries: [
-                      {
-                        name: "bug.yml",
-                        object: {
-                          __typename: "Blob",
-                          text: "name: Bug\ndescription: Report an issue\nbody:\n- type: textarea\n  attributes:\n    label: Details\n",
-                        },
-                      },
-                      {
-                        name: "config.yml",
-                        object: {
-                          __typename: "Blob",
-                          text: "blank_issues_enabled: false\ncontact_links: [{name: Help, about: Ask us, url: 'https://example.com/help'}]\n",
-                        },
-                      },
+                      templateEntry(
+                        "bug.yml",
+                        "name: Bug\ndescription: Report an issue\nbody:\n- type: textarea\n  attributes:\n    label: Details\n",
+                      ),
+                      templateEntry(
+                        "config.yml",
+                        "blank_issues_enabled: false\ncontact_links: [{name: Help, about: Ask us, url: 'https://example.com/help'}]\n",
+                      ),
                     ],
                   }
                 : null,
@@ -289,13 +285,10 @@ describe("GitHubIssueTracker", () => {
           assignees: { nodes: [] },
           labels: null,
         };
-        const valid = {
-          name: "bug.md",
-          object: {
-            __typename: "Blob",
-            text: "---\nname: Native Markdown\nabout: Report a bug\n---\nNative body",
-          },
-        };
+        const valid = templateEntry(
+          "bug.md",
+          "---\nname: Native Markdown\nabout: Report a bug\n---\nNative body",
+        );
         const api = yield* tracker((_query, variables) => {
           reads.push(variables);
           const defaults = (variables as { name: string }).name === ".github";
@@ -327,35 +320,18 @@ describe("GitHubIssueTracker", () => {
                       oid: "a".repeat(40),
                       entries: [
                         valid,
-                        {
-                          name: "form.yml",
-                          object: {
-                            __typename: "Blob",
-                            text: "name: Default form\ndescription: Report an issue\nbody:\n- type: textarea\n  attributes:\n    label: Details\n",
-                          },
-                        },
-                        {
-                          name: "config.yml",
-                          object: {
-                            __typename: "Blob",
-                            text: "blank_issues_enabled: false",
-                          },
-                        },
+                        templateEntry(
+                          "form.yml",
+                          "name: Default form\ndescription: Report an issue\nbody:\n- type: textarea\n  attributes:\n    label: Details\n",
+                        ),
+                        templateEntry("config.yml", "blank_issues_enabled: false"),
                       ],
                     }
                   : kind === "invalid-local"
                     ? {
                         __typename: "Tree",
                         oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                        entries: [
-                          {
-                            name: "bug.md",
-                            object: {
-                              __typename: "Blob",
-                              text: "Missing native front matter",
-                            },
-                          },
-                        ],
+                        entries: [templateEntry("bug.md", "Missing native front matter")],
                       }
                     : null,
               },
@@ -409,19 +385,14 @@ describe("GitHubIssueTracker", () => {
                   __typename: "Tree",
                   oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                   entries: [
-                    {
-                      name:
-                        kind === "form" ? "bug.yml" : kind === "markdown" ? "bug.md" : "config.yml",
-                      object: {
-                        __typename: "Blob",
-                        text:
-                          kind === "form"
-                            ? "name: Local bug\ndescription: Report an issue\nbody:\n- type: textarea\n  attributes:\n    label: Details\n"
-                            : kind === "config"
-                              ? "blank_issues_enabled: false"
-                              : "---\nname: Local bug\nabout: Local bug\n---\nLocal body",
-                      },
-                    },
+                    templateEntry(
+                      kind === "form" ? "bug.yml" : kind === "markdown" ? "bug.md" : "config.yml",
+                      kind === "form"
+                        ? "name: Local bug\ndescription: Report an issue\nbody:\n- type: textarea\n  attributes:\n    label: Details\n"
+                        : kind === "config"
+                          ? "blank_issues_enabled: false"
+                          : "---\nname: Local bug\nabout: Local bug\n---\nLocal body",
+                    ),
                   ],
                 },
               },
@@ -484,15 +455,7 @@ describe("GitHubIssueTracker", () => {
                   forms: {
                     __typename: "Tree",
                     oid: "a".repeat(40),
-                    entries: [
-                      {
-                        name: "config.yml",
-                        object: {
-                          __typename: "Blob",
-                          text: "blank_issues_enabled: false",
-                        },
-                      },
-                    ],
+                    entries: [templateEntry("config.yml", "blank_issues_enabled: false")],
                   },
                   issueTemplates: [],
                 },
@@ -532,15 +495,7 @@ describe("GitHubIssueTracker", () => {
                 ? {
                     __typename: "Tree",
                     oid,
-                    entries: [
-                      {
-                        name: "bug.md",
-                        object: {
-                          __typename: "Blob",
-                          text: "Markdown",
-                        },
-                      },
-                    ],
+                    entries: [templateEntry("bug.md", "Markdown")],
                   }
                 : null,
               issueTemplates: defaults
@@ -1933,15 +1888,7 @@ describe("GitHubIssueTracker", () => {
               forms: {
                 __typename: "Tree",
                 oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                entries: [
-                  {
-                    name: "config.yml",
-                    object: {
-                      __typename: "Blob",
-                      text: config,
-                    },
-                  },
-                ],
+                entries: [templateEntry("config.yml", config)],
               },
             },
           },

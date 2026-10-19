@@ -1,5 +1,4 @@
 import { expect, it } from "@effect/vitest";
-import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -8,9 +7,9 @@ import {
   ConnectionId,
   IssueTrackerHost,
 } from "@t3tools/issue-tracker-core/server/IssueTrackerHost";
-import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 
 import * as JiraApi from "./JiraApi.ts";
+import { makeJiraTransport } from "./jiraTestHelpers.ts";
 import * as JiraIssueTracker from "./JiraIssueTracker.ts";
 import { JiraIssue, JiraUser, textToAdf } from "./jiraJson.ts";
 
@@ -69,27 +68,16 @@ function fakeJira(
   });
   return {
     calls,
-    api: JiraApi.make.pipe(
-      Effect.provideService(HttpClient.HttpClient, transport),
-      Effect.provideService(
-        IssueTrackerHost,
-        IssueTrackerHost.of({
-          credentials: {
-            get: (_kind, selected) =>
-              Effect.map(ConnectionId, (current) =>
-                Option.fromNullishOr(credentials[selected ?? current ?? "default"]),
-              ),
-          },
-        }),
-      ),
-      Effect.provide(SourceControlRateLimit.layer),
-      Effect.provideService(
-        Crypto.Crypto,
-        Crypto.make({
-          randomBytes: (size) => new Uint8Array(size),
-          digest: (_algorithm, data) => Effect.succeed(data),
-        }),
-      ),
+    api: makeJiraTransport(
+      transport,
+      IssueTrackerHost.of({
+        credentials: {
+          get: (_kind, selected) =>
+            Effect.map(ConnectionId, (current) =>
+              Option.fromNullishOr(credentials[selected ?? current ?? "default"]),
+            ),
+        },
+      }),
     ),
   };
 }

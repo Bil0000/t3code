@@ -1,13 +1,12 @@
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import * as Crypto from "effect/Crypto";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import { IssueCandidates, IssueFieldValues } from "@t3tools/contracts";
 import { IssueTrackerHost } from "@t3tools/issue-tracker-core/server/IssueTrackerHost";
-import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import { IssueTrackerError } from "@t3tools/issue-tracker-core/server/IssueTracker";
 import * as JiraApi from "./JiraApi.ts";
+import { makeJiraTransport } from "./jiraTestHelpers.ts";
 import * as JiraIssueTracker from "./JiraIssueTracker.ts";
 
 const target = { cwd: "/tmp", host: "example.atlassian.net", scope: "ENG", key: "ENG-1" };
@@ -175,22 +174,11 @@ function nativeFormFixture(
     deployment === "cloud"
       ? { site: host, email: "ada@example.test", token: "fake-token" }
       : { deployment, site: "https://" + host, token: "fake-pat" };
-  const transport = JiraApi.make.pipe(
-    Effect.provideService(HttpClient.HttpClient, http),
-    Effect.provideService(
-      IssueTrackerHost,
-      IssueTrackerHost.of({
-        credentials: { get: () => Effect.succeedSome(JSON.stringify(credential)) },
-      }),
-    ),
-    Effect.provide(SourceControlRateLimit.layer),
-    Effect.provideService(
-      Crypto.Crypto,
-      Crypto.make({
-        randomBytes: (size) => new Uint8Array(size),
-        digest: (_algorithm, data) => Effect.succeed(data),
-      }),
-    ),
+  const transport = makeJiraTransport(
+    http,
+    IssueTrackerHost.of({
+      credentials: { get: () => Effect.succeedSome(JSON.stringify(credential)) },
+    }),
   );
   return {
     host,
@@ -1131,20 +1119,9 @@ it.effect.each([
         ),
       );
     });
-    const transport = JiraApi.make.pipe(
-      Effect.provideService(HttpClient.HttpClient, http),
-      Effect.provideService(
-        IssueTrackerHost,
-        IssueTrackerHost.of({ credentials: { get: () => Effect.succeedSome(packed) } }),
-      ),
-      Effect.provide(SourceControlRateLimit.layer),
-      Effect.provideService(
-        Crypto.Crypto,
-        Crypto.make({
-          randomBytes: (size) => new Uint8Array(size),
-          digest: (_algorithm, data) => Effect.succeed(data),
-        }),
-      ),
+    const transport = makeJiraTransport(
+      http,
+      IssueTrackerHost.of({ credentials: { get: () => Effect.succeedSome(packed) } }),
     );
     const api = yield* JiraIssueTracker.make.pipe(
       Effect.provideServiceEffect(JiraApi.JiraApi, transport),
@@ -1244,31 +1221,20 @@ it.effect.each(["textColor", "subsup"])(
           HttpClientResponse.fromWeb(request, new Response(JSON.stringify(raw))),
         );
       });
-      const transport = JiraApi.make.pipe(
-        Effect.provideService(HttpClient.HttpClient, http),
-        Effect.provideService(
-          IssueTrackerHost,
-          IssueTrackerHost.of({
-            credentials: {
-              get: () =>
-                Effect.succeedSome(
-                  JSON.stringify({
-                    site: target.host,
-                    email: "ada@example.test",
-                    token: "fake-token",
-                  }),
-                ),
-            },
-          }),
-        ),
-        Effect.provide(SourceControlRateLimit.layer),
-        Effect.provideService(
-          Crypto.Crypto,
-          Crypto.make({
-            randomBytes: (size) => new Uint8Array(size),
-            digest: (_algorithm, data) => Effect.succeed(data),
-          }),
-        ),
+      const transport = makeJiraTransport(
+        http,
+        IssueTrackerHost.of({
+          credentials: {
+            get: () =>
+              Effect.succeedSome(
+                JSON.stringify({
+                  site: target.host,
+                  email: "ada@example.test",
+                  token: "fake-token",
+                }),
+              ),
+          },
+        }),
       );
       const api = yield* JiraIssueTracker.make.pipe(
         Effect.provideServiceEffect(JiraApi.JiraApi, transport),

@@ -91,6 +91,7 @@ import { PullRequestProviderError } from "@t3tools/source-control-core/server/Pu
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as IssueService from "../issue/IssueService.ts";
 import * as ThreadIssueService from "./ThreadIssueService.ts";
+import { emptyIssueDetailFields } from "./ThreadIssueService.testkit.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as RuntimeLayer from "./runtimeLayer.ts";
@@ -2397,34 +2398,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           assignees: [],
           labels: [],
           commentCount: 0,
-          writable: true,
-          capabilities: {
-            create: false,
-            edit: false,
-            comment: false,
-            labels: false,
-            assignees: false,
-            reactions: false,
-            templates: false,
-            linkedPullRequests: false,
-            events: false,
-            search: false,
-            states: [],
-            closeReasons: [],
-          },
-          viewerPermissions: {
-            setState: false,
-            comment: false,
-            edit: false,
-            labels: false,
-            assignees: false,
-          },
-          viewer: null,
-          body: "",
-          comments: [],
-          commentsCursor: null,
-          events: [],
-          linkedPullRequests: [],
+          ...emptyIssueDetailFields([]),
         };
         const events = yield* Queue.unbounded<
           OrchestrationV2DomainEvent | { handled: Deferred.Deferred<void> }
@@ -2797,34 +2771,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
                       assignees: [],
                       labels: [],
                       commentCount: 0,
-                      writable: true,
-                      capabilities: {
-                        create: false,
-                        edit: false,
-                        comment: false,
-                        labels: false,
-                        assignees: false,
-                        reactions: false,
-                        templates: false,
-                        linkedPullRequests: false,
-                        events: false,
-                        search: false,
-                        states: [snapshot.state],
-                        closeReasons: [],
-                      },
-                      viewerPermissions: {
-                        setState: false,
-                        comment: false,
-                        edit: false,
-                        labels: false,
-                        assignees: false,
-                      },
-                      viewer: null,
-                      body: "",
-                      comments: [],
-                      commentsCursor: null,
-                      events: [],
-                      linkedPullRequests: [],
+                      ...emptyIssueDetailFields([snapshot.state]),
                     };
                   }).pipe(
                     Effect.tap(() =>
@@ -3103,34 +3050,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
                       assignees: [],
                       labels: [],
                       commentCount: 0,
-                      writable: true,
-                      capabilities: {
-                        create: false,
-                        edit: false,
-                        comment: false,
-                        labels: false,
-                        assignees: false,
-                        reactions: false,
-                        templates: false,
-                        linkedPullRequests: false,
-                        events: false,
-                        search: false,
-                        states: [],
-                        closeReasons: [],
-                      },
-                      viewerPermissions: {
-                        setState: false,
-                        comment: false,
-                        edit: false,
-                        labels: false,
-                        assignees: false,
-                      },
-                      viewer: null,
-                      body: "",
-                      comments: [],
-                      commentsCursor: null,
-                      events: [],
-                      linkedPullRequests: [],
+                      ...emptyIssueDetailFields([]),
                     };
                   }),
               }),

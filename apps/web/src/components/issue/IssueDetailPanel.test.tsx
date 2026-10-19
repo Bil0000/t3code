@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { createIssueTestRoot } from "./issueTestUtils";
 
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -272,9 +273,7 @@ it.each([
       },
     };
     const detail = decodeDetail(state.detail);
-    const container = document.createElement("div");
-    document.body.append(container);
-    const root = createRoot(container);
+    const { container, root } = createIssueTestRoot();
     try {
       await act(async () =>
         root.render(
@@ -336,9 +335,7 @@ it("refreshes the issue and its scoped history from the header", async () => {
   const { issueEnvironment } = await import("~/state/issues");
   const signal = issueEnvironment.historyRefresh({ environmentId, input: reference });
   appAtomRegistry.set(signal, 0);
-  const container = document.createElement("div");
-  document.body.append(container);
-  const root = createRoot(container);
+  const { container, root } = createIssueTestRoot();
   try {
     await act(async () =>
       root.render(<IssueDetailPanel environmentId={environmentId} reference={reference} />),
@@ -419,9 +416,7 @@ it.each(["success", "comment-failure", "close-failure", "linear", "no-state-perm
       },
     };
     const updated = vi.fn();
-    const container = document.createElement("div");
-    document.body.append(container);
-    const root = createRoot(container);
+    const { container, root } = createIssueTestRoot();
     try {
       await act(async () =>
         root.render(
@@ -572,9 +567,7 @@ it.each(["none", "matched", "foreign-repository", "other-environment"])(
       }),
     );
     const select = vi.fn();
-    const container = document.createElement("div");
-    document.body.append(container);
-    const root = createRoot(container);
+    const { container, root } = createIssueTestRoot();
     try {
       await act(async () =>
         root.render(
@@ -654,9 +647,7 @@ it.each(["viewer-a", null])(
       scope: "org/repo",
       key: "1",
     };
-    const container = document.createElement("div");
-    document.body.append(container);
-    const root = createRoot(container);
+    const { container, root } = createIssueTestRoot();
     const pills = () => [
       ...container.querySelectorAll<HTMLButtonElement>('button[aria-label^="thumbs up,"]'),
     ];
@@ -764,9 +755,7 @@ it.each([
       scope: "org/repo",
       key: "1",
     };
-    const container = document.createElement("div");
-    document.body.append(container);
-    const root = createRoot(container);
+    const { container, root } = createIssueTestRoot();
     try {
       await act(async () =>
         root.render(<IssueDetailPanel environmentId={environmentId} reference={reference} />),
@@ -810,9 +799,7 @@ it("can comment after switching from History to an issue without history support
     scope: "org/repo",
     key: "1",
   };
-  const container = document.createElement("div");
-  document.body.append(container);
-  const root = createRoot(container);
+  const { container, root } = createIssueTestRoot();
   try {
     await act(async () =>
       root.render(<IssueDetailPanel environmentId={environmentId} reference={reference} />),
@@ -882,9 +869,7 @@ it("closes a parent edit draft when the issue identity changes", async () => {
     scope: "org/repo",
     key: "1",
   };
-  const container = document.createElement("div");
-  document.body.append(container);
-  const root = createRoot(container);
+  const { container, root } = createIssueTestRoot();
   try {
     await act(async () =>
       root.render(<IssueDetailPanel environmentId={environmentId} reference={reference} />),
@@ -935,9 +920,7 @@ it("closes a sub-issue draft instead of moving it to a different parent", async 
     scope: "org/repo",
     key: "1",
   };
-  const container = document.createElement("div");
-  document.body.append(container);
-  const root = createRoot(container);
+  const { container, root } = createIssueTestRoot();
   try {
     await act(async () =>
       root.render(<IssueDetailPanel environmentId={environmentId} reference={reference} />),
@@ -1397,9 +1380,7 @@ it.each([
     scope: "ENG",
     key: "ENG-1",
   };
-  const container = document.createElement("div");
-  document.body.append(container);
-  const root = createRoot(container);
+  const { container, root } = createIssueTestRoot();
   try {
     await act(async () =>
       root.render(<IssueDetailPanel environmentId={environmentId} reference={reference} />),
@@ -1509,9 +1490,7 @@ it.each(["unknown", "allowed", "denied", "unsupported", "no-grant", "read-only"]
       scope: "org/project",
       key: "42",
     };
-    const container = document.createElement("div");
-    document.body.append(container);
-    const root = createRoot(container);
+    const { container, root } = createIssueTestRoot();
     try {
       await act(async () =>
         root.render(<IssueDetailPanel environmentId={environmentId} reference={reference} />),
@@ -1611,9 +1590,7 @@ it.each([
         nextCursor: null,
       }),
     );
-    const container = document.createElement("div");
-    document.body.append(container);
-    const root = createRoot(container);
+    const { container, root } = createIssueTestRoot();
     try {
       await act(async () =>
         root.render(
@@ -1970,9 +1947,7 @@ it.each(["retry", "cancel", "permission", "state-only"])(
         events: false,
       },
     };
-    const container = document.createElement("div");
-    document.body.append(container);
-    const root = createRoot(container);
+    const { container, root } = createIssueTestRoot();
     const render = () =>
       act(async () =>
         root.render(<IssueDetailPanel environmentId={environmentId} reference={reference} />),
@@ -2121,9 +2096,7 @@ it("edits native ADF when the markdown body is read-only and clears edits for an
     viewerPermissions: { ...state.detail.viewerPermissions, edit: true },
   };
   state.detail = nativeDetail;
-  const container = document.createElement("div");
-  document.body.append(container);
-  const root = createRoot(container);
+  const { container, root } = createIssueTestRoot();
   const button = (text: string) =>
     [...document.querySelectorAll<HTMLButtonElement>("button")].find(
       (node) => node.textContent === text,
@@ -2235,9 +2208,7 @@ it("saves native comment edits, retains failed edits, and blocks a revoked permi
     capabilities: { ...state.detail.capabilities, richText: true, editComment: true },
   };
   state.detail = nativeDetail;
-  const container = document.createElement("div");
-  document.body.append(container);
-  const root = createRoot(container);
+  const { container, root } = createIssueTestRoot();
   const button = (text: string) =>
     [...container.querySelectorAll<HTMLButtonElement>("button")].find(
       (node) => node.textContent === text,
@@ -2324,9 +2295,7 @@ it("edits DC wiki descriptions and comments as exact source and resets drafts fo
     viewerPermissions: { ...state.detail.viewerPermissions, edit: true },
   };
   state.detail = wikiDetail;
-  const container = document.createElement("div");
-  document.body.append(container);
-  const root = createRoot(container);
+  const { container, root } = createIssueTestRoot();
   const button = (text: string) =>
     [...container.querySelectorAll<HTMLButtonElement>("button")].find(
       (node) => node.textContent === text,
@@ -2446,9 +2415,7 @@ it("edits Azure HTML descriptions and comments as exact source and fails closed 
     viewerPermissions: { ...state.detail.viewerPermissions, edit: true },
   };
   state.detail = htmlDetail;
-  const container = document.createElement("div");
-  document.body.append(container);
-  const root = createRoot(container);
+  const { container, root } = createIssueTestRoot();
   const button = (text: string) =>
     [...container.querySelectorAll<HTMLButtonElement>("button")].find(
       (node) => node.textContent === text,

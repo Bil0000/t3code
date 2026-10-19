@@ -18,6 +18,8 @@ import {
 
 const encode = (value: unknown) => JSON.stringify(value);
 
+const issueTarget = () => ({ cwd: "/w", host: "dev.azure.com", scope: "acme/Web App", key: "7" });
+
 const WORK_ITEM = {
   id: 7,
   rev: 2,
@@ -284,13 +286,7 @@ describe("AzureDevOpsIssueTracker", () => {
             multilineFieldsFormat: { "System.Description": "Markdown" },
           });
         });
-        const result = yield* api.update!({
-          cwd: "/w",
-          host: "dev.azure.com",
-          scope: "acme/Web App",
-          key: "7",
-          body: "",
-        }).pipe(Effect.result);
+        const result = yield* api.update!({ ...issueTarget(), body: "" }).pipe(Effect.result);
         expect(Result.isSuccess(result)).toBe(code === 200);
         if (Result.isFailure(result))
           expect(result.failure.reason).toBe(
@@ -328,10 +324,7 @@ describe("AzureDevOpsIssueTracker", () => {
         return encode({ ...WORK_ITEM, rev: 6 });
       });
       const error = yield* api.update!({
-        cwd: "/w",
-        host: "dev.azure.com",
-        scope: "acme/Web App",
-        key: "7",
+        ...issueTarget(),
         richBody: { format: "azure-html", document: "" },
       }).pipe(Effect.flip);
       expect(error.reason).toBe("failed");
@@ -397,12 +390,7 @@ describe("AzureDevOpsIssueTracker", () => {
             });
           return answer(args);
         });
-        const detail = yield* api.getIssue({
-          cwd: "/w",
-          host: "dev.azure.com",
-          scope: "acme/Web App",
-          key: "7",
-        });
+        const detail = yield* api.getIssue(issueTarget());
         expect(detail.body).toBe(body);
         expect(detail.richBody).toEqual(
           format === "HTML" || format === undefined
@@ -462,10 +450,7 @@ describe("AzureDevOpsIssueTracker", () => {
           ),
         );
         yield* api.update!({
-          cwd: "/w",
-          host: "dev.azure.com",
-          scope: "acme/Web App",
-          key: "7",
+          ...issueTarget(),
           ...(format === "HTML"
             ? { richBody: { format: "azure-html" as const, document: after } }
             : { body: after }),
@@ -498,13 +483,7 @@ describe("AzureDevOpsIssueTracker", () => {
           multilineFieldsFormat: { "System.Description": format },
         });
       });
-      const error = yield* api.update!({
-        cwd: "/w",
-        host: "dev.azure.com",
-        scope: "acme/Web App",
-        key: "7",
-        ...change,
-      }).pipe(Effect.flip);
+      const error = yield* api.update!({ ...issueTarget(), ...change }).pipe(Effect.flip);
       expect(error.reason).toBe("failed");
       expect(calls).toHaveLength(1);
       expect(calls[0]).not.toContain("PATCH");
@@ -525,7 +504,7 @@ describe("AzureDevOpsIssueTracker", () => {
               : { multilineFieldsFormat: { "System.Description": format } }),
           });
         });
-        const input = { cwd: "/w", host: "dev.azure.com", scope: "acme/Web App", key: "7" };
+        const input = issueTarget();
         yield* api.update!({ ...input, title: "Title", labels: [], assignees: [] });
         yield* api.setState!({ ...input, state: "Active" });
         expect(calls).toHaveLength(4);
@@ -706,14 +685,9 @@ describe("AzureDevOpsIssueTracker", () => {
           ? encode(WORK_ITEM)
           : encode({ id: 9, format: change.format, createdDate: "2026-07-02T00:00:00Z" });
       });
-      const error = yield* api.editComment!({
-        cwd: "/w",
-        host: "dev.azure.com",
-        scope: "acme/Web App",
-        key: "7",
-        commentId: "9",
-        ...change,
-      }).pipe(Effect.flip);
+      const error = yield* api.editComment!({ ...issueTarget(), commentId: "9", ...change }).pipe(
+        Effect.flip,
+      );
       expect(error.reason).toBe("failed");
       expect(calls).toHaveLength(2);
       expect(calls.flat()).not.toContain("PATCH");
@@ -783,7 +757,7 @@ describe("AzureDevOpsIssueTracker", () => {
             });
           throw new Error(`Unexpected native resource ${resource}`);
         });
-        const target = { cwd: "/w", host: "dev.azure.com", scope: "acme/Web App", key: "7" };
+        const target = issueTarget();
         if (operation === "states")
           expect((yield* api.getIssue(target)).states?.[0]?.name).toBe("Review");
         else if (operation === "create-template")
@@ -878,7 +852,7 @@ describe("AzureDevOpsIssueTracker", () => {
           });
         return answer(args);
       });
-      const target = { cwd: "/w", host: "dev.azure.com", scope: "acme/Web App", key: "7" };
+      const target = issueTarget();
       const detail = yield* api.getIssue(target);
       expect(detail.events).toMatchObject([{ kind: transition.kind, detail: transition.after }]);
       expect(paths).toHaveLength(4);
@@ -964,12 +938,7 @@ describe("AzureDevOpsIssueTracker", () => {
           }
           return answer(args);
         });
-        const detail = yield* api.getIssue({
-          cwd: "/w",
-          host: "dev.azure.com",
-          scope: "acme/Web App",
-          key: "7",
-        });
+        const detail = yield* api.getIssue(issueTarget());
         expect(detail.state).toMatchObject({
           name: "Review",
           id: "Review",
@@ -1246,7 +1215,7 @@ describe("AzureDevOpsIssueTracker", () => {
           ),
         ),
       );
-      const target = { cwd: "/w", host: "dev.azure.com", scope: "acme/Web App", key: "7" };
+      const target = issueTarget();
       expect(
         yield* api.create!({
           ...target,
@@ -1378,13 +1347,7 @@ describe("AzureDevOpsIssueTracker", () => {
             ),
           ),
         );
-        yield* api.update!({
-          cwd: "/w",
-          host: "dev.azure.com",
-          scope: "acme/Web App",
-          key: "7",
-          ...input,
-        });
+        yield* api.update!({ ...issueTarget(), ...input });
         expect(patches).toEqual([[{ op: "test", path: "/rev", value: 6 }, ...fields]]);
         expect(seen).toHaveLength(2);
         expect(seen[0]).toEqual(
@@ -1400,15 +1363,7 @@ describe("AzureDevOpsIssueTracker", () => {
         seen.push(args);
         return encode(WORK_ITEM);
       });
-      yield* api.update!({
-        cwd: "/w",
-        host: "dev.azure.com",
-        scope: "acme/Web App",
-        key: "7",
-        title: "Changed title",
-        labels: [],
-        assignees: [],
-      });
+      yield* api.update!({ ...issueTarget(), title: "Changed title", labels: [], assignees: [] });
       expect(seen).toHaveLength(2);
       expect(seen[1]).toEqual([
         "boards",
@@ -1483,15 +1438,7 @@ describe("AzureDevOpsIssueTracker", () => {
             ),
           ),
         );
-        const error = yield* Effect.flip(
-          api.update!({
-            cwd: "/w",
-            host: "dev.azure.com",
-            scope: "acme/Web App",
-            key: "7",
-            body: "**bold**",
-          }),
-        );
+        const error = yield* Effect.flip(api.update!({ ...issueTarget(), body: "**bold**" }));
         expect(error).toMatchObject({ operation: "update", reason, cause: { cause } });
         expect(seen).toHaveLength(2);
         expect(seen[1]).toContain("PATCH");
@@ -1625,16 +1572,7 @@ describe("AzureDevOpsIssueTracker", () => {
           ],
         });
       });
-      expect(
-        yield* api.getHierarchy!({
-          cwd: "/w",
-          host: "dev.azure.com",
-          scope: "acme/Web App",
-          key: "7",
-          cursor: "1",
-          limit: 1,
-        }),
-      ).toMatchObject({
+      expect(yield* api.getHierarchy!({ ...issueTarget(), cursor: "1", limit: 1 })).toMatchObject({
         parent: null,
         children: { items: [{ scope: "acme/Other App", key: "9" }], nextCursor: null },
       });
@@ -1654,13 +1592,7 @@ describe("AzureDevOpsIssueTracker", () => {
         seen.push(args);
         return answer(args);
       });
-      const input = {
-        cwd: "/w",
-        host: "dev.azure.com",
-        scope: "acme/Web App",
-        key: "7",
-        ...(viewer === undefined ? {} : { viewer }),
-      };
+      const input = { ...issueTarget(), ...(viewer === undefined ? {} : { viewer }) };
       const result = yield* operation === "getIssue" ? api.getIssue(input) : api.getComments(input);
       expect(result.comments[0]?.canEdit).toBe(canEdit);
       expect(seen).toHaveLength(operation === "getIssue" ? 4 : 2);
@@ -1685,14 +1617,7 @@ describe("AzureDevOpsIssueTracker", () => {
           createdBy: { uniqueName: "someone@acme.test" },
         });
       });
-      yield* api.editComment!({
-        cwd: "/w",
-        host: "dev.azure.com",
-        scope: "acme/Web App",
-        key: "7",
-        commentId: "1",
-        body: "Changed",
-      });
+      yield* api.editComment!({ ...issueTarget(), commentId: "1", body: "Changed" });
       expect(paths).toHaveLength(3);
       expect(paths.flat()).not.toContain("profiles");
       expect(paths.flat()).toContain("PATCH");
@@ -1752,14 +1677,7 @@ describe("AzureDevOpsIssueTracker", () => {
         ),
       );
       const error = yield* Effect.flip(
-        api.editComment!({
-          cwd: "/w",
-          host: "dev.azure.com",
-          scope: "acme/Web App",
-          key: "7",
-          commentId: "1",
-          body: "Changed",
-        }),
+        api.editComment!({ ...issueTarget(), commentId: "1", body: "Changed" }),
       );
       expect(error).toMatchObject({ operation: "editComment", reason, cause: { cause } });
       expect(seen).toHaveLength(3);
@@ -1849,15 +1767,7 @@ describe("AzureDevOpsIssueTracker", () => {
         return args[0] === "boards" ? encode(WORK_ITEM) : "{}";
       });
       for (const reacted of [true, false]) {
-        yield* api.setReaction!({
-          cwd: "/w",
-          host: "dev.azure.com",
-          scope: "acme/Web App",
-          key: "7",
-          subjectId: "12",
-          content,
-          reacted,
-        });
+        yield* api.setReaction!({ ...issueTarget(), subjectId: "12", content, reacted });
       }
       expect(seen).toHaveLength(4);
       for (const [index, method] of [
@@ -1885,12 +1795,7 @@ describe("AzureDevOpsIssueTracker", () => {
         seen.push([...args]);
         return answer(args);
       });
-      const issue = yield* api.getIssue({
-        cwd: "/w",
-        host: "dev.azure.com",
-        scope: "acme/Web App",
-        key: "7",
-      });
+      const issue = yield* api.getIssue(issueTarget());
       // Every command names the organization rather than detecting it from the checkout.
       for (const args of seen) {
         expect(args).toContain("https://dev.azure.com/acme");
@@ -1986,12 +1891,7 @@ describe("AzureDevOpsIssueTracker", () => {
               return encode({ ...WORK_ITEM, rev: total });
             return answer(args);
           });
-          const issue = yield* api.getIssue({
-            cwd: "/w",
-            host: "dev.azure.com",
-            scope: "acme/Web App",
-            key: "7",
-          });
+          const issue = yield* api.getIssue(issueTarget());
           expect(issue.historyTruncated).toBe(total > 100);
           expect(issue.state).toEqual({ category: "closed", name: "Resolved" });
           expect(issue.events.map((event) => event.kind)).toEqual([
@@ -2216,14 +2116,7 @@ it.effect.each(["asc", "desc"] as const)(
         }
         return encode({ ...WORK_ITEM, rev: rows.length, relations: [] });
       });
-      const selected = {
-        cwd: "/w",
-        host: "dev.azure.com",
-        scope: "acme/Web App",
-        key: "7",
-        connectionId: "account-a",
-        order,
-      };
+      const selected = { ...issueTarget(), connectionId: "account-a", order };
       for (const kind of ["comments", "history"] as const) {
         const ids: string[] = [];
         let cursor: string | undefined;
@@ -2298,9 +2191,7 @@ it.effect.each([
       calls.push(args);
       return args.includes("comments") ? encode(page) : encode(WORK_ITEM);
     });
-    const error = yield* api
-      .getComments({ cwd: "/w", host: "dev.azure.com", scope: "acme/Web App", key: "7" })
-      .pipe(Effect.flip);
+    const error = yield* api.getComments(issueTarget()).pipe(Effect.flip);
     expect(error.reason).toBe("failed");
     expect(calls).toHaveLength(2);
   }),
@@ -2315,12 +2206,7 @@ it.effect.each([null, 0, 1.5, 9007199254740992])(
         calls.push(args);
         return encode({ ...WORK_ITEM, ...(rev === null ? { rev: undefined } : { rev }) });
       });
-      yield* api.getHistory!({
-        cwd: "/w",
-        host: "dev.azure.com",
-        scope: "acme/Web App",
-        key: "7",
-      }).pipe(Effect.flip);
+      yield* api.getHistory!(issueTarget()).pipe(Effect.flip);
       expect(calls).toHaveLength(1);
     }),
 );
@@ -2336,12 +2222,7 @@ it.effect.each([[], [1, 1], [2, 3], [1]])(
           ? encode({ value: ids.map((id) => ({ id, revisedDate: "2026-10-14T01:00:00Z" })) })
           : encode(WORK_ITEM);
       });
-      yield* api.getHistory!({
-        cwd: "/w",
-        host: "dev.azure.com",
-        scope: "acme/Web App",
-        key: "7",
-      }).pipe(Effect.flip);
+      yield* api.getHistory!(issueTarget()).pipe(Effect.flip);
       expect(calls).toHaveLength(2);
     }),
 );
@@ -2359,7 +2240,7 @@ it.effect("rejects a repeated Azure comment token without another continuation r
           })
         : encode(WORK_ITEM);
     });
-    const target = { cwd: "/w", host: "dev.azure.com", scope: "acme/Web App", key: "7" };
+    const target = issueTarget();
     const first = yield* api.getComments(target);
     yield* api.getComments({ ...target, cursor: first.nextCursor! }).pipe(Effect.flip);
     expect(calls).toHaveLength(4);
@@ -2389,13 +2270,7 @@ it.effect("starts Azure detail at the true newest comment and revision pages", (
       }
       return encode({ ...WORK_ITEM, rev: 223, relations: [] });
     });
-    const result = yield* api.getIssue({
-      cwd: "/w",
-      host: "dev.azure.com",
-      scope: "acme/Web App",
-      key: "7",
-      connectionId: "selected-account",
-    });
+    const result = yield* api.getIssue({ ...issueTarget(), connectionId: "selected-account" });
     expect(result.comments.map((row) => row.id)).toEqual(
       rows
         .slice(-100)

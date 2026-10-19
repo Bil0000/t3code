@@ -14,6 +14,7 @@ import * as Context from "effect/Context";
 import type { IssueDetail } from "@t3tools/contracts";
 import * as IssueService from "../issue/IssueService.ts";
 import * as ThreadIssueService from "./ThreadIssueService.ts";
+import { emptyIssueDetailFields } from "./ThreadIssueService.testkit.ts";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
@@ -217,34 +218,7 @@ it.layer(layerTest)("account-qualified issue commands", (it) => {
                   labels: [],
                   commentCount: 0,
                   projectTitle: "Accounts",
-                  writable: true,
-                  capabilities: {
-                    create: false,
-                    edit: false,
-                    comment: false,
-                    labels: false,
-                    assignees: false,
-                    reactions: false,
-                    templates: false,
-                    linkedPullRequests: false,
-                    events: false,
-                    search: false,
-                    states: [snapshot.state],
-                    closeReasons: [],
-                  },
-                  viewerPermissions: {
-                    setState: false,
-                    comment: false,
-                    edit: false,
-                    labels: false,
-                    assignees: false,
-                  },
-                  viewer: null,
-                  body: "",
-                  comments: [],
-                  commentsCursor: null,
-                  events: [],
-                  linkedPullRequests: [],
+                  ...emptyIssueDetailFields([snapshot.state]),
                 };
               }),
           }),

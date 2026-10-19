@@ -14,6 +14,8 @@ import {
 } from "./forgejoIssueJson.ts";
 
 const encode = (value: unknown) => JSON.stringify(value);
+
+const issueTarget = () => ({ cwd: "/w", host: "forgejo.test:3000", scope: "acme/web", key: "42" });
 const isForgejoCliError = Schema.is(ForgejoCli.ForgejoCliError);
 const decodeTimelineEntry = Schema.decodeSync(ForgejoTimelineEntry);
 const decodeConversationCursor = Schema.decodeSync(
@@ -203,7 +205,7 @@ describe("Forgejo comment ordering", () => {
           if (/\/issues\/comments\/\d+\/reactions$/.test(input.path)) return { stdout: "[]" };
           return answer(input.path);
         });
-        const target = { cwd: "/w", host: "forgejo.test:3000", scope: "acme/web", key: "42" };
+        const target = issueTarget();
         const ids: string[] = [];
         let cursor: string | undefined;
         do {
@@ -240,14 +242,7 @@ describe("Forgejo comment ordering", () => {
             }
           : answer(input.path);
       });
-      const target = {
-        cwd: "/w",
-        host: "forgejo.test:3000",
-        scope: "acme/web",
-        key: "42",
-        connectionId: "account-a",
-        order: "asc" as const,
-      };
+      const target = { ...issueTarget(), connectionId: "account-a", order: "asc" as const };
       for (const method of ["getComments", "getHistory"] as const) {
         const read = (input: Parameters<typeof api.getComments>[0]) =>
           method === "getComments"
@@ -283,12 +278,7 @@ describe("Forgejo comment ordering", () => {
         paths.push(input.path);
         return { stdout: "[]" };
       });
-      const error = yield* api.getHistory!({
-        cwd: "/w",
-        host: "forgejo.test:3000",
-        scope: "acme/web",
-        key: "42",
-      }).pipe(Effect.flip);
+      const error = yield* api.getHistory!(issueTarget()).pipe(Effect.flip);
       expect(error.reason).toBe("failed");
       expect(paths).toEqual([]);
     }),
@@ -425,7 +415,7 @@ describe("ForgejoIssueTracker", () => {
             ]),
           };
         });
-        const target = { cwd: "/w", host: "forgejo.test:3000", scope: "acme/web", key: "42" };
+        const target = issueTarget();
         if (operation === "create")
           yield* api.create!({ ...target, title: "New", body: "", labels: values, assignees: [] });
         else yield* api.update!({ ...target, labels: values });
@@ -514,7 +504,7 @@ describe("ForgejoIssueTracker", () => {
         if (input.path.endsWith("/issue_config")) return { stdout: "{}" };
         return { stdout: encode(input.path.startsWith("repos/") ? ISSUE.labels : []) };
       });
-      const target = { cwd: "/w", host: "forgejo.test:3000", scope: "acme/web", key: "42" };
+      const target = issueTarget();
       const template = (yield* api.listTemplates!(target)).templates[0]!;
       expect(template.labels).toEqual([name]);
       requests.length = 0;
@@ -605,7 +595,7 @@ describe("ForgejoIssueTracker", () => {
             stderr: `Link: <https://forgejo.test/labels?page=2>; rel="${input.path.includes("page=2") ? "last" : "next"}"`,
           };
         });
-        const target = { cwd: "/w", host: "forgejo.test:3000", scope: "acme/web", key: "42" };
+        const target = issueTarget();
         if (operation === "create")
           yield* api.create!({ ...target, title: "New", body: "", labels: ["BUG"], assignees: [] });
         else yield* api.update!({ ...target, labels: ["BUG"] });
@@ -633,13 +623,7 @@ describe("ForgejoIssueTracker", () => {
           ),
         };
       });
-      yield* api.update!({
-        cwd: "/w",
-        host: "forgejo.test:3000",
-        scope: "acme/web",
-        key: "42",
-        labels: ["BUG"],
-      });
+      yield* api.update!({ ...issueTarget(), labels: ["BUG"] });
       expect(requests.filter((request) => request.method)).toMatchObject([
         { body: { labels: [99] } },
       ]);
@@ -681,7 +665,7 @@ describe("ForgejoIssueTracker", () => {
               }),
             };
           });
-          const target = { cwd: "/w", host: "forgejo.test:3000", scope: "acme/web", key: "42" };
+          const target = issueTarget();
           const result = yield* Effect.result(
             operation === "create"
               ? api.create!({ ...target, title: "New", body: "", labels: [name], assignees: [] })
@@ -733,14 +717,7 @@ describe("ForgejoIssueTracker", () => {
           return { stdout: encode({ id: 99, name: "different-label" }) };
         });
         const error = yield* Effect.flip(
-          api.update!({
-            cwd: "/w",
-            host: "forgejo.test:3000",
-            scope: "acme/web",
-            key: "42",
-            title: "Changed",
-            labels: ["later"],
-          }),
+          api.update!({ ...issueTarget(), title: "Changed", labels: ["later"] }),
         );
         expect(error.reason).toBe(failure === "rate-limit" ? "rate-limited" : "failed");
         expect(requests).toHaveLength(failure === "invalid-id" ? 2 : 8);
@@ -815,10 +792,7 @@ describe("ForgejoIssueTracker", () => {
                 assignees: [],
               })
             : api.update!({
-                cwd: "/w",
-                host: "forgejo.test:3000",
-                scope: "acme/web",
-                key: "42",
+                ...issueTarget(),
                 title: "Changed title",
                 labels: asIds ? native.map((label) => `forgejo-label:${label.id}`) : names,
               }),
@@ -883,7 +857,7 @@ describe("ForgejoIssueTracker", () => {
             detail: "No such scoped label.",
           });
         });
-        const target = { cwd: "/w", host: "forgejo.test:3000", scope: "acme/web", key: "42" };
+        const target = issueTarget();
         expect(
           (yield* api.listLabelCandidates!({ ...target, cursor: `${source}:2` })).items,
         ).toMatchObject([{ name }]);
@@ -1329,7 +1303,7 @@ describe("ForgejoIssueTracker", () => {
         if (input.path === "repos/acme/web/issues/42") return { stdout: encode(native) };
         return answer(input.path);
       });
-      const target = { cwd: "/w", host: "forgejo.test:3000", scope: "acme/web", key: "42" };
+      const target = issueTarget();
       expect(
         (yield* api.listIssues({
           ...target,
@@ -1417,14 +1391,7 @@ describe("ForgejoIssueTracker", () => {
         };
       });
       const result = yield* Effect.result(
-        api.editComment!({
-          cwd: "/w",
-          host: "forgejo.test:3000",
-          scope: "acme/web",
-          key: "42",
-          commentId: "7",
-          body: "Updated",
-        }),
+        api.editComment!({ ...issueTarget(), commentId: "7", body: "Updated" }),
       );
       expect(Result.isSuccess(result)).toBe(key === "42");
       expect(writes).toEqual(
@@ -1461,13 +1428,7 @@ describe("ForgejoIssueTracker", () => {
               stderr: 'link: <https://forgejo.test/last>; rel="last"',
             };
       });
-      const target = {
-        cwd: "/w",
-        host: "forgejo.test:3000",
-        scope: "acme/web",
-        key: "42",
-        limit: 1,
-      };
+      const target = { ...issueTarget(), limit: 1 };
       const history = yield* api.getHistory!({ ...target, order: "asc" });
       expect(history.items).toMatchObject([{ kind: "updated", detail: "Release" }]);
       expect(history.nextCursor).toBeTruthy();
@@ -1490,10 +1451,7 @@ describe("ForgejoIssueTracker", () => {
           return answer(input.path);
         });
         const page = yield* api.getComments({
-          cwd: "/w",
-          host: "forgejo.test:3000",
-          scope: "acme/web",
-          key: "42",
+          ...issueTarget(),
           order: "asc",
           ...(viewer === undefined ? {} : { viewer }),
         });
@@ -1579,15 +1537,7 @@ describe("ForgejoIssueTracker", () => {
       });
       for (const reacted of [true, false]) {
         yield* Effect.flip(
-          api.setReaction!({
-            cwd: "/w",
-            host: "forgejo.test:3000",
-            scope: "acme/web",
-            key: "42",
-            subjectId: "7",
-            content: "thumbs-up",
-            reacted,
-          }),
+          api.setReaction!({ ...issueTarget(), subjectId: "7", content: "thumbs-up", reacted }),
         );
       }
       expect(requests.map((input) => input.path)).toEqual([
@@ -1605,14 +1555,7 @@ describe("ForgejoIssueTracker", () => {
         requests.push(input);
         return { stdout: "{}" };
       });
-      yield* api.setReaction!({
-        cwd: "/w",
-        host: "forgejo.test:3000",
-        scope: "acme/web",
-        key: "42",
-        content: "thumbs-up",
-        reacted,
-      });
+      yield* api.setReaction!({ ...issueTarget(), content: "thumbs-up", reacted });
       expect(requests).toMatchObject([
         {
           path: "repos/acme/web/issues/42/reactions",
@@ -1630,12 +1573,7 @@ describe("ForgejoIssueTracker", () => {
         hosts.add(input.host);
         return answer(input.path);
       });
-      const issue = yield* api.getIssue({
-        cwd: "/w",
-        host: "forgejo.test:3000",
-        scope: "acme/web",
-        key: "42",
-      });
+      const issue = yield* api.getIssue(issueTarget());
       // The custom host and port reach the CLI, which resolves the login for them.
       expect([...hosts]).toEqual(["forgejo.test:3000"]);
       expect(issue).toMatchObject({
@@ -1711,12 +1649,7 @@ describe("ForgejoIssueTracker", () => {
             };
           return answer(input.path);
         });
-        const issue = yield* api.getIssue({
-          cwd: "/w",
-          host: "forgejo.test:3000",
-          scope: "acme/web",
-          key: "42",
-        });
+        const issue = yield* api.getIssue(issueTarget());
         expect(issue.reactionsTruncated).toBe(partial);
         expect(issue.reactions).toMatchObject([
           { content: "eyes", count: partial ? 50 : 1, viewerHasReacted: !partial },
@@ -1730,14 +1663,13 @@ describe("ForgejoIssueTracker", () => {
   it.effect("keeps unknown issue-unit controls available without using code push permission", () =>
     Effect.gen(function* () {
       const api = yield* tracker((input) => answer(input.path));
-      expect(
-        yield* api.getViewerPermissions({
-          cwd: "/w",
-          host: "forgejo.test:3000",
-          scope: "acme/web",
-          key: "42",
-        }),
-      ).toEqual({ setState: true, comment: true, edit: true, labels: true, assignees: true });
+      expect(yield* api.getViewerPermissions(issueTarget())).toEqual({
+        setState: true,
+        comment: true,
+        edit: true,
+        labels: true,
+        assignees: true,
+      });
     }),
   );
 
@@ -1748,12 +1680,7 @@ describe("ForgejoIssueTracker", () => {
         paths.push(input.path);
         return answer(input.path);
       });
-      yield* api.getViewerPermissions({
-        cwd: "/w",
-        host: "forgejo.test:3000",
-        scope: "acme/web",
-        key: "42",
-      });
+      yield* api.getViewerPermissions(issueTarget());
       expect(paths).toEqual(["repos/acme/web"]);
     }),
   );
@@ -1787,7 +1714,7 @@ describe("ForgejoIssueTracker", () => {
               };
         return answer(input.path);
       });
-      const target = { cwd: "/w", host: "forgejo.test:3000", scope: "acme/web", key: "42" };
+      const target = issueTarget();
       expect((yield* api.getViewerPermissions(target)).comment).toBe(true);
       const write = api.comment!({ ...target, body: "A comment" });
       if (denied) expect(yield* Effect.flip(write)).toMatchObject({ reason: "failed", detail });
@@ -1821,14 +1748,7 @@ describe("ForgejoIssueTracker", () => {
               }
             : answer(input.path),
         );
-        expect(
-          yield* api.getViewerPermissions({
-            cwd: "/w",
-            host: "forgejo.test:3000",
-            scope: "acme/web",
-            key: "42",
-          }),
-        ).toEqual({
+        expect(yield* api.getViewerPermissions(issueTarget())).toEqual({
           setState: false,
           comment: false,
           edit: false,
@@ -1879,12 +1799,7 @@ describe("ForgejoIssueTracker", () => {
             };
           return answer(input.path);
         });
-        const issue = yield* api.getIssue({
-          cwd: "/w",
-          host: "forgejo.test:3000",
-          scope: "acme/web",
-          key: "42",
-        });
+        const issue = yield* api.getIssue(issueTarget());
         expect(
           issue.linkedPullRequests.map((pull) => [pull.repository, pull.number, pull.state]),
         ).toEqual([
@@ -2040,12 +1955,7 @@ describe("ForgejoIssueTracker", () => {
             }
           : result;
       });
-      const issue = yield* api.getIssue({
-        cwd: "/w",
-        host: "forgejo.test:3000",
-        scope: "acme/web",
-        key: "42",
-      });
+      const issue = yield* api.getIssue(issueTarget());
       expect(issue.historyTruncated).toBe(true);
       expect(paths.filter((path) => path.includes("/timeline"))).toHaveLength(1);
     }),
@@ -2080,7 +1990,7 @@ describe("ForgejoIssueTracker", () => {
             };
           return answer(input.path);
         });
-        const target = { cwd: "/w", host: "forgejo.test:3000", scope: "acme/web", key: "42" };
+        const target = issueTarget();
         const error = yield* Effect.flip(
           operation === "create"
             ? api.create!({
@@ -2123,13 +2033,7 @@ describe("ForgejoIssueTracker", () => {
           };
         throw new Error(`unexpected path ${input.path}`);
       });
-      yield* api.update!({
-        cwd: "/w",
-        host: "forgejo.test:3000",
-        scope: "acme/web",
-        key: "42",
-        labels,
-      });
+      yield* api.update!({ ...issueTarget(), labels });
       expect(requests.filter((input) => input.method)).toMatchObject([
         { path: "repos/acme/web/issues/42/labels", method: "PUT", body: { labels: ids } },
       ]);
@@ -2170,7 +2074,7 @@ describe("ForgejoIssueTracker", () => {
           if (input.path.startsWith("repos/acme/web/assignees")) return { stdout: "[]" };
           return answer(input.path);
         });
-        const target = { cwd: "/w", host: "forgejo.test:3000", scope: "acme/web", key: "42" };
+        const target = issueTarget();
         expect(yield* api.listCandidates!(target)).toMatchObject({
           labels: [
             { id: "forgejo-label:3", name: "bug", color: "d73a4a" },
@@ -2312,14 +2216,7 @@ describe("ForgejoIssueTracker", () => {
         return input.path === path ? { ...response, stdoutTruncated: true } : response;
       });
       const error = yield* Effect.flip(
-        api.update!({
-          cwd: "/w",
-          host: "forgejo.test:3000",
-          scope: "acme/web",
-          key: "42",
-          title: "Changed",
-          labels: ["Old"],
-        }),
+        api.update!({ ...issueTarget(), title: "Changed", labels: ["Old"] }),
       );
       expect(error.detail).toContain("output limit");
       expect(writes).toEqual([]);
@@ -2366,15 +2263,7 @@ describe("ForgejoIssueTracker", () => {
           writes.push(input);
           return { stdout: encode(ISSUE), stderr: "HTTP/1.1 201 Created" };
         });
-        const error = yield* Effect.flip(
-          api.update!({
-            cwd: "/w",
-            host: "forgejo.test:3000",
-            scope: "acme/web",
-            key: "42",
-            assignees,
-          }),
-        );
+        const error = yield* Effect.flip(api.update!({ ...issueTarget(), assignees }));
         expect(error.detail).toContain("assignees");
         expect(writes).toHaveLength(1);
         expect(writes[0]).toMatchObject({ method: "PATCH", body: { assignees: [...assignees] } });
@@ -2455,13 +2344,7 @@ describe("ForgejoIssueTracker", () => {
             }),
           };
         });
-        yield* api.update!({
-          cwd: "/w",
-          host: "forgejo.test:3000",
-          scope: "acme/web",
-          key: "42",
-          assignees,
-        });
+        yield* api.update!({ ...issueTarget(), assignees });
         expect(writes).toHaveLength(1);
         expect(writes[0]?.body).toMatchObject({ assignees: [...assignees] });
       }),
@@ -2491,12 +2374,7 @@ describe("ForgejoIssueTracker", () => {
             };
           return answer(input.path);
         });
-        const issue = yield* api.getIssue({
-          cwd: "/w",
-          host: "forgejo.test:3000",
-          scope: "acme/web",
-          key: "42",
-        });
+        const issue = yield* api.getIssue(issueTarget());
         expect(issue.historyTruncated).toBe(true);
         expect(paths.filter((path) => path.includes("/timeline"))).toHaveLength(1);
       }),
@@ -2576,7 +2454,7 @@ describe("ForgejoIssueTracker", () => {
           if (/\/issues\/comments\/\d+\/reactions$/.test(route)) return { stdout: "[]" };
           return answer(input.path);
         });
-        const target = { cwd: "/w", host: "forgejo.test:3000", scope: "acme/web", key: "42" };
+        const target = issueTarget();
         const first = yield* api.getIssue(target);
         expect(first.comments.map((comment) => comment.id)).toEqual(
           Array.from({ length: 50 }, (_, index) => String(count - index)),
@@ -2627,7 +2505,7 @@ describe("ForgejoIssueTracker", () => {
           if (/\/issues\/comments\/\d+\/reactions$/.test(route!)) return { stdout: "[]" };
           return answer(input.path);
         });
-        const target = { cwd: "/w", host: "forgejo.test:3000", scope: "acme/web", key: "42" };
+        const target = issueTarget();
         const first = yield* api.getIssue(target);
         const ids = first.comments.map((comment) => comment.id);
         expect(ids).toEqual(comments.slice(0, 50).map((comment) => String(comment.id)));
@@ -2746,7 +2624,7 @@ describe("ForgejoIssueTracker", () => {
           if (/\/issues\/comments\/\d+\/reactions$/.test(route!)) return { stdout: "[]" };
           return answer(input.path);
         });
-        const target = { cwd: "/w", host: "forgejo.test:3000", scope: "acme/web", key: "42" };
+        const target = issueTarget();
         let cursor: string | undefined;
         const ids: string[] = [];
         for (let page = 1; page <= 4; page++) {
@@ -2790,13 +2668,7 @@ describe("ForgejoIssueTracker", () => {
         if (/\/issues\/comments\/\d+\/reactions$/.test(route)) return { stdout: "[]" };
         return answer(input.path);
       });
-      const target = {
-        cwd: "/w",
-        host: "forgejo.test:3000",
-        scope: "acme/web",
-        key: "42",
-        order: "asc" as const,
-      };
+      const target = { ...issueTarget(), order: "asc" as const };
       const first = yield* api.getComments(target);
       const page = yield* api.getComments({ ...target, cursor: first.nextCursor! });
       expect(page.comments.map((comment) => comment.id)).toEqual(["51"]);
@@ -2841,7 +2713,7 @@ describe("ForgejoIssueTracker", () => {
         if (/\/issues\/comments\/\d+\/reactions$/.test(route!)) return { stdout: "[]" };
         return answer(input.path);
       });
-      const target = { cwd: "/w", host: "forgejo.test:3000", scope: "acme/web", key: "42" };
+      const target = issueTarget();
       const first = yield* api.getIssue(target);
       expect(first.comments.map((comment) => comment.id)).toEqual(
         Array.from({ length: Math.min(count, 50) }, (_, index) => String(index + 1)),

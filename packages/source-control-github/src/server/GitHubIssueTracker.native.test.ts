@@ -13,6 +13,8 @@ import * as GitHubQuota from "./GitHubQuota.ts";
 import * as GitHubIssueTracker from "./GitHubIssueTracker.ts";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 
+import { templateEntry } from "./issue-test-fixtures.ts";
+
 const NOW = Date.parse("2026-10-05T12:00:00.000Z");
 
 function harness(respond: (request: HttpClientRequest.HttpClientRequest) => Response) {
@@ -96,13 +98,10 @@ describe("GitHub issues over native HTTP", () => {
                     __typename: "Tree",
                     oid: "a".repeat(40),
                     entries: [
-                      {
-                        name: "bug.md",
-                        object: {
-                          __typename: "Blob",
-                          text: "---\nname: Bug report\nabout: Report a bug\n---\nBody",
-                        },
-                      },
+                      templateEntry(
+                        "bug.md",
+                        "---\nname: Bug report\nabout: Report a bug\n---\nBody",
+                      ),
                     ],
                   }
                 : null,
@@ -677,51 +676,23 @@ describe("GitHub issues over native HTTP", () => {
               oid: "a".repeat(40),
               entries: defaults
                 ? [
-                    {
-                      name: "default.yml",
-                      object: {
-                        __typename: "Blob",
-                        text: "name: Default\ndescription: Report an issue\nbody:\n- type: textarea\n  attributes:\n    label: Details\n",
-                      },
-                    },
-                    {
-                      name: "config.yml",
-                      object: {
-                        __typename: "Blob",
-                        text: "blank_issues_enabled: false",
-                      },
-                    },
+                    templateEntry(
+                      "default.yml",
+                      "name: Default\ndescription: Report an issue\nbody:\n- type: textarea\n  attributes:\n    label: Details\n",
+                    ),
+                    templateEntry("config.yml", "blank_issues_enabled: false"),
                   ]
                 : kind === "local"
                   ? [
-                      {
-                        name: "local.yml",
-                        object: {
-                          __typename: "Blob",
-                          text: "name: Local\ndescription: Report an issue\nbody:\n- type: textarea\n  attributes:\n    label: Details\n",
-                        },
-                      },
+                      templateEntry(
+                        "local.yml",
+                        "name: Local\ndescription: Report an issue\nbody:\n- type: textarea\n  attributes:\n    label: Details\n",
+                      ),
                     ]
                   : kind === "config-only"
-                    ? [
-                        {
-                          name: "config.yml",
-                          object: {
-                            __typename: "Blob",
-                            text: "blank_issues_enabled: false",
-                          },
-                        },
-                      ]
+                    ? [templateEntry("config.yml", "blank_issues_enabled: false")]
                     : kind === "invalid-local"
-                      ? [
-                          {
-                            name: "local.yml",
-                            object: {
-                              __typename: "Blob",
-                              text: "name: [",
-                            },
-                          },
-                        ]
+                      ? [templateEntry("local.yml", "name: [")]
                       : [],
             },
           },
@@ -811,20 +782,11 @@ describe("GitHub issues over native HTTP", () => {
               oid: "a".repeat(40),
               entries: defaults
                 ? [
-                    {
-                      name: "default.yml",
-                      object: {
-                        __typename: "Blob",
-                        text: "name: Default\ndescription: Report an issue\nbody:\n- type: textarea\n  attributes: {label: Details}",
-                      },
-                    },
-                    {
-                      name: "config.yml",
-                      object: {
-                        __typename: "Blob",
-                        text: "blank_issues_enabled: false",
-                      },
-                    },
+                    templateEntry(
+                      "default.yml",
+                      "name: Default\ndescription: Report an issue\nbody:\n- type: textarea\n  attributes: {label: Details}",
+                    ),
+                    templateEntry("config.yml", "blank_issues_enabled: false"),
                   ]
                 : [
                     {
@@ -880,13 +842,10 @@ describe("GitHub issues over native HTTP", () => {
                 __typename: "Tree",
                 oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 entries: [
-                  {
-                    name: "invalid.yml",
-                    object: {
-                      __typename: "Blob",
-                      text: "name: Invalid\nbody:\n- type: textarea\n  attributes: {label: Details}",
-                    },
-                  },
+                  templateEntry(
+                    "invalid.yml",
+                    "name: Invalid\nbody:\n- type: textarea\n  attributes: {label: Details}",
+                  ),
                 ],
               },
             },
@@ -926,23 +885,12 @@ describe("GitHub issues over native HTTP", () => {
                       __typename: "Tree",
                       oid: "a".repeat(40),
                       entries: [
-                        {
-                          name: "upload.yml",
-                          object: {
-                            __typename: "Blob",
-                            text: `name: Upload report\ndescription: Add a file\nbody:\n- type: upload\n  attributes: {label: Screenshot}${kind === "mixed" ? "\n- type: textarea\n  attributes: {label: Details}" : ""}`,
-                          },
-                        },
+                        templateEntry(
+                          "upload.yml",
+                          `name: Upload report\ndescription: Add a file\nbody:\n- type: upload\n  attributes: {label: Screenshot}${kind === "mixed" ? "\n- type: textarea\n  attributes: {label: Details}" : ""}`,
+                        ),
                         ...(defaults
-                          ? [
-                              {
-                                name: "config.yml",
-                                object: {
-                                  __typename: "Blob",
-                                  text: "blank_issues_enabled: false",
-                                },
-                              },
-                            ]
+                          ? [templateEntry("config.yml", "blank_issues_enabled: false")]
                           : []),
                       ],
                     }
@@ -1195,20 +1143,14 @@ describe("GitHub issues over native HTTP", () => {
                     __typename: "Tree",
                     oid: "a".repeat(40),
                     entries: [
-                      {
-                        name: "bug.yml",
-                        object: {
-                          __typename: "Blob",
-                          text: "name: Bug\ndescription: Report an issue\nbody:\n- type: textarea\n  attributes:\n    label: Details\n",
-                        },
-                      },
-                      {
-                        name: "config.yml",
-                        object: {
-                          __typename: "Blob",
-                          text: "blank_issues_enabled: false\ncontact_links: [{name: Support, about: Ask, url: 'https://example.com'}]",
-                        },
-                      },
+                      templateEntry(
+                        "bug.yml",
+                        "name: Bug\ndescription: Report an issue\nbody:\n- type: textarea\n  attributes:\n    label: Details\n",
+                      ),
+                      templateEntry(
+                        "config.yml",
+                        "blank_issues_enabled: false\ncontact_links: [{name: Support, about: Ask, url: 'https://example.com'}]",
+                      ),
                     ],
                   }
                 : null,

@@ -1,7 +1,5 @@
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Crypto from "effect/Crypto";
-import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import * as Option from "effect/Option";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
@@ -11,6 +9,7 @@ import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import { IssueTrackerHost } from "@t3tools/issue-tracker-core/server/IssueTrackerHost";
 
 import * as JiraApi from "./JiraApi.ts";
+import { makeJiraTransport } from "./jiraTestHelpers.ts";
 import * as JiraIssueTracker from "./JiraIssueTracker.ts";
 
 const packed = JSON.stringify({
@@ -79,18 +78,7 @@ function fakeJira(
       ),
     );
   });
-  const transport = JiraApi.make.pipe(
-    Effect.provideService(IssueTrackerHost, host),
-    Effect.provideService(HttpClient.HttpClient, http),
-    Effect.provide(SourceControlRateLimit.layer),
-    Effect.provideService(
-      Crypto.Crypto,
-      Crypto.make({
-        randomBytes: (size) => new Uint8Array(size),
-        digest: (_algorithm, data) => Effect.succeed(data),
-      }),
-    ),
-  );
+  const transport = makeJiraTransport(http, host);
   return {
     api: JiraIssueTracker.make.pipe(Effect.provideServiceEffect(JiraApi.JiraApi, transport)),
     calls,

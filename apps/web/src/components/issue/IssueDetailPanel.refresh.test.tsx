@@ -286,6 +286,25 @@ const button = (label: string) =>
     (element) => element.textContent === label,
   )!;
 
+function renderPanel(target: IssueRef = reference) {
+  return act(async () =>
+    root.render(
+      <RegistryContext.Provider value={appAtomRegistry}>
+        <IssueDetailPanel environmentId={environmentId} reference={target} />
+      </RegistryContext.Provider>,
+    ),
+  );
+}
+
+function readDetail(target: IssueRef = reference) {
+  return act(async () => {
+    await executeAtomQuery(
+      appAtomRegistry,
+      issueEnvironment.detail({ environmentId, input: target }),
+    );
+  });
+}
+
 it.each(["supported", "unmounted", "unsupported", "failed-detail", "failed-related"])(
   "refreshes only supported mounted first pages from the header (%s)",
   async (kind) => {
@@ -347,19 +366,8 @@ it.each(["supported", "unmounted", "unsupported", "failed-detail", "failed-relat
           throw new Error(`Unexpected RPC ${tag}`);
       }
     });
-    await act(async () =>
-      root.render(
-        <RegistryContext.Provider value={appAtomRegistry}>
-          <IssueDetailPanel environmentId={environmentId} reference={reference} />
-        </RegistryContext.Provider>,
-      ),
-    );
-    await act(async () => {
-      await executeAtomQuery(
-        appAtomRegistry,
-        issueEnvironment.detail({ environmentId, input: reference }),
-      );
-    });
+    await renderPanel();
+    await readDetail();
     if (state.failedDetail) {
       expect(container.textContent).toContain("Could not load this issue");
       expect(container.querySelector('[aria-label="Refresh issue"]')).toBeNull();
@@ -416,12 +424,7 @@ it.each(["supported", "unmounted", "unsupported", "failed-detail", "failed-relat
     await act(async () =>
       container.querySelector<HTMLButtonElement>('[aria-label="Refresh issue"]')!.click(),
     );
-    await act(async () => {
-      await executeAtomQuery(
-        appAtomRegistry,
-        issueEnvironment.detail({ environmentId, input: reference }),
-      );
-    });
+    await readDetail();
     expect(container.textContent).toContain("New issue");
     if (supported && kind !== "unmounted") {
       expect(container.textContent).toContain("New PR");
@@ -483,19 +486,8 @@ it("reads one dependency page per direction, accumulates pages and retries a fai
       });
     throw new Error("Unexpected RPC " + tag);
   });
-  await act(async () =>
-    root.render(
-      <RegistryContext.Provider value={appAtomRegistry}>
-        <IssueDetailPanel environmentId={environmentId} reference={nativeRef} />
-      </RegistryContext.Provider>,
-    ),
-  );
-  await act(async () => {
-    await executeAtomQuery(
-      appAtomRegistry,
-      issueEnvironment.detail({ environmentId, input: nativeRef }),
-    );
-  });
+  await renderPanel(nativeRef);
+  await readDetail(nativeRef);
   await act(async () => {
     await Promise.all(
       (["blocks", "blocked-by"] as const).map((direction) =>
@@ -590,19 +582,8 @@ it.each(["success", "failed-refresh", "unsupported", "unmounted"])(
         });
       throw new Error(`Unexpected RPC ${tag}`);
     });
-    await act(async () =>
-      root.render(
-        <RegistryContext.Provider value={appAtomRegistry}>
-          <IssueDetailPanel environmentId={environmentId} reference={nativeRef} />
-        </RegistryContext.Provider>,
-      ),
-    );
-    await act(async () => {
-      await executeAtomQuery(
-        appAtomRegistry,
-        issueEnvironment.detail({ environmentId, input: nativeRef }),
-      );
-    });
+    await renderPanel(nativeRef);
+    await readDetail(nativeRef);
     if (supported) {
       await act(async () => {
         await Promise.all(
@@ -639,12 +620,7 @@ it.each(["success", "failed-refresh", "unsupported", "unmounted"])(
     await act(async () =>
       container.querySelector<HTMLButtonElement>('[aria-label="Refresh issue"]')!.click(),
     );
-    await act(async () => {
-      await executeAtomQuery(
-        appAtomRegistry,
-        issueEnvironment.detail({ environmentId, input: nativeRef }),
-      );
-    });
+    await readDetail(nativeRef);
     expect(container.textContent).toContain("New issue");
     const reads = state.read.mock.calls
       .slice(before)
@@ -732,13 +708,7 @@ it.each([true, false])(
         });
       throw new Error("Unexpected RPC " + tag);
     });
-    await act(async () =>
-      root.render(
-        <RegistryContext.Provider value={appAtomRegistry}>
-          <IssueDetailPanel environmentId={environmentId} reference={reference} />
-        </RegistryContext.Provider>,
-      ),
-    );
+    await renderPanel();
     await act(async () => {
       await executeAtomQuery(
         appAtomRegistry,
@@ -814,13 +784,7 @@ it.each(["success", "permission"])(
         });
       throw new Error("Unexpected RPC " + tag);
     });
-    await act(async () =>
-      root.render(
-        <RegistryContext.Provider value={appAtomRegistry}>
-          <IssueDetailPanel environmentId={environmentId} reference={nativeRef} />
-        </RegistryContext.Provider>,
-      ),
-    );
+    await renderPanel(nativeRef);
     await act(async () => {
       await executeAtomQuery(
         appAtomRegistry,
@@ -923,19 +887,8 @@ it("loads every linked PR page once, keeps three rows, and expands without new r
     }
     throw new Error(`Unexpected RPC ${tag}`);
   });
-  await act(async () =>
-    root.render(
-      <RegistryContext.Provider value={appAtomRegistry}>
-        <IssueDetailPanel environmentId={environmentId} reference={reference} />
-      </RegistryContext.Provider>,
-    ),
-  );
-  await act(async () => {
-    await executeAtomQuery(
-      appAtomRegistry,
-      issueEnvironment.detail({ environmentId, input: reference }),
-    );
-  });
+  await renderPanel();
+  await readDetail();
   const reads = () =>
     state.read.mock.calls.filter(([tag]) => tag === WS_METHODS.issuesLinkedPullRequests);
   expect(reads().map(([, input]) => input.cursor)).toEqual([undefined, "1", "2"]);
@@ -985,19 +938,8 @@ it("retains linked PRs on a failed continuation, retries once, and stops a repea
     }
     throw new Error(`Unexpected RPC ${tag}`);
   });
-  await act(async () =>
-    root.render(
-      <RegistryContext.Provider value={appAtomRegistry}>
-        <IssueDetailPanel environmentId={environmentId} reference={reference} />
-      </RegistryContext.Provider>,
-    ),
-  );
-  await act(async () => {
-    await executeAtomQuery(
-      appAtomRegistry,
-      issueEnvironment.detail({ environmentId, input: reference }),
-    );
-  });
+  await renderPanel();
+  await readDetail();
   expect(container.textContent).toContain("Retained PR 2");
   expect(container.textContent).toContain("Native related data unavailable");
   expect(attempts).toBe(1);
@@ -1159,19 +1101,8 @@ it("clears continued comments when the detail seed changes and does not call a t
       });
     throw new Error(`Unexpected RPC ${tag}`);
   });
-  await act(async () =>
-    root.render(
-      <RegistryContext.Provider value={appAtomRegistry}>
-        <IssueDetailPanel environmentId={environmentId} reference={reference} />
-      </RegistryContext.Provider>,
-    ),
-  );
-  await act(async () => {
-    await executeAtomQuery(
-      appAtomRegistry,
-      issueEnvironment.detail({ environmentId, input: reference }),
-    );
-  });
+  await renderPanel();
+  await readDetail();
   await act(async () => intersect(container.querySelector('[aria-label="Activity"]')!));
   expect(container.textContent).toContain("old-tail-row");
   changed = true;
@@ -1222,19 +1153,8 @@ it("keeps comments readable and links the native issue when history orders are e
       });
     throw new Error(`Unexpected RPC ${tag}`);
   });
-  await act(async () =>
-    root.render(
-      <RegistryContext.Provider value={appAtomRegistry}>
-        <IssueDetailPanel environmentId={environmentId} reference={reference} />
-      </RegistryContext.Provider>,
-    ),
-  );
-  await act(async () => {
-    await executeAtomQuery(
-      appAtomRegistry,
-      issueEnvironment.detail({ environmentId, input: reference }),
-    );
-  });
+  await renderPanel();
+  await readDetail();
   expect(container.textContent).toContain("Readable native comment");
   expect(container.textContent).not.toContain("Nothing has happened");
   await act(async () => button("History").click());
@@ -1284,19 +1204,8 @@ it("keeps newest comments on a failed older read and retries without a duplicate
       });
     throw new Error(`Unexpected RPC ${tag}`);
   });
-  await act(async () =>
-    root.render(
-      <RegistryContext.Provider value={appAtomRegistry}>
-        <IssueDetailPanel environmentId={environmentId} reference={reference} />
-      </RegistryContext.Provider>,
-    ),
-  );
-  await act(async () => {
-    await executeAtomQuery(
-      appAtomRegistry,
-      issueEnvironment.detail({ environmentId, input: reference }),
-    );
-  });
+  await renderPanel();
+  await readDetail();
   expect(container.textContent).toContain("Latest native comment");
   expect(container.textContent).toContain("Native comments unavailable");
   state.failedComments = false;
@@ -1357,19 +1266,8 @@ it.each([
         });
       throw new Error(`Unexpected RPC ${tag}`);
     });
-    await act(async () =>
-      root.render(
-        <RegistryContext.Provider value={appAtomRegistry}>
-          <IssueDetailPanel environmentId={environmentId} reference={nativeRef} />
-        </RegistryContext.Provider>,
-      ),
-    );
-    await act(async () => {
-      await executeAtomQuery(
-        appAtomRegistry,
-        issueEnvironment.detail({ environmentId, input: nativeRef }),
-      );
-    });
+    await renderPanel(nativeRef);
+    await readDetail(nativeRef);
     const reads = state.read.mock.calls.filter(([tag]) => tag === WS_METHODS.issuesComments);
     expect(reads.map(([, input]) => input)).toEqual([
       {
@@ -1469,19 +1367,8 @@ it("starts oldest comments without a cursor, drops a stale newest tail, and keep
     }
     throw new Error(`Unexpected RPC ${tag}`);
   });
-  await act(async () =>
-    root.render(
-      <RegistryContext.Provider value={appAtomRegistry}>
-        <IssueDetailPanel environmentId={environmentId} reference={nativeRef} />
-      </RegistryContext.Provider>,
-    ),
-  );
-  await act(async () => {
-    await executeAtomQuery(
-      appAtomRegistry,
-      issueEnvironment.detail({ environmentId, input: nativeRef }),
-    );
-  });
+  await renderPanel(nativeRef);
+  await readDetail(nativeRef);
   const draft = container.querySelector<HTMLTextAreaElement>('[aria-label="Add a comment"]')!;
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
@@ -1586,19 +1473,8 @@ it.each([
       }
       throw new Error(`Unexpected RPC ${tag}`);
     });
-    await act(async () =>
-      root.render(
-        <RegistryContext.Provider value={appAtomRegistry}>
-          <IssueDetailPanel environmentId={environmentId} reference={nativeRef} />
-        </RegistryContext.Provider>,
-      ),
-    );
-    await act(async () => {
-      await executeAtomQuery(
-        appAtomRegistry,
-        issueEnvironment.detail({ environmentId, input: nativeRef }),
-      );
-    });
+    await renderPanel(nativeRef);
+    await readDetail(nativeRef);
     const older = () =>
       [...container.querySelectorAll("article")].find((node) =>
         node.textContent?.includes("Older owned comment"),
@@ -1701,19 +1577,8 @@ it("restarts a shifted Jira seed at the same cursor and reads every boundary com
     }
     throw new Error(`Unexpected RPC ${tag}`);
   });
-  await act(async () =>
-    root.render(
-      <RegistryContext.Provider value={appAtomRegistry}>
-        <IssueDetailPanel environmentId={environmentId} reference={nativeRef} />
-      </RegistryContext.Provider>,
-    ),
-  );
-  await act(async () => {
-    await executeAtomQuery(
-      appAtomRegistry,
-      issueEnvironment.detail({ environmentId, input: nativeRef }),
-    );
-  });
+  await renderPanel(nativeRef);
+  await readDetail(nativeRef);
   expect(container.querySelectorAll("article")).toHaveLength(100);
   shifted = true;
   await act(async () =>
@@ -1758,19 +1623,8 @@ it("keeps a saved older-comment edit through a stale detail read and reopening t
       });
     throw new Error(`Unexpected RPC ${tag}`);
   });
-  await act(async () =>
-    root.render(
-      <RegistryContext.Provider value={appAtomRegistry}>
-        <IssueDetailPanel environmentId={environmentId} reference={reference} />
-      </RegistryContext.Provider>,
-    ),
-  );
-  await act(async () => {
-    await executeAtomQuery(
-      appAtomRegistry,
-      issueEnvironment.detail({ environmentId, input: reference }),
-    );
-  });
+  await renderPanel();
+  await readDetail();
   const edit = () =>
     [...container.querySelectorAll("article")]
       .find((node) => node.textContent?.includes("older edit"))!
