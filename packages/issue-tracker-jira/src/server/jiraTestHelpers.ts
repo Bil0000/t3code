@@ -23,3 +23,9 @@ export function makeJiraTransport(
     ),
   );
 }
+
+export const jiraDocument = <Content extends unknown[]>(content: Content) => ({
+  type: "doc",
+  version: 1,
+  content,
+});

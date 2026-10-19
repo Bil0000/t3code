@@ -1,3 +1,4 @@
+import type { AuthEnvironmentScopes, AuthSessionState } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -24,4 +25,16 @@ export const makeIssueTestRuntime = Effect.gen(function* () {
       } as EnvironmentRegistry.EnvironmentRegistry["Service"]),
     ),
   );
+});
+
+export const makeIssueTestSession = (...scopes: AuthEnvironmentScopes): AuthSessionState => ({
+  authenticated: true,
+  auth: {
+    policy: "remote-reachable",
+    bootstrapMethods: [],
+    sessionMethods: [],
+    sessionCookieName: "test",
+  },
+  scopes,
+  permissions: [...scopes],
 });

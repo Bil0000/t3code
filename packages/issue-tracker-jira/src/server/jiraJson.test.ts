@@ -2,13 +2,17 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { adfToText, isEditableAdf, buildJql, normalizeJiraIssue, textToAdf } from "./jiraJson.ts";
 
+const jiraDocument = <Content extends unknown[]>(content: Content) => ({
+  type: "doc",
+  version: 1,
+  content,
+});
+
 describe("Jira document conversion", () => {
   it("keeps paragraphs, line breaks, mentions, links and list text", () => {
     expect(
-      adfToText({
-        type: "doc",
-        version: 1,
-        content: [
+      adfToText(
+        jiraDocument([
           {
             type: "paragraph",
             content: [
@@ -27,19 +31,15 @@ describe("Jira document conversion", () => {
               },
             ],
           },
-        ],
-      }),
+        ]),
+      ),
     ).toBe("Hello @Ada\nhttps://example.test/pr/1\n\n- Do work");
   });
 
   it("writes user text as valid ADF without interpreting markup", () => {
     const text = "# Details\n\n<script>literal</script>\nsecond line";
     expect(adfToText(textToAdf(text))).toBe(text);
-    expect(textToAdf("")).toEqual({
-      type: "doc",
-      version: 1,
-      content: [{ type: "paragraph", content: [] }],
-    });
+    expect(textToAdf("")).toEqual(jiraDocument([{ type: "paragraph", content: [] }]));
   });
 
   it.each([
@@ -52,10 +52,8 @@ describe("Jira document conversion", () => {
     { attrs: { order: "7" }, expected: "1. First\n2. Second" },
   ])("uses the ordered list start for attrs $attrs", ({ attrs, expected }) => {
     expect(
-      adfToText({
-        type: "doc",
-        version: 1,
-        content: [
+      adfToText(
+        jiraDocument([
           {
             type: "orderedList",
             attrs,
@@ -64,18 +62,14 @@ describe("Jira document conversion", () => {
               content: [{ type: "paragraph", content: [{ type: "text", text }] }],
             })),
           },
-        ],
-      }),
+        ]),
+      ),
     ).toBe(expected);
   });
 
   it("rejects malformed, excessive and unknown content instead of dropping it", () => {
-    expect(() =>
-      adfToText({ type: "doc", version: 1, content: [{ type: "unknownMedia" }] }),
-    ).toThrow();
-    expect(() =>
-      adfToText({ type: "doc", version: 1, content: [{ type: "text", text: "x".repeat(65_537) }] }),
-    ).toThrow();
+    expect(() => adfToText(jiraDocument([{ type: "unknownMedia" }]))).toThrow();
+    expect(() => adfToText(jiraDocument([{ type: "text", text: "x".repeat(65_537) }]))).toThrow();
     expect(() => adfToText({ type: "paragraph" })).toThrow();
     expect(() => textToAdf("\n".repeat(20_000))).toThrow();
   });
@@ -83,10 +77,8 @@ describe("Jira document conversion", () => {
 
 it("keeps link destinations in Jira text marks", () => {
   expect(
-    adfToText({
-      type: "doc",
-      version: 1,
-      content: [
+    adfToText(
+      jiraDocument([
         {
           type: "paragraph",
           content: [
@@ -97,8 +89,8 @@ it("keeps link destinations in Jira text marks", () => {
             },
           ],
         },
-      ],
-    }),
+      ]),
+    ),
   ).toBe("design (https://example.test/design)");
 });
 
@@ -191,7 +183,7 @@ it("renders native tasks without accepting unknown or malformed task nodes", () 
     attrs: { localId: "list-id" },
     content: [item, { ...item, attrs: { ...item.attrs, state: "DONE" } }],
   };
-  const doc = (node: unknown) => ({ type: "doc", version: 1, content: [node] });
+  const doc = (node: unknown) => jiraDocument([node]);
   expect(adfToText(doc(list))).toBe("- [ ] Do this\n- [x] Do this");
   expect(isEditableAdf(doc(list))).toBe(false);
   for (const node of [

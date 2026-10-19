@@ -15,6 +15,14 @@ import {
 
 const encode = (value: unknown) => JSON.stringify(value);
 
+const projectTarget = () => ({ cwd: "/w", host: "forgejo.test:3000", scope: "acme/web" });
+const nativeComment = (id: number, body: string) => ({
+  id,
+  body,
+  user: { login: "julius" },
+  created_at: "2026-07-02T00:00:00Z",
+});
+
 const issueTarget = () => ({ cwd: "/w", host: "forgejo.test:3000", scope: "acme/web", key: "42" });
 const isForgejoCliError = Schema.is(ForgejoCli.ForgejoCliError);
 const decodeTimelineEntry = Schema.decodeSync(ForgejoTimelineEntry);
@@ -192,12 +200,7 @@ describe("Forgejo comment ordering", () => {
     (order) =>
       Effect.gen(function* () {
         const paths: string[] = [];
-        const rows = Array.from({ length: 120 }, (_, index) => ({
-          id: index + 1,
-          body: "Comment",
-          user: { login: "julius" },
-          created_at: "2026-07-02T00:00:00Z",
-        }));
+        const rows = Array.from({ length: 120 }, (_, index) => nativeComment(index + 1, "Comment"));
         const api = yield* tracker((input) => {
           paths.push(input.path);
           if (input.path.startsWith("repos/acme/web/issues/42/comments?"))
@@ -555,9 +558,7 @@ describe("ForgejoIssueTracker", () => {
         });
         const result = yield* Effect.result(
           api.create!({
-            cwd: "/w",
-            host: "forgejo.test:3000",
-            scope: "acme/web",
+            ...projectTarget(),
             title: "Bug",
             body: "",
             labels: [requested],
@@ -783,9 +784,7 @@ describe("ForgejoIssueTracker", () => {
         const result = yield* Effect.result(
           operation === "create"
             ? api.create!({
-                cwd: "/w",
-                host: "forgejo.test:3000",
-                scope: "acme/web",
+                ...projectTarget(),
                 title: "New",
                 body: "",
                 labels: asIds ? native.map((label) => `forgejo-label:${label.id}`) : names,
@@ -953,9 +952,7 @@ describe("ForgejoIssueTracker", () => {
             ),
           };
         });
-        expect(
-          yield* api.listTemplates!({ cwd: "/w", host: "forgejo.test:3000", scope: "acme/web" }),
-        ).toEqual({
+        expect(yield* api.listTemplates!(projectTarget())).toEqual({
           templates: [],
           blankIssuesEnabled,
           contactLinks: [CONTACT_LINK],
@@ -1076,13 +1073,7 @@ describe("ForgejoIssueTracker", () => {
           ),
         };
       });
-      const error = yield* Effect.flip(
-        api.listTemplates!({
-          cwd: "/w",
-          host: "forgejo.test:3000",
-          scope: "acme/web",
-        }),
-      );
+      const error = yield* Effect.flip(api.listTemplates!(projectTarget()));
       expect(error).toMatchObject({
         reason: "failed",
         detail: expect.stringContaining("repository URL"),
@@ -1142,9 +1133,7 @@ describe("ForgejoIssueTracker", () => {
               ],
         ),
       }));
-      expect(
-        yield* api.listTemplates!({ cwd: "/w", host: "forgejo.test:3000", scope: "acme/web" }),
-      ).toMatchObject({
+      expect(yield* api.listTemplates!(projectTarget())).toMatchObject({
         blankIssuesEnabled: false,
         contactLinks: [CONTACT_LINK],
         templates: [
@@ -1171,9 +1160,7 @@ describe("ForgejoIssueTracker", () => {
       const api = yield* tracker((input) => ({
         stdout: encode(input.path.endsWith("issue_config") ? config : []),
       }));
-      expect(
-        yield* api.listTemplates!({ cwd: "/w", host: "forgejo.test:3000", scope: "acme/web" }),
-      ).toEqual({
+      expect(yield* api.listTemplates!(projectTarget())).toEqual({
         templates: [],
         blankIssuesEnabled: false,
       });
@@ -1189,9 +1176,7 @@ describe("ForgejoIssueTracker", () => {
       const api = yield* tracker((input) => ({
         stdout: encode(input.path.endsWith("issue_config") ? config : []),
       }));
-      expect(
-        yield* api.listTemplates!({ cwd: "/w", host: "forgejo.test:3000", scope: "acme/web" }),
-      ).toEqual({
+      expect(yield* api.listTemplates!(projectTarget())).toEqual({
         templates: [],
         blankIssuesEnabled: true,
       });
@@ -1216,11 +1201,7 @@ describe("ForgejoIssueTracker", () => {
             : [],
         ),
       }));
-      const result = yield* api.listTemplates!({
-        cwd: "/w",
-        host: "forgejo.test:3000",
-        scope: "acme/web",
-      });
+      const result = yield* api.listTemplates!(projectTarget());
       expect(result.blankIssuesEnabled).toBe(false);
       expect(result.contactLinks).toHaveLength(97);
       expect(result.contactLinks?.at(-1)?.url).toBe("http://support.example.test/help");
@@ -1243,9 +1224,7 @@ describe("ForgejoIssueTracker", () => {
               })
             : { stdout: "[]" };
         });
-        const result = yield* Effect.result(
-          api.listTemplates!({ cwd: "/w", host: "forgejo.test:3000", scope: "acme/web" }),
-        );
+        const result = yield* Effect.result(api.listTemplates!(projectTarget()));
         if (reason === "authentication" || reason === "rate-limit")
           expect(result).toMatchObject({
             failure: { reason: reason === "authentication" ? "unauthenticated" : "rate-limited" },
@@ -2119,11 +2098,7 @@ describe("ForgejoIssueTracker", () => {
           if (input.path.startsWith("repos/acme/web/assignees")) return { stdout: "[]" };
           throw new Error(`unexpected path ${input.path}`);
         });
-        const result = api.listCandidates!({
-          cwd: "/w",
-          host: "forgejo.test:3000",
-          scope: "acme/web",
-        });
+        const result = api.listCandidates!(projectTarget());
         if (reason === "not-found")
           expect(yield* result).toMatchObject({ labels: [{ name: "bug" }], truncated: true });
         else expect(yield* Effect.flip(result)).toMatchObject({ reason: "rate-limited" });
@@ -2241,9 +2216,7 @@ describe("ForgejoIssueTracker", () => {
         return answer(input.path);
       });
       yield* api.create!({
-        cwd: "/w",
-        host: "forgejo.test:3000",
-        scope: "acme/web",
+        ...projectTarget(),
         title: "New issue",
         body: "",
         labels: ["12"],
@@ -2285,9 +2258,7 @@ describe("ForgejoIssueTracker", () => {
             : { stdout: encode([{ id: 3, name: "bug" }]) };
         });
         const result = yield* api.create!({
-          cwd: "/w",
-          host: "forgejo.test:3000",
-          scope: "acme/web",
+          ...projectTarget(),
           title: "New issue",
           body: "",
           labels: field === "labels" ? ["bug"] : [],
@@ -2314,9 +2285,7 @@ describe("ForgejoIssueTracker", () => {
           : { stdout: encode([{ id: 3, name: "bug" }]) };
       });
       const result = yield* api.create!({
-        cwd: "/w",
-        host: "forgejo.test:3000",
-        scope: "acme/web",
+        ...projectTarget(),
         title: "New issue",
         body: "",
         labels: ["bug"],
@@ -2417,9 +2386,7 @@ describe("ForgejoIssueTracker", () => {
         };
       });
       const page = yield* api.listIssues({
-        cwd: "/w",
-        host: "forgejo.test:3000",
-        scope: "acme/web",
+        ...projectTarget(),
         state: "open",
         involvement: "authored",
         viewer: "julius",
@@ -2439,12 +2406,9 @@ describe("ForgejoIssueTracker", () => {
     "slices an unpaged Gitea response with %s comments without repeats",
     (count) =>
       Effect.gen(function* () {
-        const comments = Array.from({ length: count }, (_, index) => ({
-          id: index + 1,
-          body: `Comment ${index + 1}`,
-          user: { login: "julius" },
-          created_at: "2026-07-02T00:00:00Z",
-        }));
+        const comments = Array.from({ length: count }, (_, index) =>
+          nativeComment(index + 1, `Comment ${index + 1}`),
+        );
         const paths: string[] = [];
         const api = yield* tracker((input) => {
           paths.push(input.path);
@@ -2480,12 +2444,9 @@ describe("ForgejoIssueTracker", () => {
     "continues after every offset slice of a headerless native page with %s comments",
     (firstCount) =>
       Effect.gen(function* () {
-        const comments = Array.from({ length: firstCount + 60 }, (_, index) => ({
-          id: index + 1,
-          body: `Comment ${index + 1}`,
-          user: { login: "julius" },
-          created_at: "2026-07-02T00:00:00Z",
-        }));
+        const comments = Array.from({ length: firstCount + 60 }, (_, index) =>
+          nativeComment(index + 1, `Comment ${index + 1}`),
+        );
         const paths: string[] = [];
         const api = yield* tracker((input) => {
           paths.push(input.path);
@@ -2539,12 +2500,9 @@ describe("ForgejoIssueTracker", () => {
         if (input.path.startsWith("repos/acme/web/issues/42/comments?")) {
           const page = Number(new URL(input.path, "https://forgejo.test").searchParams.get("page"));
           pages.push(page);
-          const rows = Array.from({ length: page === 1 ? 1 : 60 }, (_, index) => ({
-            id: page === 1 ? 1 : index + 2,
-            body: "Comment",
-            user: { login: "julius" },
-            created_at: "2026-07-02T00:00:00Z",
-          }));
+          const rows = Array.from({ length: page === 1 ? 1 : 60 }, (_, index) =>
+            nativeComment(page === 1 ? 1 : index + 2, "Comment"),
+          );
           return {
             stdout: encode(rows),
             stderr: page === 1 ? 'Link: </next>; rel="next"' : 'Link: </previous>; rel="prev"',
@@ -2585,9 +2543,7 @@ describe("ForgejoIssueTracker", () => {
         const keys: string[] = [];
         for (let page = 1; page <= 4; page++) {
           const result = yield* api.listIssues({
-            cwd: "/w",
-            host: "forgejo.test:3000",
-            scope: "acme/web",
+            ...projectTarget(),
             state: "open",
             involvement: "all",
             viewer: "julius",
@@ -2607,12 +2563,9 @@ describe("ForgejoIssueTracker", () => {
     "continues headerless comment pages below the requested size until a native empty page",
     () =>
       Effect.gen(function* () {
-        const comments = Array.from({ length: 50 }, (_, index) => ({
-          id: index + 1,
-          body: `Comment ${index + 1}`,
-          user: { login: "julius" },
-          created_at: "2026-07-02T00:00:00Z",
-        }));
+        const comments = Array.from({ length: 50 }, (_, index) =>
+          nativeComment(index + 1, `Comment ${index + 1}`),
+        );
         const paths: string[] = [];
         const api = yield* tracker((input) => {
           paths.push(input.path);
@@ -2653,14 +2606,7 @@ describe("ForgejoIssueTracker", () => {
         const route = input.path.split("?")[0]!;
         if (route === "repos/acme/web/issues/42/comments")
           return {
-            stdout: encode([
-              {
-                id: input.path.endsWith("page=1") ? 1 : 51,
-                body: "Last comment",
-                user: { login: "julius" },
-                created_at: "2026-07-02T00:00:00Z",
-              },
-            ]),
+            stdout: encode([nativeComment(input.path.endsWith("page=1") ? 1 : 51, "Last comment")]),
             stderr: input.path.endsWith("page=1")
               ? 'Link: </next>; rel="next"'
               : 'Link: </previous>; rel="prev"',
@@ -2694,12 +2640,9 @@ describe("ForgejoIssueTracker", () => {
     },
   ])("continues a headerless comment page and stops correctly for $name", ({ count, paginated }) =>
     Effect.gen(function* () {
-      const comments = Array.from({ length: count }, (_, index) => ({
-        id: index + 1,
-        body: `Comment ${index + 1}`,
-        user: { login: "julius" },
-        created_at: "2026-07-02T00:00:00Z",
-      }));
+      const comments = Array.from({ length: count }, (_, index) =>
+        nativeComment(index + 1, `Comment ${index + 1}`),
+      );
       const paths: string[] = [];
       const api = yield* tracker((input) => {
         paths.push(input.path);

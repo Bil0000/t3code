@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
+import { createIssueTestRoot, githubIssueTestRef, setIssueTestValue } from "./issueTestUtils";
 
 import { RegistryContext } from "@effect/atom-react";
 import {
   EnvironmentId,
   IssueTrackerKind,
-  ProjectId,
   WS_METHODS,
   IssueDetail,
   IssueHierarchyPage,
@@ -24,7 +24,7 @@ import type {
 } from "@t3tools/client-runtime/connection";
 import * as Schema from "effect/Schema";
 import { act } from "react";
-import { createRoot, type Root } from "react-dom/client";
+import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
@@ -173,13 +173,7 @@ const decodeHierarchy = Schema.decodeUnknownSync(IssueHierarchyPage);
 const decodeHistory = Schema.decodeUnknownSync(IssueHistoryPage);
 const decodeLinkedPullRequests = Schema.decodeUnknownSync(IssueLinkedPullRequestsPage);
 const environmentId = EnvironmentId.make("refresh-environment");
-const reference = {
-  projectId: ProjectId.make("project"),
-  tracker: IssueTrackerKind.make("github"),
-  host: "github.com",
-  scope: "org/repo",
-  key: "1",
-};
+const reference = githubIssueTestRef();
 const capabilities = {
   create: false,
   edit: false,
@@ -270,9 +264,7 @@ beforeEach(() => {
   state.failedRelated = false;
   state.failedComments = false;
   state.failedDependencies = false;
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
+  ({ container, root } = createIssueTestRoot());
 });
 afterEach(async () => {
   await act(async () => root.unmount());
@@ -734,8 +726,7 @@ it.each([true, false])(
       await act(async () => button("Set parent").click());
       const input = container.querySelector<HTMLInputElement>('[aria-label="Parent issue key"]')!;
       await act(async () => {
-        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "7");
-        input.dispatchEvent(new Event("input", { bubbles: true }));
+        setIssueTestValue(input, "7");
       });
       updateParent = false;
       await act(async () => {
@@ -815,11 +806,7 @@ it.each(["success", "permission"])(
         [scope, "target/repo"],
         [key, "7"],
       ] as const) {
-        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
-          field,
-          value,
-        );
-        field.dispatchEvent(new Event("input", { bubbles: true }));
+        setIssueTestValue(field, value);
       }
     });
     const add = () =>
@@ -1371,11 +1358,7 @@ it("starts oldest comments without a cursor, drops a stale newest tail, and keep
   await readDetail(nativeRef);
   const draft = container.querySelector<HTMLTextAreaElement>('[aria-label="Add a comment"]')!;
   await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
-      draft,
-      "Keep my draft",
-    );
-    draft.dispatchEvent(new Event("input", { bubbles: true }));
+    setIssueTestValue(draft, "Keep my draft");
   });
   await act(async () => intersect(container.querySelector('[aria-label="Activity"]')!));
   expect(typeof finish).toBe("function");
@@ -1634,11 +1617,7 @@ it("keeps a saved older-comment edit through a stale detail read and reopening t
     const input = container.querySelector<HTMLTextAreaElement>(
       'textarea[aria-label="Edit comment"]',
     )!;
-    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
-      input,
-      "After older edit",
-    );
-    input.dispatchEvent(new Event("input", { bubbles: true }));
+    setIssueTestValue(input, "After older edit");
   });
   await act(async () => button("Save").click());
   expect(state.writes).toHaveBeenCalledExactlyOnceWith(WS_METHODS.issuesEditComment, {

@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { createIssueTestRoot, setIssueTestValue } from "./issueTestUtils";
 
 import type {
   EnvironmentRegistry as EnvironmentRegistryTypes,
@@ -18,7 +19,7 @@ import {
 } from "@t3tools/contracts";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { act } from "react";
-import { createRoot, type Root } from "react-dom/client";
+import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
@@ -133,11 +134,7 @@ const createButton = () =>
 async function draft() {
   const input = document.querySelector<HTMLInputElement>("#issue-create-title")!;
   await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
-      input,
-      "Draft meant for A",
-    );
-    input.dispatchEvent(new Event("input", { bubbles: true }));
+    setIssueTestValue(input, "Draft meant for A");
   });
 }
 
@@ -185,9 +182,7 @@ beforeEach(() => {
   state.metadata = null;
   registry = AtomRegistry.make();
   registry.set(session, AsyncResult.success(sessionState));
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
+  ({ container, root } = createIssueTestRoot());
   created.mockReset();
   closed.mockReset();
   nativeCreate.mockReset().mockReturnValue({
@@ -339,11 +334,7 @@ it("validates native fields, retains a failed draft, and drops stale type fields
   expect(createButton().disabled).toBe(true);
   const field = document.querySelector<HTMLInputElement>("#issue-native-field-custom")!;
   await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
-      field,
-      "Keep native draft",
-    );
-    field.dispatchEvent(new Event("input", { bubbles: true }));
+    setIssueTestValue(field, "Keep native draft");
   });
   nativeCreate.mockImplementationOnce(() => {
     throw new Error("Native validation failed");
@@ -382,8 +373,7 @@ it("sends datetime in the browser timezone as ISO and keeps date-only calendar v
   expect(time.type).toBe("datetime-local");
   expect(date.type).toBe("date");
   const set = (field: HTMLInputElement, value: string) => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(field, value);
-    field.dispatchEvent(new Event("input", { bubbles: true }));
+    setIssueTestValue(field, value);
   };
   await act(async () => {
     set(time, "2026-06-01T09:30");
@@ -480,11 +470,7 @@ it("selects one native type and loads its required fields without a manual type 
   expect(nativeCreate).not.toHaveBeenCalled();
   const field = document.querySelector<HTMLInputElement>("#issue-native-field-required-native")!;
   await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
-      field,
-      "Native value",
-    );
-    field.dispatchEvent(new Event("input", { bubbles: true }));
+    setIssueTestValue(field, "Native value");
   });
   await act(async () => createButton().click());
   expect(nativeCreate).toHaveBeenCalledExactlyOnceWith({

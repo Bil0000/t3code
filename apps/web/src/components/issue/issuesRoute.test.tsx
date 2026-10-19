@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { createIssueTestRoot } from "./issueTestUtils";
 
 import { RegistryContext } from "@effect/atom-react";
 import {
@@ -21,7 +22,7 @@ import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
 import { Atom, AsyncResult } from "effect/reactivity";
 import { act, type ReactNode, type ComponentProps } from "react";
-import { createRoot, type Root } from "react-dom/client";
+import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
@@ -375,9 +376,7 @@ beforeEach(() => {
   state.navigate.mockReset().mockImplementation(({ search }) => {
     state.search = search(state.search);
   });
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
+  ({ container, root } = createIssueTestRoot());
 });
 
 const linkedSelection = {

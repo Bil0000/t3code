@@ -19,7 +19,7 @@ import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import * as RpcClient from "../rpc/client.ts";
 import * as Session from "./session.ts";
 import { executeAtomQuery } from "./runtime.ts";
-import { makeIssueTestRuntime } from "./issues.testkit.ts";
+import { makeIssueTestRuntime, makeIssueTestSession } from "./issues.testkit.ts";
 import {
   continueIssueListPage,
   createIssueEnvironmentAtoms,
@@ -229,17 +229,7 @@ it.effect(
     Effect.gen(function* () {
       const runtime = yield* makeIssueTestRuntime;
       yield* Effect.promise(async () => {
-        const session: AuthSessionState = {
-          authenticated: true,
-          auth: {
-            policy: "remote-reachable",
-            bootstrapMethods: [],
-            sessionMethods: [],
-            sessionCookieName: "test",
-          },
-          scopes: [AuthSourceControlWriteScope],
-          permissions: [AuthSourceControlWriteScope],
-        };
+        const session: AuthSessionState = makeIssueTestSession(AuthSourceControlWriteScope);
         const sessionAtom = Atom.make(AsyncResult.success(session));
         const sessions = vi
           .spyOn(Session, "createEnvironmentSessionAtoms")

@@ -13,6 +13,14 @@ import * as ForgejoIssueTracker from "./ForgejoIssueTracker.ts";
 
 const BASE = "https://forgejo.test:3000/Mount";
 const REF = { cwd: "/fixture", host: "forgejo.test:3000", scope: "Mount/Acme/Web", key: "42" };
+const dependencyTarget = (direction: IssueDependencyDirection) => ({
+  ...REF,
+  direction,
+  targetScope: "Mount/Other/Repo",
+  targetKey: "7",
+  linked: true,
+});
+
 const row = (number: number, pr = false, repository = "Other/Repo") => ({
   number,
   title: `Native ${number}`,
@@ -500,15 +508,7 @@ it.effect.each([
   fixture(
     (tracker, calls) =>
       Effect.gen(function* () {
-        yield* Effect.flip(
-          tracker.setDependency!({
-            ...REF,
-            direction: "blocked-by",
-            targetScope: "Mount/Other/Repo",
-            targetKey: "7",
-            linked: true,
-          }),
-        );
+        yield* Effect.flip(tracker.setDependency!(dependencyTarget("blocked-by")));
         expect(calls.every((call) => call.method === "GET")).toBe(true);
       }),
     (call) => (call.url.pathname.endsWith("/Acme/Web") ? { body: response } : {}),
@@ -522,15 +522,7 @@ it.effect.each([400, 403, 404, 409, 422])(
       (tracker, calls) =>
         Effect.gen(function* () {
           expect(
-            yield* Effect.flip(
-              tracker.setDependency!({
-                ...REF,
-                direction: "blocks",
-                targetScope: "Mount/Other/Repo",
-                targetKey: "7",
-                linked: true,
-              }),
-            ),
+            yield* Effect.flip(tracker.setDependency!(dependencyTarget("blocks"))),
           ).toMatchObject({ cause: { httpStatus: status } });
           expect(calls.filter((call) => call.method !== "GET")).toHaveLength(1);
         }),
@@ -585,15 +577,7 @@ it.effect.each([
   fixture(
     (tracker, calls) =>
       Effect.gen(function* () {
-        yield* Effect.flip(
-          tracker.setDependency!({
-            ...REF,
-            direction: "blocks",
-            targetScope: "Mount/Other/Repo",
-            targetKey: "7",
-            linked: true,
-          }),
-        );
+        yield* Effect.flip(tracker.setDependency!(dependencyTarget("blocks")));
         expect(calls.filter((call) => call.method !== "GET")).toHaveLength(0);
       }),
     (call) => (call.url.pathname.endsWith(path) ? { body } : {}),
@@ -607,15 +591,7 @@ it.effect.each(["/repos/Acme/Web", "/issues/42", "/repos/Other/Repo", "/issues/7
       (tracker, calls) =>
         Effect.gen(function* () {
           expect(
-            yield* Effect.flip(
-              tracker.setDependency!({
-                ...REF,
-                direction: "blocks",
-                targetScope: "Mount/Other/Repo",
-                targetKey: "7",
-                linked: true,
-              }),
-            ),
+            yield* Effect.flip(tracker.setDependency!(dependencyTarget("blocks"))),
           ).toMatchObject({ cause: { httpStatus: 403 } });
           expect(calls.filter((call) => call.method !== "GET")).toHaveLength(0);
         }),

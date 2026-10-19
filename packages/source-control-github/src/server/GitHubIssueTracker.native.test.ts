@@ -13,7 +13,13 @@ import * as GitHubQuota from "./GitHubQuota.ts";
 import * as GitHubIssueTracker from "./GitHubIssueTracker.ts";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 
-import { templateEntry } from "./issue-test-fixtures.ts";
+import { issueTarget, templateEntry } from "./issue-test-fixtures.ts";
+
+function readGraphQlRequest(request: HttpClientRequest.HttpClientRequest) {
+  return JSON.parse(
+    request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "{}",
+  );
+}
 
 const NOW = Date.parse("2026-10-05T12:00:00.000Z");
 
@@ -74,9 +80,7 @@ describe("GitHub issues over native HTTP", () => {
     (inherited) => {
       const bodySelections: boolean[] = [];
       const { layer, requests } = harness((request) => {
-        const sent = JSON.parse(
-          request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "{}",
-        );
+        const sent = readGraphQlRequest(request);
         expect(sent.operationName).toBe("IssueTemplates");
         const { name, includeBody } = sent.variables;
         if (typeof includeBody !== "boolean") {
@@ -154,9 +158,7 @@ describe("GitHub issues over native HTTP", () => {
       const total = 205;
       const { layer, requests } = harness((request) => {
         expect(request.url).toBe("https://api.github.com/graphql");
-        const sent = JSON.parse(
-          request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "{}",
-        );
+        const sent = readGraphQlRequest(request);
         expect(sent.operationName).toBe(
           operation === "comments" ? "IssueComments" : "IssueHistory",
         );
@@ -210,7 +212,7 @@ describe("GitHub issues over native HTTP", () => {
       });
       return Effect.gen(function* () {
         const driver = yield* GitHubIssueTracker.make;
-        const input = { cwd: "/w", host: "github.com", scope: "acme/web", key: "42", order };
+        const input = { ...issueTarget(), order };
         const ids: string[] = [];
         let cursor: string | undefined;
         do {
@@ -281,7 +283,7 @@ describe("GitHub issues over native HTTP", () => {
       );
       return Effect.gen(function* () {
         const driver = yield* GitHubIssueTracker.make;
-        const input = { cwd: "/w", host: "github.com", scope: "acme/web", key: "42" };
+        const input = issueTarget();
         const read = (
           target: typeof input & { cursor?: string; order?: "asc" | "desc"; connectionId?: string },
         ) =>
@@ -403,10 +405,7 @@ describe("GitHub issues over native HTTP", () => {
     return Effect.gen(function* () {
       const driver = yield* GitHubIssueTracker.make;
       const input = {
-        cwd: "/w",
-        host: "github.com",
-        scope: "acme/web",
-        key: "42",
+        ...issueTarget(),
         connectionId: "selected",
       };
       const read = (cursor?: string) =>
@@ -452,7 +451,7 @@ describe("GitHub issues over native HTTP", () => {
       return Effect.gen(function* () {
         yield* TestClock.setTime(NOW);
         const driver = yield* GitHubIssueTracker.make;
-        const input = { cwd: "/w", host: "github.com", scope: "acme/web", key: "42" };
+        const input = issueTarget();
         const read =
           operation === "comments"
             ? driver.getComments(input).pipe(Effect.asVoid)
@@ -480,10 +479,7 @@ describe("GitHub issues over native HTTP", () => {
         const driver = yield* GitHubIssueTracker.make;
         expect(
           yield* driver.getHistory!({
-            cwd: "/w",
-            host: "github.com",
-            scope: "acme/web",
-            key: "42",
+            ...issueTarget(),
             limit,
           }).pipe(Effect.flip),
         ).toMatchObject({ reason: "failed" });
@@ -494,9 +490,7 @@ describe("GitHub issues over native HTTP", () => {
 
   it.effect("allows retrying a history page but refuses a native cursor cycle", () => {
     const { layer, requests } = harness((request) => {
-      const sent = JSON.parse(
-        request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "{}",
-      );
+      const sent = readGraphQlRequest(request);
       const before = sent.variables.before;
       return json({
         data: {
@@ -525,7 +519,7 @@ describe("GitHub issues over native HTTP", () => {
     });
     return Effect.gen(function* () {
       const driver = yield* GitHubIssueTracker.make;
-      const input = { cwd: "/w", host: "github.com", scope: "acme/web", key: "42" };
+      const input = issueTarget();
       const first = yield* driver.getHistory!(input);
       const second = yield* driver.getHistory!({ ...input, cursor: first.nextCursor! });
       const retry = yield* driver.getHistory!({ ...input, cursor: first.nextCursor! });
@@ -632,11 +626,9 @@ describe("GitHub issues over native HTTP", () => {
     );
     return Effect.gen(function* () {
       const driver = yield* GitHubIssueTracker.make;
-      expect(
-        yield* driver
-          .getIssue({ cwd: "/w", host: "github.com", scope: "acme/web", key: "42" })
-          .pipe(Effect.flip),
-      ).toMatchObject({ reason: test.reason });
+      expect(yield* driver.getIssue(issueTarget()).pipe(Effect.flip)).toMatchObject({
+        reason: test.reason,
+      });
       expect(requests).toHaveLength(1);
       expect(requests[0]?.url).toBe("https://api.github.com/graphql");
     }).pipe(Effect.provide(layer));
@@ -654,9 +646,7 @@ describe("GitHub issues over native HTTP", () => {
   ] as const)("reads the native %s chooser with a bounded effective source", (kind) => {
     const { layer, requests } = harness((request) => {
       expect(request.url).toBe("https://api.github.com/graphql");
-      const body = JSON.parse(
-        request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "{}",
-      );
+      const body = readGraphQlRequest(request);
       expect(body.variables.owner).toBe("acme");
       const defaults = body.variables.name === ".github";
       if (defaults && kind === "missing") return json({ message: "Not found" }, { status: 404 });
@@ -765,9 +755,7 @@ describe("GitHub issues over native HTTP", () => {
     ["invalid-config", "blank_issues_enabled: [false]"],
   ])("invalid local %s does not suppress native public account defaults", ([kind, text]) => {
     const { layer, requests } = harness((request) => {
-      const body = JSON.parse(
-        request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "{}",
-      );
+      const body = readGraphQlRequest(request);
       const defaults = body.variables.name === ".github";
       return json({
         data: {
@@ -822,9 +810,7 @@ describe("GitHub issues over native HTTP", () => {
     "invalid local forms retain %s default-source behavior",
     (kind) => {
       const { layer, requests } = harness((request) => {
-        const body = JSON.parse(
-          request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "{}",
-        );
+        const body = readGraphQlRequest(request);
         if (body.variables.name === ".github")
           return json(
             { message: "Default source unavailable" },
@@ -867,9 +853,7 @@ describe("GitHub issues over native HTTP", () => {
     "keeps valid %s upload forms in the native chooser",
     (kind) => {
       const { layer, requests } = harness((request) => {
-        const body = JSON.parse(
-          request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "{}",
-        );
+        const body = readGraphQlRequest(request);
         const defaults = body.variables.name === ".github";
         return json({
           data: {
@@ -958,7 +942,7 @@ describe("GitHub issues over native HTTP", () => {
     return Effect.gen(function* () {
       yield* TestClock.setTime(NOW);
       const driver = yield* GitHubIssueTracker.make;
-      const input = { cwd: "/w", host: "github.com", scope: "acme/web", key: "42" };
+      const input = issueTarget();
       yield* driver.getDependencies!({ ...input, direction: "blocks" });
       expect(
         yield* driver.getDependencies!({ ...input, direction: "blocks" }).pipe(Effect.flip),
@@ -1039,7 +1023,7 @@ describe("GitHub issues over native HTTP", () => {
       });
       return Effect.gen(function* () {
         const driver = yield* GitHubIssueTracker.make;
-        const input = { cwd: "/w", host: "git.acme.test", scope: "acme/web", key: "42" };
+        const input = issueTarget("git.acme.test");
         const blocked = yield* driver.getDependencies!({
           ...input,
           direction: "blocked-by",
@@ -1102,10 +1086,7 @@ describe("GitHub issues over native HTTP", () => {
         const driver = yield* GitHubIssueTracker.make;
         expect(
           yield* driver.getDependencies!({
-            cwd: "/w",
-            host: "git.acme.test",
-            scope: "acme/web",
-            key: "42",
+            ...issueTarget("git.acme.test"),
             direction: "blocks",
           }).pipe(Effect.flip),
         ).toMatchObject({
@@ -1125,9 +1106,7 @@ describe("GitHub issues over native HTTP", () => {
         expect(request.url).toBe("https://git.acme.test/api/graphql");
         expect(request.headers.authorization).toBe("Bearer selected-B");
         expect(request.headers["x-github-api-version"]).toBe("2022-11-28");
-        const body = JSON.parse(
-          request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "{}",
-        );
+        const body = readGraphQlRequest(request);
         const defaults = body.variables.name === ".github";
         expect(body.variables.owner).toBe("acme");
         return json({
@@ -1185,9 +1164,7 @@ describe("GitHub issues over native HTTP", () => {
 
   it.effect("propagates native default-template rate limits and shares the host pause", () => {
     const { layer, requests } = harness((request) => {
-      const body = JSON.parse(
-        request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "{}",
-      );
+      const body = readGraphQlRequest(request);
       return body.variables.name === ".github"
         ? json(
             { message: "API rate limit exceeded" },
@@ -1311,7 +1288,7 @@ describe("GitHub issues over native HTTP", () => {
     });
     return Effect.gen(function* () {
       const driver = yield* GitHubIssueTracker.make;
-      const target = { cwd: "/w", host: "git.acme.test", scope: "acme/web", key: "42" };
+      const target = issueTarget("git.acme.test");
       const permission = yield* driver.getViewerPermissions(target);
       expect(permission.comment).toBe(input.comment);
       if (input.archived)
@@ -1366,7 +1343,7 @@ describe("GitHub issues over native HTTP", () => {
     );
     return Effect.gen(function* () {
       const driver = yield* GitHubIssueTracker.make;
-      const target = { cwd: "/w", host: "github.com", scope: "acme/web", key: "42" };
+      const target = issueTarget();
       expect(yield* driver.getViewerPermissions!(target)).toMatchObject({
         labels: true,
         assignees: true,
@@ -1453,7 +1430,7 @@ describe("GitHub issues over native HTTP", () => {
         yield* api.rest({ host: "github.com", operation: "seed", path: "rate_limit" });
         const driver = yield* GitHubIssueTracker.make;
         yield* driver.getViewer({ cwd: "/w", host: "github.com", scope: "acme/web" });
-        const target = { cwd: "/w", host: "github.com", scope: "acme/web", key: "42" };
+        const target = issueTarget();
         expect((yield* driver.getViewerPermissions!(target)).edit).toBe(true);
         if (operation === "update") yield* driver.update!({ ...target, title: "Changed" });
         else if (operation === "setState") yield* driver.setState!({ ...target, state: "closed" });
@@ -1527,7 +1504,7 @@ describe("GitHub issues over native HTTP", () => {
     return Effect.gen(function* () {
       yield* TestClock.setTime(NOW);
       const driver = yield* GitHubIssueTracker.make;
-      const target = { cwd: "/w", host: "github.com", scope: "acme/web", key: "42" };
+      const target = issueTarget();
       expect((yield* driver.getViewerPermissions!(target)).edit).toBe(true);
       const refused = yield* Effect.flip(driver.update!({ ...target, title: "Changed" }));
       expect(refused).toMatchObject({ reason: "rate-limited", retryAt: reset * 1000 });

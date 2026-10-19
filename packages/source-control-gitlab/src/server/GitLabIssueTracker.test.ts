@@ -16,6 +16,31 @@ import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSour
 import * as GitLabCli from "./GitLabCli.ts";
 import * as GitLabIssueTracker from "./GitLabIssueTracker.ts";
 
+function issueTarget(host = "gitlab.com") {
+  return { cwd: "/w", host, scope: "acme/web", key: "42" };
+}
+
+function notesResponse(notes: unknown) {
+  return {
+    data: {
+      currentUser: { username: "julius" },
+      project: {
+        archived: false,
+        mergeRequest: {
+          state: "closed",
+          userPermissions: {
+            updateIssue: true,
+            reopenIssue: true,
+            createNote: true,
+            adminIssue: true,
+          },
+          notes,
+        },
+      },
+    },
+  };
+}
+
 const decodeDetailWire = Schema.decodeEffect(IssueDetail);
 const decodeSummaryWire = Schema.decodeEffect(IssueSummary);
 const decodeCreateWire = Schema.decodeEffect(IssueCreateResult);
@@ -102,54 +127,39 @@ function answer(path: string): string {
     ]);
   }
   if (path === "graphql") {
-    return encode({
-      data: {
-        currentUser: { username: "julius" },
-        project: {
-          archived: false,
-          mergeRequest: {
-            state: "closed",
-            userPermissions: {
-              updateIssue: true,
-              reopenIssue: true,
-              createNote: true,
-              adminIssue: true,
-            },
-            notes: {
-              pageInfo: { hasPreviousPage: false, startCursor: "native-note-7" },
+    return encode(
+      notesResponse({
+        pageInfo: { hasPreviousPage: false, startCursor: "native-note-7" },
+        nodes: [
+          {
+            id: "gid://gitlab/Note/7",
+            body: "Repro attached.",
+            author: { username: "julius" },
+            createdAt: "2026-07-02T00:00:00Z",
+            awardEmoji: {
               nodes: [
-                {
-                  id: "gid://gitlab/Note/7",
-                  body: "Repro attached.",
-                  author: { username: "julius" },
-                  createdAt: "2026-07-02T00:00:00Z",
-                  awardEmoji: {
-                    nodes: [
-                      { name: "thumbsup", user: { username: "julius" } },
-                      { name: "thumbsup", user: { username: "theo" } },
-                    ],
-                  },
-                },
-                {
-                  id: "gid://gitlab/Note/8",
-                  body: "closed",
-                  author: { username: "theo" },
-                  createdAt: "2026-07-03T00:00:00Z",
-                  system: true,
-                },
-                {
-                  id: "gid://gitlab/Note/9",
-                  body: "added ~7 label",
-                  author: { username: "theo" },
-                  createdAt: "2026-07-03T00:00:00Z",
-                  system: true,
-                },
+                { name: "thumbsup", user: { username: "julius" } },
+                { name: "thumbsup", user: { username: "theo" } },
               ],
             },
           },
-        },
-      },
-    });
+          {
+            id: "gid://gitlab/Note/8",
+            body: "closed",
+            author: { username: "theo" },
+            createdAt: "2026-07-03T00:00:00Z",
+            system: true,
+          },
+          {
+            id: "gid://gitlab/Note/9",
+            body: "added ~7 label",
+            author: { username: "theo" },
+            createdAt: "2026-07-03T00:00:00Z",
+            system: true,
+          },
+        ],
+      }),
+    );
   }
   throw new Error(`unexpected path ${path}`);
 }
@@ -221,7 +231,7 @@ describe("GitLabIssueTracker", () => {
             ),
           ),
         );
-        const target = { cwd: "/w", host: "gitlab.acme.test:8443", scope: "acme/web", key: "42" };
+        const target = issueTarget("gitlab.acme.test:8443");
         const first = yield* api.getComments(target);
         const page = yield* decodeCommentsWire(
           yield* api.getComments({ ...target, cursor: first.nextCursor! }),
@@ -511,7 +521,7 @@ describe("GitLabIssueTracker", () => {
           ? encode({ ...ISSUE, labels: detailed ? labels : labels.map((label) => label.name) })
           : answer(args[1]!);
       });
-      const target = { cwd: "/w", host: "gitlab.com", scope: "acme/web", key: "42" };
+      const target = issueTarget();
       const issue = yield* api.getIssue(target);
       const wire = yield* decodeDetailWire({
         ...issue,
@@ -562,7 +572,7 @@ describe("GitLabIssueTracker", () => {
             }),
           ),
         );
-        const target = { cwd: "/w", host: "gitlab.acme.test", scope: "acme/web", key: "42" };
+        const target = issueTarget("gitlab.acme.test");
         const permission = yield* api.getViewerPermissions(target);
         expect(permission.edit).toBe(true);
         expect(permission.labels).toBe(false);
@@ -646,7 +656,7 @@ describe("GitLabIssueTracker", () => {
         };
         return encode(response);
       });
-      const target = { cwd: "/w", host: "gitlab.acme.test", scope: "acme/web", key: "42" };
+      const target = issueTarget("gitlab.acme.test");
       expect(yield* api.getViewerPermissions(target)).toEqual(input.expected);
       expect(paths).toEqual(["graphql"]);
       expect((yield* api.getIssue(target)).viewerPermissions).toEqual(input.expected);
@@ -666,10 +676,7 @@ describe("GitLabIssueTracker", () => {
         });
         const error = yield* Effect.flip(
           api.update!({
-            cwd: "/w",
-            host: "gitlab.acme.test",
-            scope: "acme/web",
-            key: "42",
+            ...issueTarget("gitlab.acme.test"),
             ...(field === "labels" ? { labels: ["new"] } : { assignees: ["6"] }),
           }),
         );
@@ -689,7 +696,7 @@ describe("GitLabIssueTracker", () => {
         expect(JSON.parse(stdin!)).toEqual({ labels: "bug,urgent", assignee_ids: [2, 6] });
         return encode({ labels: ["urgent", "bug"], assignees: [{ id: 6 }, { id: 2 }] });
       });
-      const target = { cwd: "/w", host: "gitlab.acme.test", scope: "acme/web", key: "42" };
+      const target = issueTarget("gitlab.acme.test");
       expect((yield* api.getViewerPermissions(target)).labels).toBe(true);
       yield* api.update!({ ...target, labels: ["bug", "urgent"], assignees: ["2", "6"] });
       expect(paths).toEqual(["graphql", "projects/acme%2Fweb/issues/42"]);
@@ -726,31 +733,16 @@ describe("GitLabIssueTracker", () => {
         const position = cursor === undefined ? undefined : Number(cursor.split("-").at(-1)) - 1;
         const start = backward ? Math.max(0, (position ?? count) - 100) : (position ?? -1) + 1;
         const end = backward ? (position ?? count) : Math.min(count, start + 100);
-        return encode({
-          data: {
-            currentUser: { username: "julius" },
-            project: {
-              archived: false,
-              mergeRequest: {
-                state: "closed",
-                userPermissions: {
-                  updateIssue: true,
-                  reopenIssue: true,
-                  createNote: true,
-                  adminIssue: true,
-                },
-                notes: {
-                  pageInfo: backward
-                    ? { hasPreviousPage: start > 0, startCursor: `native-note-${start + 1}` }
-                    : { hasNextPage: end < count, endCursor: `native-note-${end}` },
-                  nodes: notes.slice(start, end),
-                },
-              },
-            },
-          },
-        });
+        return encode(
+          notesResponse({
+            pageInfo: backward
+              ? { hasPreviousPage: start > 0, startCursor: `native-note-${start + 1}` }
+              : { hasNextPage: end < count, endCursor: `native-note-${end}` },
+            nodes: notes.slice(start, end),
+          }),
+        );
       });
-      const target = { cwd: "/w", host: "gitlab.com", scope: "acme/web", key: "42" };
+      const target = issueTarget();
       const initial = yield* api.getIssue(target);
       expect(initial.comments).toHaveLength(100);
       expect(initial.commentsCursor).toBeNull();
@@ -801,7 +793,7 @@ describe("GitLabIssueTracker", () => {
           );
           return answer(path);
         });
-        const target = { cwd: "/w", host: "gitlab.com", scope: "acme/web", key: "42" };
+        const target = issueTarget();
         if (operation === "getIssue") {
           const detail = yield* api.getIssue(target);
           expect(detail.viewer).toBe("julius");
@@ -843,14 +835,11 @@ describe("GitLabIssueTracker", () => {
           else response.data.currentUser = null;
           return encode(response);
         });
-        const target = { cwd: "/w", host: "gitlab.com", scope: "acme/web", key: "42" };
+        const target = issueTarget();
         const first = yield* api.getComments(target);
         const error = yield* Effect.flip(
           api.getComments({
-            cwd: "/w",
-            host: "gitlab.com",
-            scope: "acme/web",
-            key: "42",
+            ...issueTarget(),
             cursor: first.nextCursor!,
           }),
         );
@@ -1123,7 +1112,7 @@ describe("GitLabIssueTracker", () => {
           ? encode({ ...ISSUE, milestone })
           : answer(path);
       });
-      const context = { cwd: "/w", host: "gitlab.com", scope: "acme/web", key: "42" };
+      const context = issueTarget();
       const issue = yield* api.getIssue(context);
       expect(issue).toHaveProperty("milestone", milestone?.title ?? null);
       expect(
@@ -1151,44 +1140,26 @@ describe("GitLabIssueTracker", () => {
         const api = yield* tracker((args, stdin) => {
           paths.push(args[1]!);
           expect(stdin).toContain("adminNote");
-          return encode({
-            data: {
-              currentUser: { username: "julius" },
-              project: {
-                archived: false,
-                mergeRequest: {
-                  state: "closed",
-                  userPermissions: {
-                    updateIssue: true,
-                    reopenIssue: true,
-                    createNote: true,
-                    adminIssue: true,
-                  },
-                  notes: {
-                    pageInfo: { hasPreviousPage: paths.length === 1, startCursor: "older" },
-                    nodes: [
-                      {
-                        id: `gid://gitlab/Note/${paths.length === 1 ? 8 : 7}`,
-                        body: "Older",
-                        author: { username: "other" },
-                        createdAt: "2026-07-02T00:00:00Z",
-                        updatedAt: "2026-07-03T00:00:00Z",
-                        userPermissions: { adminNote: canEdit },
-                      },
-                    ],
-                  },
+          return encode(
+            notesResponse({
+              pageInfo: { hasPreviousPage: paths.length === 1, startCursor: "older" },
+              nodes: [
+                {
+                  id: `gid://gitlab/Note/${paths.length === 1 ? 8 : 7}`,
+                  body: "Older",
+                  author: { username: "other" },
+                  createdAt: "2026-07-02T00:00:00Z",
+                  updatedAt: "2026-07-03T00:00:00Z",
+                  userPermissions: { adminNote: canEdit },
                 },
-              },
-            },
-          });
+              ],
+            }),
+          );
         });
-        const target = { cwd: "/w", host: "gitlab.com", scope: "acme/web", key: "42" };
+        const target = issueTarget();
         const first = yield* api.getComments(target);
         const page = yield* api.getComments({
-          cwd: "/w",
-          host: "gitlab.com",
-          scope: "acme/web",
-          key: "42",
+          ...issueTarget(),
           cursor: first.nextCursor!,
         });
         expect(page.comments[0]?.canEdit).toBe(canEdit);
@@ -1212,10 +1183,7 @@ describe("GitLabIssueTracker", () => {
       });
       const result = yield* Effect.result(
         api.setState!({
-          cwd: "/w",
-          host: "gitlab.com",
-          scope: "acme/web",
-          key: "42",
+          ...issueTarget(),
           state,
         }),
       );
@@ -1246,10 +1214,7 @@ describe("GitLabIssueTracker", () => {
         });
         const result = yield* Effect.result(
           api.editComment!({
-            cwd: "/w",
-            host: "gitlab.internal:8443",
-            scope: "acme/web",
-            key: "42",
+            ...issueTarget("gitlab.internal:8443"),
             commentId: "7",
             body: "Updated",
           }),
@@ -1375,10 +1340,7 @@ describe("GitLabIssueTracker", () => {
         ),
       );
       const target = {
-        cwd: "/w",
-        host: "gitlab.acme.test:8443",
-        scope: "acme/web",
-        key: "42",
+        ...issueTarget("gitlab.acme.test:8443"),
         limit: 15,
         order: "asc" as const,
       };
@@ -1431,7 +1393,7 @@ describe("GitLabIssueTracker", () => {
           ]);
         return encode([{ id: 3, created_at: "2026-07-01T00:00:00Z", state: "closed" }]);
       });
-      const target = { cwd: "/w", host: "gitlab.com", scope: "acme/web", key: "42", limit: 2 };
+      const target = { ...issueTarget(), limit: 2 };
       const notes = yield* api.getHistory!(target);
       expect(notes).toMatchObject({
         items: [{ kind: "closed" }, { kind: "labeled", detail: "bug" }],
@@ -1478,10 +1440,7 @@ describe("GitLabIssueTracker", () => {
         return encode({ assignees: [] });
       });
       yield* api.update!({
-        cwd: "/w",
-        host: "gitlab.com",
-        scope: "acme/web",
-        key: "42",
+        ...issueTarget(),
         assignees: [],
       });
       expect(JSON.parse(body!)).toEqual({ assignee_ids: [0] });
@@ -1495,7 +1454,7 @@ describe("GitLabIssueTracker", () => {
         requests.push(args);
         return args.includes("PUT") ? "{}" : answer(args[1]!);
       });
-      const target = { cwd: "/w", host: "gitlab.acme.test", scope: "acme/web", key: "42" };
+      const target = issueTarget("gitlab.acme.test");
       yield* api.getIssue(target);
       yield* api.update!({ ...target, title: "Updated title" });
       expect(requests.length).toBeGreaterThan(1);
@@ -1568,7 +1527,7 @@ describe("GitLabIssueTracker", () => {
         if (args[1]?.startsWith("projects/acme%2Fweb/labels")) return "[]";
         return answer(args[1]!);
       });
-      const context = { cwd: "/w", host: "gitlab.com", scope: "acme/web", key: "42" };
+      const context = issueTarget();
       const issue = yield* api.getIssue(context);
       const candidates = yield* api.listCandidates!(context);
       expect(issue.author?.id).toBe("1");
@@ -1601,10 +1560,7 @@ describe("GitLabIssueTracker", () => {
         );
       });
       yield* api.setReaction!({
-        cwd: "/w",
-        host: "gitlab.com",
-        scope: "acme/web",
-        key: "42",
+        ...issueTarget(),
         subjectId: "7",
         content: "thumbs-up",
         reacted: false,
@@ -1634,10 +1590,7 @@ describe("GitLabIssueTracker", () => {
       });
       const error = yield* Effect.flip(
         api.setReaction!({
-          cwd: "/w",
-          host: "gitlab.com",
-          scope: "acme/web",
-          key: "42",
+          ...issueTarget(),
           content: "thumbs-up",
           reacted: false,
         }),
@@ -1656,52 +1609,34 @@ describe("GitLabIssueTracker", () => {
         const path = args[1]!;
         paths.push(path);
         sentBody = stdin;
-        return encode({
-          data: {
-            currentUser: { username: "julius" },
-            project: {
-              archived: false,
-              mergeRequest: {
-                state: "closed",
-                userPermissions: {
-                  updateIssue: true,
-                  reopenIssue: true,
-                  createNote: true,
-                  adminIssue: true,
-                },
-                notes: {
-                  pageInfo: {
-                    hasPreviousPage: paths.length === 1,
-                    startCursor: paths.length === 1 ? "native-cursor" : "native-next",
-                  },
+        return encode(
+          notesResponse({
+            pageInfo: {
+              hasPreviousPage: paths.length === 1,
+              startCursor: paths.length === 1 ? "native-cursor" : "native-next",
+            },
+            nodes: [
+              {
+                id: `gid://gitlab/Note/${paths.length === 1 ? 108 : 107}`,
+                body: "Older page",
+                author: { id: "gid://gitlab/User/2", username: "theo" },
+                createdAt: "2026-07-02T00:00:00Z",
+                awardEmoji: {
+                  pageInfo: { hasNextPage: true },
                   nodes: [
-                    {
-                      id: `gid://gitlab/Note/${paths.length === 1 ? 108 : 107}`,
-                      body: "Older page",
-                      author: { id: "gid://gitlab/User/2", username: "theo" },
-                      createdAt: "2026-07-02T00:00:00Z",
-                      awardEmoji: {
-                        pageInfo: { hasNextPage: true },
-                        nodes: [
-                          { name: "thumbsup", user: { username: "julius" } },
-                          { name: "thumbsup", user: { username: "theo" } },
-                        ],
-                      },
-                    },
+                    { name: "thumbsup", user: { username: "julius" } },
+                    { name: "thumbsup", user: { username: "theo" } },
                   ],
                 },
               },
-            },
-          },
-        });
+            ],
+          }),
+        );
       });
-      const target = { cwd: "/w", host: "gitlab.com", scope: "acme/web", key: "42" };
+      const target = issueTarget();
       const first = yield* api.getComments(target);
       const page = yield* api.getComments({
-        cwd: "/w",
-        host: "gitlab.com",
-        scope: "acme/web",
-        key: "42",
+        ...issueTarget(),
         cursor: first.nextCursor!,
       });
       expect(page.comments[0]?.author?.id).toBe("2");
@@ -1730,42 +1665,22 @@ describe("GitLabIssueTracker", () => {
             })),
           );
         if (path !== "graphql") return answer(path);
-        return encode({
-          data: {
-            currentUser: { username: "julius" },
-            project: {
-              archived: false,
-              mergeRequest: {
-                state: "closed",
-                userPermissions: {
-                  updateIssue: true,
-                  reopenIssue: true,
-                  createNote: true,
-                  adminIssue: true,
-                },
-                notes: {
-                  pageInfo: { hasPreviousPage: true, startCursor: "native-next" },
-                  nodes: [
-                    {
-                      id: "gid://gitlab/Note/108",
-                      body: "closed",
-                      system: true,
-                      author: { id: "gid://gitlab/User/2", username: "theo" },
-                      createdAt: "2026-07-02T00:00:00Z",
-                    },
-                  ],
-                },
+        return encode(
+          notesResponse({
+            pageInfo: { hasPreviousPage: true, startCursor: "native-next" },
+            nodes: [
+              {
+                id: "gid://gitlab/Note/108",
+                body: "closed",
+                system: true,
+                author: { id: "gid://gitlab/User/2", username: "theo" },
+                createdAt: "2026-07-02T00:00:00Z",
               },
-            },
-          },
-        });
+            ],
+          }),
+        );
       });
-      const issue = yield* api.getIssue({
-        cwd: "/w",
-        host: "gitlab.com",
-        scope: "acme/web",
-        key: "42",
-      });
+      const issue = yield* api.getIssue(issueTarget());
       expect(issue.reactionsTruncated).toBe(true);
       expect(issue.historyTruncated).toBe(false);
       expect(issue.commentsCursor).toEqual(expect.any(String));
@@ -1786,12 +1701,7 @@ describe("GitLabIssueTracker", () => {
   it.effect("joins the detail's endpoints into the neutral issue shape", () =>
     Effect.gen(function* () {
       const api = yield* tracker((args) => answer(args[1]!));
-      const issue = yield* api.getIssue({
-        cwd: "/w",
-        host: "gitlab.com",
-        scope: "acme/web",
-        key: "42",
-      });
+      const issue = yield* api.getIssue(issueTarget());
       expect(issue).toMatchObject({
         key: "42",
         displayKey: "#42",
@@ -1845,12 +1755,7 @@ describe("GitLabIssueTracker", () => {
             )
           : answer(args[1]!),
       );
-      const issue = yield* api.getIssue({
-        cwd: "/w",
-        host: "gitlab.com",
-        scope: "acme/web",
-        key: "42",
-      });
+      const issue = yield* api.getIssue(issueTarget());
       expect(issue.commentsCursor).toBeNull();
       expect(issue.historyTruncated).toBe(true);
       expect(issue.events.map(({ id, kind }) => [id, kind])).toEqual([["states:8", "closed"]]);
@@ -1905,10 +1810,7 @@ describe("GitLab native timeline order", () => {
     (order) =>
       Effect.gen(function* () {
         const target = {
-          cwd: "/w",
-          host: "gitlab.com",
-          scope: "acme/web",
-          key: "42",
+          ...issueTarget(),
           connectionId: "account-a",
         };
         let calls = 0;
@@ -1981,10 +1883,7 @@ describe("GitLab native timeline order", () => {
     (order) =>
       Effect.gen(function* () {
         const target = {
-          cwd: "/w",
-          host: "gitlab.com",
-          scope: "acme/web",
-          key: "42",
+          ...issueTarget(),
           connectionId: "account-a",
           limit: 17,
           order,
@@ -2060,12 +1959,7 @@ describe("GitLab native timeline order", () => {
             )
           : "[]";
       });
-      const target = {
-        cwd: "/w",
-        host: "gitlab.com",
-        scope: "acme/web",
-        key: "42",
-      };
+      const target = issueTarget();
       const page = yield* api.getHistory!(target);
       expect(page.items).toHaveLength(50);
       expect(page.truncated).toBe(true);
@@ -2119,9 +2013,7 @@ describe("GitLab native timeline order", () => {
         };
         return `HTTP/2.0 200 OK\r\n${headers}\r\n\r\n${encode([row])}`;
       });
-      const result = yield* Effect.result(
-        api.getHistory!({ cwd: "/w", host: "gitlab.com", scope: "acme/web", key: "42" }),
-      );
+      const result = yield* Effect.result(api.getHistory!(issueTarget()));
       expect(Result.isFailure(result)).toBe(failed);
       if (Result.isSuccess(result))
         expect(result.success).toMatchObject({
@@ -2141,7 +2033,7 @@ describe("GitLab native timeline order", () => {
         if (!args[1]!.includes("resource_label_events")) return "[]";
         return `HTTP/2.0 200 OK\r\nX-Next-Page: \r\nX-Total-Pages: 1\r\nX-Total: 100\r\n\r\n${encode(Array.from({ length: 100 }, (_, index) => ({ id: index + 1, action: "add", label: { name: "bug" }, created_at: DateTime.formatIso(DateTime.add(DateTime.makeUnsafe("2026-07-01T00:00:00Z"), { minutes: index })) })))}`;
       });
-      const target = { cwd: "/w", host: "gitlab.com", scope: "acme/web", key: "42", limit: 100 };
+      const target = { ...issueTarget(), limit: 100 };
       const page = yield* api.getHistory!(target);
       expect(page.items.map(({ id }) => id)).toEqual(
         Array.from({ length: 100 }, (_, index) => `labels:${100 - index}`),
@@ -2167,7 +2059,7 @@ describe("GitLab native timeline order", () => {
             )
           : "[]";
       });
-      const target = { cwd: "/w", host: "gitlab.com", scope: "acme/web", key: "42", limit: 1 };
+      const target = { ...issueTarget(), limit: 1 };
       const first = yield* api.getHistory!(target);
       expect(first.nextCursor).toEqual(expect.any(String));
       const original = JSON.parse(Buffer.from(first.nextCursor!, "base64url").toString("utf8"));
@@ -2213,9 +2105,7 @@ describe("GitLab native timeline order", () => {
             ])
           : "[]",
       );
-      const page = yield* decodeHistoryWire(
-        yield* api.getHistory!({ cwd: "/w", host: "gitlab.com", scope: "acme/web", key: "42" }),
-      );
+      const page = yield* decodeHistoryWire(yield* api.getHistory!(issueTarget()));
       expect(page.items).toHaveLength(1);
       expect(page.items[0]).toMatchObject({ kind: "referenced", detail: "!50" });
       expect(page.items[0]?.url).toBe(expected);
@@ -2242,7 +2132,7 @@ describe("GitLab native history regression repairs", () => {
             )
           : "[]";
       });
-      const target = { cwd: "/w", host: "gitlab.com", scope: "acme/web", key: "42", limit: 1 };
+      const target = { ...issueTarget(), limit: 1 };
       const first = yield* api.getHistory!(target);
       expect(first.nextCursor).toEqual(expect.any(String));
       changed = true;
@@ -2287,10 +2177,7 @@ describe("GitLab native history regression repairs", () => {
           return `HTTP/2.0 200 OK\r\n${headers}\r\n\r\n${encode(rows)}`;
         });
         const target = {
-          cwd: "/w",
-          host: "gitlab.com",
-          scope: "acme/web",
-          key: "42",
+          ...issueTarget(),
           connectionId: "account-a",
         };
         const page = yield* api.getHistory!(target);
@@ -2353,10 +2240,7 @@ describe("GitLab native history regression repairs", () => {
           return `HTTP/2.0 200 OK\r\nX-Next-Page: ${page < 3 ? page + 1 : ""}\r\nX-Total-Pages: 3\r\nX-Total: 205\r\n\r\n${encode(ordered.slice((page - 1) * 100, page * 100))}`;
         });
         const target = {
-          cwd: "/w",
-          host: "gitlab.com",
-          scope: "acme/web",
-          key: "42",
+          ...issueTarget(),
           connectionId: "account-a",
           order,
           limit: 50,
@@ -2449,10 +2333,7 @@ describe("GitLab native history regression repairs", () => {
           return answer(path);
         });
         const detail = yield* api.getIssue({
-          cwd: "/w",
-          host: "gitlab.com",
-          scope: "acme/web",
-          key: "42",
+          ...issueTarget(),
           connectionId: "account-a",
         });
         const event = detail.events.find(({ id }) => id === "notes:9");

@@ -26,11 +26,41 @@ const user = (id: string, displayName: string) => ({
 });
 const JULIUS = user("usr_julius", "julius");
 const THEO = user("usr_theo", "theo");
+const connectionFixture = <T>(
+  nodes: T[] = [],
+  pageInfo: {
+    hasNextPage: boolean;
+    endCursor: string | null;
+    hasPreviousPage?: boolean;
+    startCursor?: string | null;
+  } = { hasNextPage: false, endCursor: null },
+) => ({ nodes, pageInfo });
+
 const ORGANIZATION = {
   id: "org_acme",
   urlKey: "acme",
-  templates: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+  templates: connectionFixture(),
 };
+
+const issueReferenceFixture = (id: string, identifier: string) => ({
+  id,
+  identifier,
+  url: `https://linear.app/acme/issue/${identifier}`,
+  team: { key: identifier.split("-")[0] },
+});
+
+const createdIssueFixture = (identifier: string) => ({
+  issueCreate: {
+    success: true,
+    issue: { identifier, url: `https://linear.app/acme/issue/${identifier}` },
+  },
+});
+
+const teamResponseFixture = <T, L>(team: T, issueLabels: L) => ({
+  organization: ORGANIZATION,
+  teams: { nodes: [team] },
+  issueLabels,
+});
 
 const state = (name: string, type: string, position = 0) => ({
   id: `st_${name.toLowerCase().replaceAll(" ", "-")}`,
@@ -66,10 +96,10 @@ function teamFixture<T extends object>(overrides: T) {
     visibility: "private",
     restrictedBy: null,
     ancestors: [],
-    states: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
-    labels: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
-    members: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
-    templates: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+    states: connectionFixture(),
+    labels: connectionFixture(),
+    members: connectionFixture(),
+    templates: connectionFixture(),
   };
   return { ...defaults, ...overrides } as Omit<typeof defaults, keyof T> & T;
 }
@@ -94,12 +124,9 @@ const issue = (
   assignee: THEO,
   team: {
     key: identifier.split("-")[0],
-    states: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+    states: connectionFixture(),
   },
-  labels: {
-    nodes: [labelFixture({ id: "lbl_bug", name: "Bug", color: "#f00" })],
-    pageInfo: { hasNextPage: false, endCursor: null },
-  },
+  labels: connectionFixture([labelFixture({ id: "lbl_bug", name: "Bug", color: "#f00" })]),
   ...overrides,
   projectMilestone: overrides.projectMilestone ?? null,
 });
@@ -214,20 +241,16 @@ it.effect("continues the selected account team catalog with one native request p
         T3ProbeCredential: () => ({
           viewer: JULIUS,
           organization: ORGANIZATION,
-          teams: {
-            nodes: teams(0, 250),
-            pageInfo: { hasNextPage: true, endCursor: "team-249" },
-          },
+          teams: connectionFixture(teams(0, 250), { hasNextPage: true, endCursor: "team-249" }),
         }),
         T3Scopes: (variables) => ({
           organization: ORGANIZATION,
-          teams: {
-            nodes: variables.after === "team-249" ? teams(250, 100) : teams(350, 1),
-            pageInfo:
-              variables.after === "team-249"
-                ? { hasNextPage: true, endCursor: "team-349" }
-                : { hasNextPage: false, endCursor: "team-350" },
-          },
+          teams: connectionFixture(
+            variables.after === "team-249" ? teams(250, 100) : teams(350, 1),
+            variables.after === "team-249"
+              ? { hasNextPage: true, endCursor: "team-349" }
+              : { hasNextPage: false, endCursor: "team-350" },
+          ),
         }),
       },
       null,
@@ -287,14 +310,14 @@ it.effect.each([
     const test = fakeLinear({
       T3Scopes: () => ({
         organization: ORGANIZATION,
-        teams: {
-          nodes: Array.from({ length: count }, () => ({
+        teams: connectionFixture(
+          Array.from({ length: count }, () => ({
             id: "team",
             key: "ENG",
             name: "Engineering",
           })),
           pageInfo,
-        },
+        ),
       }),
     });
     const api = yield* test.tracker;
@@ -314,17 +337,11 @@ it.effect(
         T3ProbeCredential: () => ({
           viewer: JULIUS,
           organization: ORGANIZATION,
-          teams: {
-            nodes: [],
-            pageInfo: { hasNextPage: true, endCursor: null },
-          },
+          teams: connectionFixture([], { hasNextPage: true, endCursor: null }),
         }),
         T3Scopes: () => ({
           organization: ORGANIZATION,
-          teams: {
-            nodes: [],
-            pageInfo: { hasNextPage: false, endCursor: null },
-          },
+          teams: connectionFixture(),
         }),
       });
       const api = yield* test.tracker;
@@ -356,7 +373,7 @@ it.effect.each([
   "preserves explicit assignee selection over native template defaults: %j",
   ({ template, assignee }) =>
     Effect.gen(function* () {
-      const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+      const empty = connectionFixture();
       const preset = {
         id: "preset-assignee",
         name: "Assigned template",
@@ -389,15 +406,7 @@ it.effect.each([
             : input.templateId === preset.id
               ? preset.templateData.assigneeId
               : null;
-          return {
-            issueCreate: {
-              success: true,
-              issue: {
-                identifier: "ENG-8",
-                url: "https://linear.app/acme/issue/ENG-8",
-              },
-            },
-          };
+          return createdIssueFixture("ENG-8");
         },
       });
       const api = yield* test.tracker;
@@ -440,14 +449,14 @@ it.effect("retains normalized list reactions and native viewer flags in one requ
       T3Issues: () => ({
         organization: ORGANIZATION,
         viewer: { id: JULIUS.id },
-        issues: {
-          nodes: [
+        issues: connectionFixture(
+          [
             issue("ENG-7", {
               reactions: [...reactions, { id: "custom", emoji: "custom", user: null }],
             }),
           ],
-          pageInfo: { hasNextPage: true, endCursor: "next" },
-        },
+          { hasNextPage: true, endCursor: "next" },
+        ),
       }),
     });
     const api = yield* test.tracker;
@@ -501,10 +510,7 @@ it.effect.each([JULIUS.id, undefined])(
         T3Issues: () => ({
           organization: ORGANIZATION,
           ...(viewerId === undefined ? {} : { viewer: { id: viewerId } }),
-          issues: {
-            nodes: [issue("ENG-7", { reactions })],
-            pageInfo: { hasNextPage: false, endCursor: null },
-          },
+          issues: connectionFixture([issue("ENG-7", { reactions })]),
         }),
       });
       const api = yield* test.tracker;
@@ -532,10 +538,7 @@ it.effect.each([[], undefined])(
         T3Issues: () => ({
           organization: ORGANIZATION,
           viewer: { id: JULIUS.id },
-          issues: {
-            nodes: [issue("ENG-7", { reactions })],
-            pageInfo: { hasNextPage: false, endCursor: null },
-          },
+          issues: connectionFixture([issue("ENG-7", { reactions })]),
         }),
       });
       const api = yield* test.tracker;
@@ -558,7 +561,7 @@ it.effect.each([{ name: "Release 7" }, null, undefined])(
   "retains native project milestones in list, detail, and wire summaries: %j",
   (projectMilestone) =>
     Effect.gen(function* () {
-      const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+      const empty = connectionFixture();
       const native = issue("ENG-7", {
         projectMilestone,
         comments: empty,
@@ -609,11 +612,11 @@ describe("LinearIssueTracker", () => {
       const todo = state("Todo", "unstarted");
       const native = issue("ENG-7", {
         state: duplicate,
-        comments: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+        comments: connectionFixture(),
         reactions: [],
-        attachments: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
-        history: {
-          nodes: [
+        attachments: connectionFixture(),
+        history: connectionFixture(
+          [
             [todo, duplicate],
             [duplicate, todo],
           ].map(([fromState, toState], index) => ({
@@ -629,18 +632,14 @@ describe("LinearIssueTracker", () => {
             fromTitle: null,
             toTitle: null,
           })),
-          pageInfo: { hasNextPage: false, endCursor: null },
-        },
+        ),
       });
       const test = fakeLinear({
         T3Viewer: () => ({ viewer: JULIUS }),
         T3Issue: () => ({ issue: native }),
         T3Issues: () => ({
           organization: ORGANIZATION,
-          issues: {
-            nodes: [native],
-            pageInfo: { hasNextPage: false, endCursor: null },
-          },
+          issues: connectionFixture([native]),
         }),
       });
       const api = yield* test.tracker;
@@ -679,17 +678,17 @@ describe("LinearIssueTracker", () => {
     Effect.gen(function* () {
       const native = issue("ENG-7", {
         url: "https://linear.app/other/issue/ENG-7",
-        comments: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+        comments: connectionFixture(),
         reactions: [],
-        attachments: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
-        history: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+        attachments: connectionFixture(),
+        history: connectionFixture(),
       });
       const other = { id: "org_other", urlKey: "other" };
       const test = fakeLinear({
         T3Viewer: () => ({ viewer: JULIUS }),
         T3Issues: () => ({
           organization: other,
-          issues: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+          issues: connectionFixture(),
         }),
         T3Issue: () => ({ issue: native }),
         T3IssueReference: () => ({ issue: native }),
@@ -700,7 +699,7 @@ describe("LinearIssueTracker", () => {
           teams: {
             nodes: [teamFixture({})],
           },
-          issueLabels: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+          issueLabels: connectionFixture(),
         }),
       });
       const api = yield* test.tracker;
@@ -753,10 +752,10 @@ describe("LinearIssueTracker", () => {
         T3ProbeCredential: () => ({
           organization: ORGANIZATION,
           viewer: JULIUS,
-          teams: {
-            nodes: [{ id: "team_eng", key: "ENG", name: "Engineering" }],
-            pageInfo: { hasNextPage: true, endCursor: "more-teams" },
-          },
+          teams: connectionFixture([{ id: "team_eng", key: "ENG", name: "Engineering" }], {
+            hasNextPage: true,
+            endCursor: "more-teams",
+          }),
         }),
         T3Scope: (variables) => ({
           organization: ORGANIZATION,
@@ -801,10 +800,7 @@ describe("LinearIssueTracker", () => {
                 id: "team_eng",
                 key: "ENG",
                 name: "Engineering",
-                states: {
-                  nodes: [state("Done", "completed")],
-                  pageInfo: { hasNextPage: false, endCursor: null },
-                },
+                states: connectionFixture([state("Done", "completed")]),
               },
             ],
           },
@@ -826,15 +822,15 @@ describe("LinearIssueTracker", () => {
       const test = fakeLinear({
         T3Issues: () => ({
           organization: ORGANIZATION,
-          issues: {
-            nodes: [
+          issues: connectionFixture(
+            [
               issue("ENG-1", {
-                labels: { nodes: [], pageInfo: { hasNextPage: true, endCursor: "more-labels" } },
+                labels: connectionFixture([], { hasNextPage: true, endCursor: "more-labels" }),
               }),
               issue("ENG-2"),
             ],
-            pageInfo: { hasNextPage: true, endCursor: "more-issues" },
-          },
+            { hasNextPage: true, endCursor: "more-issues" },
+          ),
         }),
       });
       const api = yield* test.tracker;
@@ -861,12 +857,7 @@ describe("LinearIssueTracker", () => {
       Effect.gen(function* () {
         const test = fakeLinear({
           T3IssueReference: () => ({
-            issue: {
-              id: "iss_native",
-              identifier: "ENG-7",
-              url: "https://linear.app/acme/issue/ENG-7",
-              team: { key: "ENG" },
-            },
+            issue: issueReferenceFixture("iss_native", "ENG-7"),
           }),
           T3CommentCreate: (variables) => {
             expect(variables.input).toEqual({ issueId: "iss_native", body: "Comment" });
@@ -888,12 +879,7 @@ describe("LinearIssueTracker", () => {
     Effect.gen(function* () {
       const test = fakeLinear({
         T3IssueReference: () => ({
-          issue: {
-            id: "iss_native",
-            identifier: "OTHER-7",
-            url: "https://linear.app/acme/issue/OTHER-7",
-            team: { key: "OTHER" },
-          },
+          issue: issueReferenceFixture("iss_native", "OTHER-7"),
         }),
       });
       const api = yield* test.tracker;
@@ -905,12 +891,7 @@ describe("LinearIssueTracker", () => {
   );
   it.effect("resolves issue and comment in one small query before a reaction", () =>
     Effect.gen(function* () {
-      const reference = {
-        id: "iss_native",
-        identifier: "ENG-7",
-        url: "https://linear.app/acme/issue/ENG-7",
-        team: { key: "ENG" },
-      };
+      const reference = issueReferenceFixture("iss_native", "ENG-7");
       const test = fakeLinear({
         T3CommentTarget: () => ({
           issue: reference,
@@ -942,20 +923,10 @@ describe("LinearIssueTracker", () => {
     Effect.gen(function* () {
       const test = fakeLinear({
         T3CommentTarget: () => ({
-          issue: {
-            id: "iss_eng",
-            identifier: "ENG-7",
-            url: "https://linear.app/acme/issue/ENG-7",
-            team: { key: "ENG" },
-          },
+          issue: issueReferenceFixture("iss_eng", "ENG-7"),
           comment: {
             id: "cmt_foreign",
-            issue: {
-              id: "iss_other",
-              identifier: "OTHER-7",
-              url: "https://linear.app/acme/issue/OTHER-7",
-              team: { key: "OTHER" },
-            },
+            issue: issueReferenceFixture("iss_other", "OTHER-7"),
           },
         }),
       });
@@ -979,12 +950,7 @@ describe("LinearIssueTracker", () => {
       for (const key of ["OPS-7", "ENG-7"]) {
         const test = fakeLinear({
           T3IssueReference: () => ({
-            issue: {
-              id: "iss_ops",
-              identifier: "OPS-7",
-              url: "https://linear.app/acme/issue/OPS-7",
-              team: { key: "OPS" },
-            },
+            issue: issueReferenceFixture("iss_ops", "OPS-7"),
           }),
           T3IssueUpdate: () => ({ issueUpdate: { success: true } }),
         });
@@ -1008,10 +974,10 @@ describe("LinearIssueTracker", () => {
         T3Viewer: () => ({ viewer: JULIUS }),
         T3Issue: () => ({
           issue: issue("OPS-7", {
-            comments: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+            comments: connectionFixture(),
             reactions: [],
-            attachments: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
-            history: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+            attachments: connectionFixture(),
+            history: connectionFixture(),
           }),
         }),
         T3Comments: () => ({
@@ -1020,16 +986,11 @@ describe("LinearIssueTracker", () => {
             identifier: "OPS-7",
             url: "https://linear.app/acme/issue/OPS-7",
             team: { key: "OPS" },
-            comments: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+            comments: connectionFixture(),
           },
         }),
         T3IssueReference: () => ({
-          issue: {
-            id: "iss_ops",
-            identifier: "OPS-7",
-            url: "https://linear.app/acme/issue/OPS-7",
-            team: { key: "OPS" },
-          },
+          issue: issueReferenceFixture("iss_ops", "OPS-7"),
         }),
       });
       const api = yield* test.tracker;
@@ -1052,12 +1013,7 @@ describe("LinearIssueTracker", () => {
     Effect.gen(function* () {
       const test = fakeLinear({
         T3IssueReference: () => ({
-          issue: {
-            id: "iss_native",
-            identifier: "ENG-7",
-            url: "https://linear.app/acme/issue/ENG-7",
-            team: { key: "ENG" },
-          },
+          issue: issueReferenceFixture("iss_native", "ENG-7"),
         }),
         T3IssueUpdate: (variables) => {
           expect(variables).toEqual({ id: "iss_native", input: { title: "Changed" } });
@@ -1100,24 +1056,21 @@ describe("LinearIssueTracker", () => {
         T3Viewer: () => ({ viewer: JULIUS }),
         T3Issue: () => ({
           issue: issue("ENG-7", {
-            labels: { nodes: [], pageInfo: { hasNextPage: true, endCursor: "more-labels" } },
-            comments: {
-              nodes: [
-                {
-                  id: "cmt_1",
-                  body: "Comment",
-                  createdAt: "2026-07-01T00:00:00.000Z",
-                  url: "https://linear.app/acme/issue/ENG-7#comment",
-                  editedAt: null,
-                  user: THEO,
-                  reactions: nativeReactions,
-                },
-              ],
-              pageInfo: { hasNextPage: false, endCursor: null },
-            },
+            labels: connectionFixture([], { hasNextPage: true, endCursor: "more-labels" }),
+            comments: connectionFixture([
+              {
+                id: "cmt_1",
+                body: "Comment",
+                createdAt: "2026-07-01T00:00:00.000Z",
+                url: "https://linear.app/acme/issue/ENG-7#comment",
+                editedAt: null,
+                user: THEO,
+                reactions: nativeReactions,
+              },
+            ]),
             reactions: nativeReactions,
-            attachments: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
-            history: { nodes: [], pageInfo: { hasNextPage: true, endCursor: "more-history" } },
+            attachments: connectionFixture(),
+            history: connectionFixture([], { hasNextPage: true, endCursor: "more-history" }),
           }),
         }),
       });
@@ -1195,7 +1148,7 @@ describe("LinearIssueTracker", () => {
         T3ProbeCredential: () => ({
           viewer: test.requests.at(-1)?.authorization === "lin_api_other" ? THEO : JULIUS,
           organization: ORGANIZATION,
-          teams: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+          teams: connectionFixture(),
         }),
         T3Viewer: () =>
           limited
@@ -1262,7 +1215,7 @@ describe("LinearIssueTracker", () => {
               )
             : {
                 organization: ORGANIZATION,
-                issues: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+                issues: connectionFixture(),
               },
       });
       const native = yield* test.api;
@@ -1319,7 +1272,7 @@ describe("LinearIssueTracker", () => {
         const now = 1_750_000_000_000;
         yield* TestClock.setTime(now);
         const nativeIssue = issue("ENG-7", {
-          comments: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+          comments: connectionFixture(),
         });
         const headers = {
           "x-ratelimit-endpoint-name": "native-common-limit",
@@ -1772,7 +1725,7 @@ describe("LinearIssueTracker", () => {
       Effect.gen(function* () {
         const now = 1_750_000_000_000;
         yield* TestClock.setTime(now);
-        const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+        const empty = connectionFixture();
         const template = {
           id: "template",
           name: "Template",
@@ -1896,12 +1849,7 @@ describe("LinearIssueTracker", () => {
     Effect.gen(function* () {
       const test = fakeLinear({
         T3IssueReference: () => ({
-          issue: {
-            id: "iss_native",
-            identifier: "ENG-7",
-            url: "https://linear.app/acme/issue/ENG-7",
-            team: { key: "ENG" },
-          },
+          issue: issueReferenceFixture("iss_native", "ENG-7"),
         }),
         T3Viewer: () => Response.json({ errors: [{ message: "Unavailable" }] }, { status: 500 }),
         T3IssueReactions: () => ({
@@ -1945,15 +1893,12 @@ describe("LinearIssueTracker", () => {
           };
           return {
             organization: ORGANIZATION,
-            issues: {
-              nodes: [
-                textMatch,
-                ...(filter.or.some((branch) => branch.number?.eq === 12)
-                  ? [issue(`${team}-12`)]
-                  : []),
-              ],
-              pageInfo: { hasNextPage: false, endCursor: null },
-            },
+            issues: connectionFixture([
+              textMatch,
+              ...(filter.or.some((branch) => branch.number?.eq === 12)
+                ? [issue(`${team}-12`)]
+                : []),
+            ]),
           };
         },
       });
@@ -1995,16 +1940,16 @@ describe("LinearIssueTracker", () => {
           });
           return {
             organization: ORGANIZATION,
-            issues: {
-              nodes: [
+            issues: connectionFixture(
+              [
                 issue("ENG-2", {
                   state: state("Done", "completed"),
                   completedAt: "2026-07-03T00:00:00.000Z",
                 }),
                 issue("ENG-1"),
               ],
-              pageInfo: { hasNextPage: true, endCursor: "cur_2" },
-            },
+              { hasNextPage: true, endCursor: "cur_2" },
+            ),
           };
         },
       });
@@ -2042,8 +1987,8 @@ describe("LinearIssueTracker", () => {
         T3Viewer: () => ({ viewer: JULIUS, teams: { nodes: [] } }),
         T3Issue: () => ({
           issue: issue("ENG-7", {
-            comments: {
-              nodes: [
+            comments: connectionFixture(
+              [
                 {
                   id: "cmt_1",
                   body: "hi",
@@ -2054,8 +1999,8 @@ describe("LinearIssueTracker", () => {
                   reactions: [{ id: "r1", emoji: "👍", user: JULIUS }],
                 },
               ],
-              pageInfo: { hasNextPage: true, endCursor: "cmt_cur" },
-            },
+              { hasNextPage: true, endCursor: "cmt_cur" },
+            ),
             reactions: [
               { id: "r2", emoji: "🚀", user: THEO },
               { id: "r3", emoji: "🚀", user: JULIUS },
@@ -2158,32 +2103,20 @@ describe("LinearIssueTracker", () => {
   it.effect.each(["ENG", "acme/ENG"])("uses native team and member IDs with scope %s", (scope) =>
     Effect.gen(function* () {
       const test = fakeLinear({
-        T3Team: () => ({
-          organization: ORGANIZATION,
-          teams: {
-            nodes: [
-              teamFixture({
-                members: {
-                  nodes: [
-                    user("usr_imposter", "usr_display"),
-                    user("usr_display", "  Display Name  "),
-                    { ...user("usr_name", "  Full Name  "), displayName: "  " },
-                    { ...user("usr_id", "  "), displayName: null },
-                  ],
-                  pageInfo: { hasNextPage: false, endCursor: null },
-                },
-              }),
-            ],
-          },
-          issueLabels: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
-        }),
+        T3Team: () =>
+          teamResponseFixture(
+            teamFixture({
+              members: connectionFixture([
+                user("usr_imposter", "usr_display"),
+                user("usr_display", "  Display Name  "),
+                { ...user("usr_name", "  Full Name  "), displayName: "  " },
+                { ...user("usr_id", "  "), displayName: null },
+              ]),
+            }),
+            connectionFixture(),
+          ),
         T3IssueReference: () => ({
-          issue: {
-            id: "iss_native",
-            identifier: "ENG-7",
-            url: "https://linear.app/acme/issue/ENG-7",
-            team: { key: "ENG" },
-          },
+          issue: issueReferenceFixture("iss_native", "ENG-7"),
         }),
         T3IssueUpdate: (variables) => {
           expect(variables).toEqual({ id: "iss_native", input: { assigneeId: "usr_display" } });
@@ -2191,12 +2124,7 @@ describe("LinearIssueTracker", () => {
         },
         T3IssueCreate: (variables) => {
           expect(variables.input).toMatchObject({ teamId: "team_eng", assigneeId: "usr_display" });
-          return {
-            issueCreate: {
-              success: true,
-              issue: { identifier: "ENG-8", url: "https://linear.app/acme/issue/ENG-8" },
-            },
-          };
+          return createdIssueFixture("ENG-8");
         },
       });
       const api = yield* test.tracker;
@@ -2230,28 +2158,16 @@ describe("LinearIssueTracker", () => {
     Effect.gen(function* () {
       const label = labelFixture({ id: "team_bug", name: "Bug", color: "#000" });
       const test = fakeLinear({
-        T3Team: () => ({
-          organization: ORGANIZATION,
-          teams: {
-            nodes: [
-              teamFixture({
-                labels: { nodes: [label], pageInfo: { hasNextPage: false, endCursor: null } },
-              }),
-            ],
-          },
-          issueLabels: {
-            nodes: [{ ...label, id: "workspace_bug" }],
-            pageInfo: { hasNextPage: false, endCursor: null },
-          },
-        }),
+        T3Team: () =>
+          teamResponseFixture(
+            teamFixture({
+              labels: connectionFixture([label]),
+            }),
+            connectionFixture([{ ...label, id: "workspace_bug" }]),
+          ),
         T3IssueCreate: (variables) => {
           expect(variables.input).toMatchObject({ labelIds: ["workspace_bug"] });
-          return {
-            issueCreate: {
-              success: true,
-              issue: { identifier: "ENG-8", url: "https://linear.app/acme/issue/ENG-8" },
-            },
-          };
+          return createdIssueFixture("ENG-8");
         },
       });
       const api = yield* test.tracker;
@@ -2290,47 +2206,37 @@ describe("LinearIssueTracker", () => {
       const workspaceGroup = { ...group, id: "lbl_workspace_type", name: "WorkspaceType" };
       const test = fakeLinear({
         T3IssueReference: () => ({ issue: issue("ENG-7") }),
-        T3Team: () => ({
-          organization: ORGANIZATION,
-          teams: {
-            nodes: [
-              teamFixture({
-                labels: {
-                  nodes: test.requests
-                    .at(-1)
-                    ?.query.includes(
-                      stripIgnoredCharacters("labels(first: 250, includeArchived: true)"),
-                    )
-                    ? [old, group, bug]
-                    : [group, bug],
-                  pageInfo: { hasNextPage: false, endCursor: null },
-                },
-              }),
-            ],
-          },
-          issueLabels: {
-            nodes: test.requests
-              .at(-1)
-              ?.query.includes(
-                stripIgnoredCharacters("issueLabels(first: 250, includeArchived: true"),
-              )
-              ? [workspaceOld, workspaceGroup]
-              : [workspaceGroup],
-            pageInfo: { hasNextPage: true, endCursor: "more-labels" },
-          },
-        }),
+        T3Team: () =>
+          teamResponseFixture(
+            teamFixture({
+              labels: connectionFixture(
+                test.requests
+                  .at(-1)
+                  ?.query.includes(
+                    stripIgnoredCharacters("labels(first: 250, includeArchived: true)"),
+                  )
+                  ? [old, group, bug]
+                  : [group, bug],
+              ),
+            }),
+            connectionFixture(
+              test.requests
+                .at(-1)
+                ?.query.includes(
+                  stripIgnoredCharacters("issueLabels(first: 250, includeArchived: true"),
+                )
+                ? [workspaceOld, workspaceGroup]
+                : [workspaceGroup],
+              { hasNextPage: true, endCursor: "more-labels" },
+            ),
+          ),
         T3IssueUpdate: (variables) => {
           expect(variables.input).toEqual({ labelIds: [old.id, bug.id, workspaceOld.id] });
           return { issueUpdate: { success: true } };
         },
         T3IssueCreate: (variables) => {
           expect(variables.input).toMatchObject({ labelIds: [bug.id] });
-          return {
-            issueCreate: {
-              success: true,
-              issue: { identifier: "ENG-8", url: "https://linear.app/acme/issue/ENG-8" },
-            },
-          };
+          return createdIssueFixture("ENG-8");
         },
       });
       const api = yield* test.tracker;
@@ -2375,36 +2281,27 @@ describe("LinearIssueTracker", () => {
         const written: unknown[] = [];
         const test = fakeLinear({
           T3IssueReference: () => ({ issue: issue("ENG-7") }),
-          T3Team: () => ({
-            organization: ORGANIZATION,
-            teams: {
-              nodes: [
-                teamFixture({
-                  members: {
-                    nodes: [
-                      { ...user("usr_first", "Sam"), email: "first@acme.test" },
-                      { ...user("usr_second", "Sam"), email: "second@acme.test" },
-                      user("usr_solo", "Solo"),
-                    ],
-                    pageInfo: { hasNextPage: partial, endCursor: partial ? "more-members" : null },
-                  },
-                }),
-              ],
-            },
-            issueLabels: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
-          }),
+          T3Team: () =>
+            teamResponseFixture(
+              teamFixture({
+                members: connectionFixture(
+                  [
+                    { ...user("usr_first", "Sam"), email: "first@acme.test" },
+                    { ...user("usr_second", "Sam"), email: "second@acme.test" },
+                    user("usr_solo", "Solo"),
+                  ],
+                  { hasNextPage: partial, endCursor: partial ? "more-members" : null },
+                ),
+              }),
+              connectionFixture(),
+            ),
           T3IssueUpdate: (variables) => {
             written.push(variables.input);
             return { issueUpdate: { success: true } };
           },
           T3IssueCreate: (variables) => {
             written.push(variables.input);
-            return {
-              issueCreate: {
-                success: true,
-                issue: { identifier: "ENG-8", url: "https://linear.app/acme/issue/ENG-8" },
-              },
-            };
+            return createdIssueFixture("ENG-8");
           },
         });
         const api = yield* test.tracker;
@@ -2452,38 +2349,26 @@ describe("LinearIssueTracker", () => {
 
       const connected = fakeLinear({
         T3IssueReference: () => ({
-          issue: {
-            id: "iss_native",
-            identifier: "ENG-1",
-            url: "https://linear.app/acme/issue/ENG-1",
-            team: { key: "ENG" },
-          },
+          issue: issueReferenceFixture("iss_native", "ENG-1"),
         }),
-        T3TeamStates: () => ({
-          organization: ORGANIZATION,
-          teams: {
-            nodes: [
-              {
-                id: "team_eng",
-                key: "ENG",
-                name: "Engineering",
-                states: {
-                  nodes: [
-                    state("Canceled", "canceled", 3),
-                    state("Done", "completed", 2),
-                    state("Todo", "unstarted", 1),
-                  ],
-                  pageInfo: { hasNextPage: false, endCursor: null },
-                },
-                labels: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
-                members: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
-                ancestors: [],
-                templates: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
-              },
-            ],
-          },
-          issueLabels: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
-        }),
+        T3TeamStates: () =>
+          teamResponseFixture(
+            {
+              id: "team_eng",
+              key: "ENG",
+              name: "Engineering",
+              states: connectionFixture([
+                state("Canceled", "canceled", 3),
+                state("Done", "completed", 2),
+                state("Todo", "unstarted", 1),
+              ]),
+              labels: connectionFixture(),
+              members: connectionFixture(),
+              ancestors: [],
+              templates: connectionFixture(),
+            },
+            connectionFixture(),
+          ),
         T3IssueUpdate: (variables) => {
           updates.push(variables);
           return { issueUpdate: { success: true } };
@@ -2586,10 +2471,10 @@ it.effect.each(["acme/ENG", ""])("validates scope before an empty category filte
     const test = fakeLinear({
       T3Issues: () => ({
         organization: ORGANIZATION,
-        issues: {
-          nodes: [issue("ENG-7")],
-          pageInfo: { hasNextPage: true, endCursor: "next-native" },
-        },
+        issues: connectionFixture([issue("ENG-7")], {
+          hasNextPage: true,
+          endCursor: "next-native",
+        }),
       }),
     });
     const api = yield* test.tracker;
@@ -2614,10 +2499,10 @@ it.effect("keeps all states and the native cursor when category filtering is omi
     const test = fakeLinear({
       T3Issues: () => ({
         organization: ORGANIZATION,
-        issues: {
-          nodes: [issue("ENG-7"), issue("ENG-8", { state: state("Done", "completed") })],
-          pageInfo: { hasNextPage: true, endCursor: "next-native" },
-        },
+        issues: connectionFixture(
+          [issue("ENG-7"), issue("ENG-8", { state: state("Done", "completed") })],
+          { hasNextPage: true, endCursor: "next-native" },
+        ),
       }),
     });
     const api = yield* test.tracker;
@@ -2649,15 +2534,12 @@ it.effect.each(["asc", "desc"] as const)(
         const test = fakeLinear({
           T3Issues: () => ({
             organization: ORGANIZATION,
-            issues: {
-              nodes: [issue("ENG-7")],
-              pageInfo: {
-                hasNextPage: nextCursor !== null,
-                endCursor: nextCursor ?? "same",
-                hasPreviousPage: nextCursor !== null,
-                startCursor: nextCursor ?? "same",
-              },
-            },
+            issues: connectionFixture([issue("ENG-7")], {
+              hasNextPage: nextCursor !== null,
+              endCursor: nextCursor ?? "same",
+              hasPreviousPage: nextCursor !== null,
+              startCursor: nextCursor ?? "same",
+            }),
           }),
         });
         const api = yield* test.tracker;
@@ -2690,15 +2572,15 @@ it.effect("pages native workflow filters and ascending order without a viewer re
     const test = fakeLinear({
       T3Issues: () => ({
         organization: ORGANIZATION,
-        issues: {
-          nodes: [issue("ENG-2"), issue("ENG-1", { state: state("Triage", "triage") })],
-          pageInfo: {
+        issues: connectionFixture(
+          [issue("ENG-2"), issue("ENG-1", { state: state("Triage", "triage") })],
+          {
             hasNextPage: false,
             endCursor: null,
             hasPreviousPage: true,
             startCursor: "earlier",
           },
-        },
+        ),
       }),
     });
     const api = yield* test.tracker;
@@ -2816,16 +2698,16 @@ it.effect("pages hierarchy, history and attachments while checking the source sc
     let source = "ENG-7";
     const test = fakeLinear({
       T3Hierarchy: () => ({
-        issue: { ...issue(source), parent: null, children: { nodes: [relation], pageInfo: next } },
+        issue: { ...issue(source), parent: null, children: connectionFixture([relation], next) },
       }),
       T3History: () => ({
-        issue: { ...issue(source), history: { nodes: [history], pageInfo: next } },
+        issue: { ...issue(source), history: connectionFixture([history], next) },
       }),
       T3Attachments: () => ({
         issue: {
           ...issue(source),
-          attachments: {
-            nodes: [
+          attachments: connectionFixture(
+            [
               {
                 url: "https://github.com/acme/repo/pull/7",
                 title: "Fix",
@@ -2833,8 +2715,8 @@ it.effect("pages hierarchy, history and attachments while checking the source sc
                 metadata: { status: "merged" },
               },
             ],
-            pageInfo: next,
-          },
+            next,
+          ),
         },
       }),
     });
@@ -2887,7 +2769,7 @@ it.effect("sets and clears parent links while rejecting self and foreign parents
 it.effect("pages label and member candidates with native cursors and workspace checks", () =>
   Effect.gen(function* () {
     const pageInfo = { hasNextPage: true, endCursor: "more" };
-    const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+    const empty = connectionFixture();
     const test = fakeLinear({
       T3Team: () => ({
         organization: ORGANIZATION,
@@ -2896,14 +2778,14 @@ it.effect("pages label and member candidates with native cursors and workspace c
           nodes: [teamFixture({ id: "team-1", states: empty, labels: empty, members: empty })],
         },
       }),
-      T3LabelCandidates: () => ({
-        organization: ORGANIZATION,
-        teams: { nodes: [{ id: "team-1", key: "ENG", name: "Engineering" }] },
-        issueLabels: {
-          nodes: [labelFixture({ id: "label-1", name: "Bug", color: "#f00", description: null })],
-          pageInfo,
-        },
-      }),
+      T3LabelCandidates: () =>
+        teamResponseFixture(
+          { id: "team-1", key: "ENG", name: "Engineering" },
+          connectionFixture(
+            [labelFixture({ id: "label-1", name: "Bug", color: "#f00", description: null })],
+            pageInfo,
+          ),
+        ),
       T3AssigneeCandidates: () => ({
         organization: ORGANIZATION,
         teams: {
@@ -2916,7 +2798,7 @@ it.effect("pages label and member candidates with native cursors and workspace c
               visibility: "private",
               restrictedBy: null,
               ancestors: [],
-              members: { nodes: [JULIUS], pageInfo },
+              members: connectionFixture([JULIUS], pageInfo),
             },
           ],
         },
@@ -2948,10 +2830,7 @@ it.effect("sets native workflow state IDs and names but refuses an unknown state
               id: "team-1",
               key: "ENG",
               name: "Engineering",
-              states: {
-                nodes: [state("Review", "started"), state("Todo", "unstarted")],
-                pageInfo: { hasNextPage: false, endCursor: null },
-              },
+              states: connectionFixture([state("Review", "started"), state("Todo", "unstarted")]),
             },
           ],
         },
@@ -2974,43 +2853,34 @@ it.effect("sets native workflow state IDs and names but refuses an unknown state
 
 it.effect("creates an issue with a checked parent and a plain native template", () =>
   Effect.gen(function* () {
-    const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+    const empty = connectionFixture();
     const test = fakeLinear({
-      T3Team: () => ({
-        organization: ORGANIZATION,
-        teams: {
-          nodes: [
-            teamFixture({
-              id: "team-1",
-              states: empty,
-              labels: empty,
-              members: empty,
-              templates: {
-                pageInfo: empty.pageInfo,
-                nodes: [
-                  {
-                    id: "template-1",
-                    name: "Bug",
-                    description: "Report a bug",
-                    content: "Steps",
-                    type: "issue",
-                    hasFormFields: false,
-                    templateData: {},
-                  },
-                ],
-              },
-            }),
-          ],
-        },
-        issueLabels: empty,
-      }),
+      T3Team: () =>
+        teamResponseFixture(
+          teamFixture({
+            id: "team-1",
+            states: empty,
+            labels: empty,
+            members: empty,
+            templates: {
+              pageInfo: empty.pageInfo,
+              nodes: [
+                {
+                  id: "template-1",
+                  name: "Bug",
+                  description: "Report a bug",
+                  content: "Steps",
+                  type: "issue",
+                  hasFormFields: false,
+                  templateData: {},
+                },
+              ],
+            },
+          }),
+          empty,
+        ),
       T3IssueReference: () => ({ issue: issue("ENG-7") }),
-      T3IssueCreate: () => ({
-        issueCreate: {
-          success: true,
-          issue: { identifier: "ENG-8", url: "https://linear.app/acme/issue/ENG-8" },
-        },
-      }),
+      T3IssueCreate: () => createdIssueFixture("ENG-8"),
     });
     const api = yield* test.tracker;
     const input = {
@@ -3040,8 +2910,8 @@ it.effect("rejects unchanged Linear comment cursors without extra requests", () 
         T3Comments: () => ({
           issue: {
             ...issue("ENG-7"),
-            comments: {
-              nodes: [
+            comments: connectionFixture(
+              [
                 {
                   id: "comment-1",
                   body: "Saved comment",
@@ -3052,8 +2922,8 @@ it.effect("rejects unchanged Linear comment cursors without extra requests", () 
                   reactions: [],
                 },
               ],
-              pageInfo: { hasNextPage: nextCursor !== null, endCursor: nextCursor ?? "same" },
-            },
+              { hasNextPage: nextCursor !== null, endCursor: nextCursor ?? "same" },
+            ),
           },
         }),
       });
@@ -3096,20 +2966,17 @@ it.effect("maps editable old comments with the supplied viewer and native edit t
       T3Comments: () => ({
         issue: {
           ...issue("ENG-7"),
-          comments: {
-            nodes: [
-              {
-                id: "c1",
-                body: "edited",
-                createdAt: "2026-07-01T00:00:00.000Z",
-                editedAt: "2026-07-02T00:00:00.000Z",
-                url: "https://linear.app/acme/issue/ENG-7#comment",
-                user: JULIUS,
-                reactions: [],
-              },
-            ],
-            pageInfo: { hasNextPage: false, endCursor: null },
-          },
+          comments: connectionFixture([
+            {
+              id: "c1",
+              body: "edited",
+              createdAt: "2026-07-01T00:00:00.000Z",
+              editedAt: "2026-07-02T00:00:00.000Z",
+              url: "https://linear.app/acme/issue/ENG-7#comment",
+              user: JULIUS,
+              reactions: [],
+            },
+          ]),
         },
       }),
     });
@@ -3160,24 +3027,21 @@ it.effect("retains history entries with no known field change", () =>
       T3History: () => ({
         issue: {
           ...issue("ENG-7"),
-          history: {
-            nodes: [
-              {
-                id: "history-native",
-                createdAt: "2026-07-01T00:00:00Z",
-                actor: null,
-                fromState: null,
-                toState: null,
-                fromAssignee: null,
-                toAssignee: null,
-                addedLabels: [],
-                removedLabels: [],
-                fromTitle: null,
-                toTitle: null,
-              },
-            ],
-            pageInfo: { hasNextPage: false, endCursor: null },
-          },
+          history: connectionFixture([
+            {
+              id: "history-native",
+              createdAt: "2026-07-01T00:00:00Z",
+              actor: null,
+              fromState: null,
+              toState: null,
+              fromAssignee: null,
+              toAssignee: null,
+              addedLabels: [],
+              removedLabels: [],
+              fromTitle: null,
+              toTitle: null,
+            },
+          ]),
         },
       }),
     });
@@ -3193,7 +3057,7 @@ it.effect.each(["create", "update"] as const)(
   "uses scoped native IDs beyond the initial 250 without scans: %s",
   (operation) =>
     Effect.gen(function* () {
-      const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+      const empty = connectionFixture();
       const labels = Array.from({ length: 250 }, (_, n) => ({
         id: `label-${n}`,
         name: "Same",
@@ -3205,16 +3069,12 @@ it.effect.each(["create", "update"] as const)(
       const members = Array.from({ length: 250 }, (_, n) => user(`member-${n}`, "Same"));
       const team = teamFixture({
         states: empty,
-        labels: { nodes: labels, pageInfo: { hasNextPage: true, endCursor: "labels-250" } },
-        members: { nodes: members, pageInfo: { hasNextPage: true, endCursor: "members-250" } },
+        labels: connectionFixture(labels, { hasNextPage: true, endCursor: "labels-250" }),
+        members: connectionFixture(members, { hasNextPage: true, endCursor: "members-250" }),
       });
       const test = fakeLinear({
         T3IssueReference: () => ({ issue: issue("ENG-7") }),
-        T3Team: () => ({
-          organization: ORGANIZATION,
-          teams: { nodes: [team] },
-          issueLabels: empty,
-        }),
+        T3Team: () => teamResponseFixture(team, empty),
         T3LabelCandidates: (variables) => {
           expect(variables).toMatchObject({
             first: 1,
@@ -3226,14 +3086,13 @@ it.effect.each(["create", "update"] as const)(
               ],
             },
           });
-          return {
-            organization: ORGANIZATION,
-            teams: { nodes: [team] },
-            issueLabels: {
-              nodes: [labelFixture({ id: "label-250", name: "Same", color: "#000" })],
-              pageInfo: empty.pageInfo,
-            },
-          };
+          return teamResponseFixture(
+            team,
+            connectionFixture(
+              [labelFixture({ id: "label-250", name: "Same", color: "#000" })],
+              empty.pageInfo,
+            ),
+          );
         },
         T3AssigneeCandidates: (variables) => {
           expect(variables).toMatchObject({
@@ -3250,10 +3109,7 @@ it.effect.each(["create", "update"] as const)(
               nodes: [
                 {
                   ...team,
-                  members: {
-                    nodes: [user("member-250", "Same")],
-                    pageInfo: empty.pageInfo,
-                  },
+                  members: connectionFixture([user("member-250", "Same")], empty.pageInfo),
                 },
               ],
             },
@@ -3264,12 +3120,7 @@ it.effect.each(["create", "update"] as const)(
             labelIds: ["label-250"],
             assigneeId: "member-250",
           });
-          return {
-            issueCreate: {
-              success: true,
-              issue: { identifier: "ENG-8", url: "https://linear.app/acme/issue/ENG-8" },
-            },
-          };
+          return createdIssueFixture("ENG-8");
         },
         T3IssueUpdate: (variables) => {
           expect(variables.input).toEqual({ labelIds: ["label-250"], assigneeId: "member-250" });
@@ -3305,7 +3156,7 @@ it.effect.each([
   "too-many",
 ] as const)("refuses invalid selected label IDs without a mutation: %s", (failure) =>
   Effect.gen(function* () {
-    const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+    const empty = connectionFixture();
     const team = teamFixture({
       states: empty,
       labels: { ...empty, pageInfo: { hasNextPage: true, endCursor: "more" } },
@@ -3313,34 +3164,29 @@ it.effect.each([
     });
     const test = fakeLinear({
       T3IssueReference: () => ({ issue: issue("ENG-7") }),
-      T3Team: () => ({
-        organization: ORGANIZATION,
-        teams: { nodes: [team] },
-        issueLabels: empty,
-      }),
+      T3Team: () => teamResponseFixture(team, empty),
       T3LabelCandidates: () => ({
         organization: failure === "foreign" ? { ...ORGANIZATION, id: "org_other" } : ORGANIZATION,
         teams: { nodes: [team] },
-        issueLabels: {
-          nodes:
-            failure === "missing"
-              ? []
-              : [
-                  labelFixture({
-                    id: failure === "wrong-id" ? "other" : "chosen",
-                    name: "Same",
-                    color: "#000",
-                    isGroup: failure === "group",
-                  }),
-                  ...(failure === "duplicate"
-                    ? [labelFixture({ id: "chosen", name: "Same", color: "#000" })]
-                    : []),
-                ],
-          pageInfo: {
+        issueLabels: connectionFixture(
+          failure === "missing"
+            ? []
+            : [
+                labelFixture({
+                  id: failure === "wrong-id" ? "other" : "chosen",
+                  name: "Same",
+                  color: "#000",
+                  isGroup: failure === "group",
+                }),
+                ...(failure === "duplicate"
+                  ? [labelFixture({ id: "chosen", name: "Same", color: "#000" })]
+                  : []),
+              ],
+          {
             hasNextPage: failure === "partial",
             endCursor: failure === "partial" ? "more" : null,
           },
-        },
+        ),
       }),
     });
     const api = yield* test.tracker;
@@ -3374,7 +3220,7 @@ it.effect.each(["foreign", "partial", "inactive", "wrong-id"] as const)(
   "refuses invalid selected member IDs without a mutation: %s",
   (failure) =>
     Effect.gen(function* () {
-      const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+      const empty = connectionFixture();
       const team = teamFixture({
         states: empty,
         labels: empty,
@@ -3382,11 +3228,7 @@ it.effect.each(["foreign", "partial", "inactive", "wrong-id"] as const)(
       });
       const test = fakeLinear({
         T3IssueReference: () => ({ issue: issue("ENG-7") }),
-        T3Team: () => ({
-          organization: ORGANIZATION,
-          teams: { nodes: [team] },
-          issueLabels: empty,
-        }),
+        T3Team: () => teamResponseFixture(team, empty),
         T3AssigneeCandidates: () => ({
           organization: ORGANIZATION,
           teams: {
@@ -3394,16 +3236,15 @@ it.effect.each(["foreign", "partial", "inactive", "wrong-id"] as const)(
               {
                 ...team,
                 id: failure === "foreign" ? "other-team" : team.id,
-                members: {
-                  nodes:
-                    failure === "inactive"
-                      ? []
-                      : [user(failure === "wrong-id" ? "other" : "chosen", "Same")],
-                  pageInfo: {
+                members: connectionFixture(
+                  failure === "inactive"
+                    ? []
+                    : [user(failure === "wrong-id" ? "other" : "chosen", "Same")],
+                  {
                     hasNextPage: failure === "partial",
                     endCursor: failure === "partial" ? "more" : null,
                   },
-                },
+                ),
               },
             ],
           },
@@ -3439,10 +3280,7 @@ it.effect.each(["comment", "update", "state", "parent", "clearParent"] as const)
                 id: "team_eng",
                 key: "ENG",
                 name: "Engineering",
-                states: {
-                  nodes: [state("Done", "completed")],
-                  pageInfo: { hasNextPage: false, endCursor: null },
-                },
+                states: connectionFixture([state("Done", "completed")]),
               },
             ],
           },
@@ -3511,7 +3349,7 @@ it.effect.each([false, true])(
   "lists and retains native parent-team labels: partial=%s",
   (partial) =>
     Effect.gen(function* () {
-      const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+      const empty = connectionFixture();
       const parentLabel = labelFixture({ id: "parent-security", name: "Security", color: "#000" });
       const childLabel = { ...parentLabel, id: "child-security" };
       const other = labelFixture({ id: "other", name: "Other", color: "#000" });
@@ -3529,19 +3367,15 @@ it.effect.each([false, true])(
             visibility: "public",
             restrictedBy: null,
             templates: empty,
-            labels: {
-              nodes: [parentLabel],
-              pageInfo: { hasNextPage: partial, endCursor: "parent-more" },
-            },
+            labels: connectionFixture([parentLabel], {
+              hasNextPage: partial,
+              endCursor: "parent-more",
+            }),
           },
         ],
       });
       const test = fakeLinear({
-        T3Team: () => ({
-          organization: ORGANIZATION,
-          teams: { nodes: [team] },
-          issueLabels: empty,
-        }),
+        T3Team: () => teamResponseFixture(team, empty),
         T3IssueReference: () => ({ issue: issue("ENG-7") }),
         T3LabelCandidates: (variables) => {
           expect(variables.filter).toMatchObject({
@@ -3567,24 +3401,18 @@ it.effect.each([false, true])(
                   ]),
             ],
           });
-          return {
-            organization: ORGANIZATION,
-            teams: { nodes: [team] },
-            issueLabels:
-              variables.after === "previous"
-                ? {
-                    nodes: [parentLabel],
-                    pageInfo: { hasNextPage: true, endCursor: "next-native" },
-                  }
-                : {
-                    ...empty,
-                    nodes:
-                      variables.filter &&
-                      JSON.stringify(variables.filter).includes('"parent-hidden"')
-                        ? [{ ...parentLabel, id: "parent-hidden" }]
-                        : [],
-                  },
-          };
+          return teamResponseFixture(
+            team,
+            variables.after === "previous"
+              ? connectionFixture([parentLabel], { hasNextPage: true, endCursor: "next-native" })
+              : {
+                  ...empty,
+                  nodes:
+                    variables.filter && JSON.stringify(variables.filter).includes('"parent-hidden"')
+                      ? [{ ...parentLabel, id: "parent-hidden" }]
+                      : [],
+                },
+          );
         },
         T3IssueUpdate: (variables) => {
           written.push(variables.input);
@@ -3592,12 +3420,7 @@ it.effect.each([false, true])(
         },
         T3IssueCreate: (variables) => {
           expect(variables.input).toMatchObject({ labelIds: [parentLabel.id] });
-          return {
-            issueCreate: {
-              success: true,
-              issue: { identifier: "ENG-8", url: "https://linear.app/acme/issue/ENG-8" },
-            },
-          };
+          return createdIssueFixture("ENG-8");
         },
       });
       const api = yield* test.tracker;
@@ -3674,7 +3497,7 @@ it.effect.each([false, true])(
 
 it.effect.each([5, 6])("bounds native Linear ancestor catalogs at five teams: %s", (count) =>
   Effect.gen(function* () {
-    const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+    const empty = connectionFixture();
     const test = fakeLinear({
       T3Team: () => ({
         organization: ORGANIZATION,
@@ -3711,7 +3534,7 @@ it.effect.each(["workspace", "ancestor"] as const)(
   "lists and creates native issue templates with an empty team catalog: %s",
   (source) =>
     Effect.gen(function* () {
-      const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+      const empty = connectionFixture();
       const plain = {
         id: "inherited-plain",
         name: "Bug",
@@ -3757,12 +3580,7 @@ it.effect.each(["workspace", "ancestor"] as const)(
         },
         T3IssueCreate: (variables) => {
           expect(variables.input).toMatchObject({ teamId: "team_eng", templateId: plain.id });
-          return {
-            issueCreate: {
-              success: true,
-              issue: { identifier: "ENG-8", url: "https://linear.app/acme/issue/ENG-8" },
-            },
-          };
+          return createdIssueFixture("ENG-8");
         },
       });
       const api = yield* test.tracker;
@@ -3806,8 +3624,8 @@ it.effect.each(["workspace", "team", "ancestor"] as const)(
   "does not claim a complete template list from a partial native catalog: %s",
   (partial) =>
     Effect.gen(function* () {
-      const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
-      const catalog = { nodes: [], pageInfo: { hasNextPage: true, endCursor: "more-native" } };
+      const empty = connectionFixture();
+      const catalog = connectionFixture([], { hasNextPage: true, endCursor: "more-native" });
       const test = fakeLinear({
         T3Team: () => ({
           organization: { ...ORGANIZATION, templates: partial === "workspace" ? catalog : empty },
@@ -3844,7 +3662,7 @@ it.effect.each(["workspace", "team", "ancestor"] as const)(
 
 it.effect.each([100, 101])("bounds native workspace template catalogs: %s", (count) =>
   Effect.gen(function* () {
-    const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+    const empty = connectionFixture();
     const test = fakeLinear({
       T3Team: () => ({
         organization: {
@@ -3877,7 +3695,7 @@ it.effect.each([100, 101])("bounds native workspace template catalogs: %s", (cou
 
 it.effect("uses workspace-scoped native templates without accepting another team's template", () =>
   Effect.gen(function* () {
-    const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+    const empty = connectionFixture();
     const template = {
       id: "workspace-template",
       name: "Bug",
@@ -3943,7 +3761,7 @@ it.effect.each(["create", "assignee", "clearLabels", "labelPage", "missingLabels
   "keeps ancestor metadata while selecting only needed labels: %s",
   (operation) =>
     Effect.gen(function* () {
-      const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+      const empty = connectionFixture();
       const parentLabel = labelFixture({ id: "parent-label", name: "Security", color: "#000" });
       const test = fakeLinear({
         T3Team: (variables) => {
@@ -3985,15 +3803,7 @@ it.effect.each(["create", "assignee", "clearLabels", "labelPage", "missingLabels
         T3IssueReference: () => ({ issue: issue("ENG-7") }),
         T3IssueCreate: (variables) => {
           expect(variables.input).toMatchObject({ labelIds: [] });
-          return {
-            issueCreate: {
-              success: true,
-              issue: {
-                identifier: "ENG-8",
-                url: "https://linear.app/acme/issue/ENG-8",
-              },
-            },
-          };
+          return createdIssueFixture("ENG-8");
         },
         T3IssueUpdate: (variables) => {
           expect(variables.input).toEqual(
@@ -4007,11 +3817,10 @@ it.effect.each(["create", "assignee", "clearLabels", "labelPage", "missingLabels
               { or: [{ team: { id: { in: ["team_eng", "parent"] } } }, { team: { null: true } }] },
             ],
           });
-          return {
-            organization: ORGANIZATION,
-            teams: { nodes: [{ id: "team_eng", key: "ENG", name: "Engineering" }] },
-            issueLabels: { ...empty, nodes: [parentLabel] },
-          };
+          return teamResponseFixture(
+            { id: "team_eng", key: "ENG", name: "Engineering" },
+            { ...empty, nodes: [parentLabel] },
+          );
         },
       });
       const api = yield* test.tracker;
@@ -4050,7 +3859,7 @@ it.effect.each([false, true])(
   "uses active workspace assignees only for public teams: private=%s",
   (privateTeam) =>
     Effect.gen(function* () {
-      const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+      const empty = connectionFixture();
       const team = teamFixture({
         private: privateTeam,
         visibility: privateTeam ? "private" : "public",
@@ -4069,23 +3878,15 @@ it.effect.each([false, true])(
         templateData: { assigneeId: THEO.id },
       };
       const test = fakeLinear({
-        T3Team: () => ({
-          organization: ORGANIZATION,
-          teams: { nodes: [{ ...team, templates: { ...empty, nodes: [template] } }] },
-          issueLabels: empty,
-        }),
+        T3Team: () =>
+          teamResponseFixture({ ...team, templates: { ...empty, nodes: [template] } }, empty),
         T3IssueReference: () => ({ issue: issue("ENG-7") }),
         T3AssigneeCandidates: (variables) => ({
           organization: ORGANIZATION,
           teams: { nodes: [team] },
           ...(variables.publicTeam ? { users: { ...empty, nodes: [JULIUS, THEO] } } : {}),
         }),
-        T3IssueCreate: () => ({
-          issueCreate: {
-            success: true,
-            issue: { identifier: "ENG-8", url: "https://linear.app/acme/issue/ENG-8" },
-          },
-        }),
+        T3IssueCreate: () => createdIssueFixture("ENG-8"),
         T3IssueUpdate: () => ({ issueUpdate: { success: true } }),
       });
       const api = yield* test.tracker;
@@ -4141,7 +3942,7 @@ it.effect.each(["ENG", "acme/ENG"])(
   "allows parents in other teams in the observed workspace: %s",
   (scope) =>
     Effect.gen(function* () {
-      const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+      const empty = connectionFixture();
       const test = fakeLinear({
         T3IssueReference: ({ id }) => ({
           issue:
@@ -4169,12 +3970,7 @@ it.effect.each(["ENG", "acme/ENG"])(
           },
         }),
         T3IssueUpdate: () => ({ issueUpdate: { success: true } }),
-        T3IssueCreate: () => ({
-          issueCreate: {
-            success: true,
-            issue: { identifier: "ENG-9", url: "https://linear.app/acme/issue/ENG-9" },
-          },
-        }),
+        T3IssueCreate: () => createdIssueFixture("ENG-9"),
       });
       const api = yield* test.tracker;
       const selected = { ...target, scope };
@@ -4236,7 +4032,7 @@ it.effect.each(["create", "update"] as const)(
   "resolves public workspace assignee IDs beyond 250 without a scan: %s",
   (operation) =>
     Effect.gen(function* () {
-      const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+      const empty = connectionFixture();
       const team = teamFixture({
         private: false,
         visibility: "public",
@@ -4258,17 +4054,12 @@ it.effect.each(["create", "update"] as const)(
           users:
             first === 1
               ? { ...empty, nodes: [THEO] }
-              : {
-                  nodes: Array.from({ length: 250 }, (_, n) => user(`other-${n}`, "Other")),
-                  pageInfo: { hasNextPage: true, endCursor: "users-250" },
-                },
+              : connectionFixture(
+                  Array.from({ length: 250 }, (_, n) => user(`other-${n}`, "Other")),
+                  { hasNextPage: true, endCursor: "users-250" },
+                ),
         }),
-        T3IssueCreate: () => ({
-          issueCreate: {
-            success: true,
-            issue: { identifier: "ENG-8", url: "https://linear.app/acme/issue/ENG-8" },
-          },
-        }),
+        T3IssueCreate: () => createdIssueFixture("ENG-8"),
         T3IssueUpdate: () => ({ issueUpdate: { success: true } }),
       });
       const api = yield* test.tracker;
@@ -4296,7 +4087,7 @@ it.effect.each(["inactive", "missing-privacy", "foreign-organization", "privacy-
   "refuses unavailable public-team assignees before writes: %s",
   (failure) =>
     Effect.gen(function* () {
-      const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+      const empty = connectionFixture();
       const team = {
         id: "team_eng",
         key: "ENG",
@@ -4358,7 +4149,7 @@ it.effect.each([false, true])(
   "continues only the active assignee connection with its cursor: private=%s",
   (privateTeam) =>
     Effect.gen(function* () {
-      const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+      const empty = connectionFixture();
       const team = {
         id: "team_eng",
         key: "ENG",
@@ -4373,10 +4164,10 @@ it.effect.each([false, true])(
           const page =
             after === "users-250"
               ? { ...empty, nodes: [THEO] }
-              : {
-                  nodes: Array.from({ length: 200 }, (_, n) => user(`member-${n}`, "Member")),
-                  pageInfo: { hasNextPage: true, endCursor: "users-250" },
-                };
+              : connectionFixture(
+                  Array.from({ length: 200 }, (_, n) => user(`member-${n}`, "Member")),
+                  { hasNextPage: true, endCursor: "users-250" },
+                );
           return {
             organization: ORGANIZATION,
             teams: { nodes: [{ ...team, ...(readMembers ? { members: page } : {}) }] },
@@ -4416,7 +4207,7 @@ it.effect.each([401, 429])(
   "preserves native public assignee errors without a mutation: %s",
   (status) =>
     Effect.gen(function* () {
-      const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+      const empty = connectionFixture();
       const team = teamFixture({
         private: false,
         visibility: "public",
@@ -4476,7 +4267,7 @@ it.effect.each(["boundary", "child-guest", "parent-guest"] as const)(
   "uses restricted-team native membership within its nearest private boundary: %s",
   (membership) =>
     Effect.gen(function* () {
-      const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+      const empty = connectionFixture();
       const boundary = {
         id: "private-boundary",
         key: "PRIVATE",
@@ -4587,12 +4378,7 @@ it.effect.each(["boundary", "child-guest", "parent-guest"] as const)(
               : {}),
           };
         },
-        T3IssueCreate: () => ({
-          issueCreate: {
-            success: true,
-            issue: { identifier: "ENG-8", url: "https://linear.app/acme/issue/ENG-8" },
-          },
-        }),
+        T3IssueCreate: () => createdIssueFixture("ENG-8"),
         T3IssueUpdate: () => ({ issueUpdate: { success: true } }),
       });
       const api = yield* test.tracker;
@@ -4703,8 +4489,8 @@ it.effect.each(["asc", "desc"] as const)(
         const from = variables.last == null ? start : Math.max(0, end - Number(variables.last));
         const to =
           variables.last == null ? Math.min(all.length, from + Number(variables.first)) : end;
-        return {
-          nodes: all.slice(from, to).map((row) =>
+        return connectionFixture(
+          all.slice(from, to).map((row) =>
             history
               ? {
                   ...row,
@@ -4727,13 +4513,13 @@ it.effect.each(["asc", "desc"] as const)(
                   reactions: [],
                 },
           ),
-          pageInfo: {
+          {
             hasNextPage: to < all.length,
             endCursor: String(to),
             hasPreviousPage: from > 0,
             startCursor: String(from),
           },
-        };
+        );
       };
       const test = fakeLinear({
         T3History: (variables) => ({
@@ -4839,15 +4625,12 @@ it.effect.each(["getHistory", "getComments"] as const)(
         [operation === "getHistory" ? "T3History" : "T3Comments"]: () => ({
           issue: {
             ...issue("ENG-7"),
-            [operation === "getHistory" ? "history" : "comments"]: {
-              nodes: [],
-              pageInfo: {
-                hasNextPage: false,
-                endCursor: null,
-                hasPreviousPage: true,
-                startCursor: null,
-              },
-            },
+            [operation === "getHistory" ? "history" : "comments"]: connectionFixture([], {
+              hasNextPage: false,
+              endCursor: null,
+              hasPreviousPage: true,
+              startCursor: null,
+            }),
           },
         }),
       });

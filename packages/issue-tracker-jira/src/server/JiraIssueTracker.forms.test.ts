@@ -6,7 +6,7 @@ import { IssueCandidates, IssueFieldValues } from "@t3tools/contracts";
 import { IssueTrackerHost } from "@t3tools/issue-tracker-core/server/IssueTrackerHost";
 import { IssueTrackerError } from "@t3tools/issue-tracker-core/server/IssueTracker";
 import * as JiraApi from "./JiraApi.ts";
-import { makeJiraTransport } from "./jiraTestHelpers.ts";
+import { jiraDocument, makeJiraTransport } from "./jiraTestHelpers.ts";
 import * as JiraIssueTracker from "./JiraIssueTracker.ts";
 
 const target = { cwd: "/tmp", host: "example.atlassian.net", scope: "ENG", key: "ENG-1" };
@@ -14,18 +14,14 @@ const isTrackerError = Schema.is(IssueTrackerError);
 const decodeCandidates = Schema.decodeEffect(IssueCandidates);
 const decodeFieldValues = Schema.decodeEffect(IssueFieldValues);
 const status = { id: "2", name: "Review", statusCategory: { key: "indeterminate" } };
-const document = {
-  type: "doc",
-  version: 1,
-  content: [
-    { type: "paragraph", content: [{ type: "text", text: "Body", marks: [{ type: "strong" }] }] },
-    {
-      type: "mediaSingle",
-      attrs: { layout: "center", native: { keep: true } },
-      content: [{ type: "media", attrs: { type: "file", id: "file-1", collection: "files" } }],
-    },
-  ],
-};
+const document = jiraDocument([
+  { type: "paragraph", content: [{ type: "text", text: "Body", marks: [{ type: "strong" }] }] },
+  {
+    type: "mediaSingle",
+    attrs: { layout: "center", native: { keep: true } },
+    content: [{ type: "media", attrs: { type: "file", id: "file-1", collection: "files" } }],
+  },
+]);
 const issue = {
   key: "ENG-1",
   fields: {
@@ -918,11 +914,7 @@ it.effect.each(["cloud", "data-center"] as const)(
       });
       const nativeEnvironment =
         deployment === "cloud"
-          ? {
-              type: "doc",
-              version: 1,
-              content: [{ type: "paragraph", content: [{ type: "text", text: "UAT" }] }],
-            }
+          ? jiraDocument([{ type: "paragraph", content: [{ type: "text", text: "UAT" }] }])
           : "UAT";
       expect(
         f.calls.find((call) => call.path === "/issue" && call.method === "POST")?.body,
@@ -954,7 +946,7 @@ it.effect.each([
     const api = yield* f.api;
     const richBody = {
       format: "adf" as const,
-      document: JSON.stringify({ type: "doc", version: 1, content: [node] }),
+      document: JSON.stringify(jiraDocument([node])),
     };
     yield* api.update!({ ...target, body: "legacy", richBody }).pipe(Effect.flip);
     yield* api.editComment!({ ...target, commentId: "c1", body: "legacy", richBody }).pipe(
@@ -1241,10 +1233,8 @@ it.effect.each(["textColor", "subsup"])(
       );
       const richBody = {
         format: "adf" as const,
-        document: JSON.stringify({
-          type: "doc",
-          version: 1,
-          content: [
+        document: JSON.stringify(
+          jiraDocument([
             {
               type: "codeBlock",
               content: [
@@ -1255,8 +1245,8 @@ it.effect.each(["textColor", "subsup"])(
                 },
               ],
             },
-          ],
-        }),
+          ]),
+        ),
       };
       yield* api.update!({ ...target, richBody }).pipe(Effect.flip);
       yield* api.editComment!({ ...target, commentId: "c1", body: "fallback", richBody }).pipe(
@@ -1270,13 +1260,11 @@ it.effect.each(["textColor", "subsup"])(
   "keeps serialized marked ADF as plain create text instead of a native code block: %s",
   (type) =>
     Effect.gen(function* () {
-      const body = JSON.stringify({
-        type: "doc",
-        version: 1,
-        content: [
+      const body = JSON.stringify(
+        jiraDocument([
           { type: "codeBlock", content: [{ type: "text", text: "code", marks: [{ type }] }] },
-        ],
-      });
+        ]),
+      );
       const f = fixture((path) =>
         path.includes("/issuetypes/task?")
           ? {
@@ -1295,11 +1283,9 @@ it.effect.each(["textColor", "subsup"])(
           project: { key: "ENG" },
           issuetype: { id: "task" },
           summary: "New",
-          description: {
-            type: "doc",
-            version: 1,
-            content: [{ type: "paragraph", content: [{ type: "text", text: body }] }],
-          },
+          description: jiraDocument([
+            { type: "paragraph", content: [{ type: "text", text: body }] },
+          ]),
         },
       });
       expect(f.calls.map(({ method }) => method)).toEqual(["GET", "GET", "POST"]);

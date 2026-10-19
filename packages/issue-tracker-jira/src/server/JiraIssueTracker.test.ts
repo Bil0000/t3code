@@ -9,7 +9,7 @@ import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import { IssueTrackerHost } from "@t3tools/issue-tracker-core/server/IssueTrackerHost";
 
 import * as JiraApi from "./JiraApi.ts";
-import { makeJiraTransport } from "./jiraTestHelpers.ts";
+import { jiraDocument, makeJiraTransport } from "./jiraTestHelpers.ts";
 import * as JiraIssueTracker from "./JiraIssueTracker.ts";
 
 const packed = JSON.stringify({
@@ -33,11 +33,7 @@ const issue = {
     assignee: user,
     labels: ["bug"],
     comment: { total: 4 },
-    description: {
-      type: "doc",
-      version: 1,
-      content: [{ type: "paragraph", content: [{ type: "text", text: "body" }] }],
-    },
+    description: jiraDocument([{ type: "paragraph", content: [{ type: "text", text: "body" }] }]),
     status: { id: "2", name: "Review", statusCategory: { key: "indeterminate" } },
   },
 };
@@ -1289,48 +1285,32 @@ it.effect.each([200, 403])(
         "/rest/api/3/issue/ENG-1/comment/9001",
       ]);
       expect(body(f.calls[2])).toEqual({
-        body: {
-          type: "doc",
-          version: 1,
-          content: [{ type: "paragraph", content: [{ type: "text", text: "changed" }] }],
-        },
+        body: jiraDocument([{ type: "paragraph", content: [{ type: "text", text: "changed" }] }]),
       });
     }),
 );
 
-const richCommentBody = {
-  type: "doc",
-  version: 1,
-  content: [
-    { type: "paragraph", content: [{ type: "text", text: "rich", marks: [{ type: "strong" }] }] },
-  ],
-};
+const richCommentBody = jiraDocument([
+  { type: "paragraph", content: [{ type: "text", text: "rich", marks: [{ type: "strong" }] }] },
+]);
 
 it.effect.each([
   richCommentBody,
-  {
-    type: "doc",
-    version: 1,
-    content: [
-      {
-        type: "paragraph",
-        content: [{ type: "mention", attrs: { id: "native-account", text: "@Ada" } }],
-      },
-    ],
-  },
-  {
-    type: "doc",
-    version: 1,
-    content: [
-      {
-        type: "taskList",
-        attrs: { localId: "list" },
-        content: [{ type: "taskItem", attrs: { localId: "task", state: "TODO" } }],
-      },
-    ],
-  },
+  jiraDocument([
+    {
+      type: "paragraph",
+      content: [{ type: "mention", attrs: { id: "native-account", text: "@Ada" } }],
+    },
+  ]),
+  jiraDocument([
+    {
+      type: "taskList",
+      attrs: { localId: "list" },
+      content: [{ type: "taskItem", attrs: { localId: "task", state: "TODO" } }],
+    },
+  ]),
   undefined,
-  { type: "doc", version: 1, content: [{ type: "paragraph", content: "invalid" }] },
+  jiraDocument([{ type: "paragraph", content: "invalid" }]),
 ])("refuses unsafe native comment replacement before PUT: %j", (currentBody) =>
   Effect.gen(function* () {
     const f = fakeJira((request) => ({
@@ -1875,19 +1855,15 @@ it.effect("validates Jira project scope before an empty category result and on m
 
 it.effect("refuses rich body edits in the existing scope read and preserves title edits", () =>
   Effect.gen(function* () {
-    const description = {
-      type: "doc",
-      version: 1,
-      content: [
-        {
-          type: "paragraph",
-          content: [
-            { type: "mention", attrs: { id: "native-account", text: "@Ada" } },
-            { type: "text", text: " body", marks: [{ type: "strong" }] },
-          ],
-        },
-      ],
-    };
+    const description = jiraDocument([
+      {
+        type: "paragraph",
+        content: [
+          { type: "mention", attrs: { id: "native-account", text: "@Ada" } },
+          { type: "text", text: " body", marks: [{ type: "strong" }] },
+        ],
+      },
+    ]);
     const f = fakeJira((request) =>
       request.method === "GET"
         ? { body: { ...issue, fields: { ...issue.fields, description } } }
@@ -1928,11 +1904,9 @@ it.effect("writes plain bodies with two native calls and preserves native write 
       );
       expect(body(f.calls[1])).toEqual({
         fields: {
-          description: {
-            type: "doc",
-            version: 1,
-            content: [{ type: "paragraph", content: [{ type: "text", text: "changed" }] }],
-          },
+          description: jiraDocument([
+            { type: "paragraph", content: [{ type: "text", text: "changed" }] },
+          ]),
         },
       });
     }
@@ -1941,23 +1915,19 @@ it.effect("writes plain bodies with two native calls and preserves native write 
 
 it.effect("reads rich native task text while refusing to overwrite its IDs and state", () =>
   Effect.gen(function* () {
-    const description = {
-      type: "doc",
-      version: 1,
-      content: [
-        {
-          type: "taskList",
-          attrs: { localId: "list-id" },
-          content: [
-            {
-              type: "taskItem",
-              attrs: { localId: "item-id", state: "TODO" },
-              content: [{ type: "text", text: "Do this" }],
-            },
-          ],
-        },
-      ],
-    };
+    const description = jiraDocument([
+      {
+        type: "taskList",
+        attrs: { localId: "list-id" },
+        content: [
+          {
+            type: "taskItem",
+            attrs: { localId: "item-id", state: "TODO" },
+            content: [{ type: "text", text: "Do this" }],
+          },
+        ],
+      },
+    ]);
     const f = fakeJira((request) => {
       if (request.url.endsWith("/myself")) return { body: user };
       if (request.url.includes("/mypermissions?"))
@@ -1986,8 +1956,8 @@ it.effect("reads rich native task text while refusing to overwrite its IDs and s
 
 it.effect.each([
   undefined,
-  { type: "doc", version: 1, content: [{ type: "unknownNode" }] },
-  { type: "doc", version: 1, content: [{ type: "paragraph", content: "invalid" }] },
+  jiraDocument([{ type: "unknownNode" }]),
+  jiraDocument([{ type: "paragraph", content: "invalid" }]),
 ])("refuses body writes when the current description is missing or malformed: %j", (description) =>
   Effect.gen(function* () {
     const f = fakeJira(() => ({ body: { ...issue, fields: { ...issue.fields, description } } }));

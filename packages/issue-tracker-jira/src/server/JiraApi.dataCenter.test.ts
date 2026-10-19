@@ -15,6 +15,14 @@ import { JiraIssue, JiraUser, textToAdf } from "./jiraJson.ts";
 
 const site = "https://jira.example.test:8443/Team/Jira";
 const host = "jira.example.test:8443/Team/Jira";
+const nativeGet = <S extends Schema.Top>(operation: string, path: string, schema: S) => ({
+  host,
+  operation,
+  method: "GET" as const,
+  path,
+  schema,
+});
+const issueTarget = (key = "ENG-1") => ({ cwd: "/tmp", host, scope: "ENG", key });
 const packed = JSON.stringify({ deployment: "data-center", site, token: "fake-pat" });
 const user = { key: "JIRAUSER101", name: "ada.renamed", displayName: "Ada" };
 const decodeSearchRequest = Schema.decodeUnknownSync(
@@ -324,7 +332,7 @@ it.effect("moves and removes a DC epic parent through native Agile routes with r
   Effect.gen(function* () {
     const f = epicFixture();
     const tracker = yield* f.tracker;
-    const target = { cwd: "/tmp", host, scope: "ENG", key: "ENG-1" };
+    const target = issueTarget();
     const detail = yield* tracker.getIssue(target);
     expect(detail.capabilities?.updateParent).toBe(true);
     expect(detail.viewerPermissions.updateParent).toBe(true);
@@ -349,7 +357,7 @@ it.effect("pages both existing DC subtask children and native epic children", ()
   Effect.gen(function* () {
     const f = epicFixture();
     const tracker = yield* f.tracker;
-    const target = { cwd: "/tmp", host, scope: "ENG", key: "ENG-2", limit: 1 };
+    const target = { ...issueTarget("ENG-2"), limit: 1 };
     const first = yield* tracker.getHierarchy!(target);
     expect(first.children.items.map((i) => i.key)).toEqual(["ENG-4"]);
     expect(first.children.nextCursor).not.toBeNull();
@@ -385,7 +393,7 @@ it.effect.each([true, undefined] as const)(
           : undefined,
       );
       const tracker = yield* f.tracker;
-      const target = { cwd: "/tmp", host, scope: "ENG", key: "ENG-1" };
+      const target = issueTarget();
       expect((yield* tracker.getIssue(target)).capabilities?.updateParent).toBe(false);
       expect((yield* tracker.getViewerPermissions(target)).updateParent).toBeUndefined();
       yield* tracker.setParent!({ ...target, parentKey: "ENG-2" }).pipe(Effect.flip);
@@ -402,7 +410,7 @@ it.effect.each([403, 404])(
         request.url.includes("/agile/") ? { status, body: {} } : undefined,
       );
       const tracker = yield* f.tracker;
-      const target = { cwd: "/tmp", host, scope: "ENG", key: "ENG-1" };
+      const target = issueTarget();
       expect((yield* tracker.getIssue(target)).capabilities?.updateParent).toBe(false);
       expect((yield* tracker.getViewerPermissions(target)).updateParent).toBeUndefined();
       expect((yield* tracker.getHierarchy!({ ...target, limit: 10 })).children.items).toEqual([]);
@@ -423,13 +431,9 @@ it.effect.each([400, 401, 403, 404, 429, 500])(
           : undefined,
       );
       const tracker = yield* f.tracker;
-      const error = yield* tracker.setParent!({
-        cwd: "/tmp",
-        host,
-        scope: "ENG",
-        key: "ENG-1",
-        parentKey: "ENG-2",
-      }).pipe(Effect.flip);
+      const error = yield* tracker.setParent!({ ...issueTarget(), parentKey: "ENG-2" }).pipe(
+        Effect.flip,
+      );
       expect(error.detail).toContain(String(status));
       expect(f.calls.map(({ method }) => method)).toEqual([
         "GET",
@@ -451,7 +455,7 @@ it.effect.each([401, 429, 500])("propagates optional Agile read HTTP %s", (statu
       request.url.includes("/agile/") ? { status, body: {} } : undefined,
     );
     const tracker = yield* f.tracker;
-    const target = { cwd: "/tmp", host, scope: "ENG", key: "ENG-1" };
+    const target = issueTarget();
     const error = yield* tracker.getHierarchy!({ ...target, limit: 1 }).pipe(Effect.flip);
     expect(error.detail).toContain(String(status));
     expect(f.calls.map(({ method }) => method)).toEqual(["GET", "GET"]);
@@ -468,7 +472,7 @@ it.effect.each([403, 404])(
           : undefined,
       );
       const tracker = yield* f.tracker;
-      const target = { cwd: "/tmp", host, scope: "ENG", key: "ENG-2", limit: 10 };
+      const target = { ...issueTarget("ENG-2"), limit: 10 };
       const page = yield* tracker.getHierarchy!(target);
       expect(page.children.items.map((item) => item.key)).toEqual(["ENG-4"]);
       expect(page.children).toMatchObject({ nextCursor: null, truncated: true });
@@ -489,10 +493,7 @@ it.effect.each([401, 429, 500])(
           : undefined,
       );
       const error = yield* (yield* f.tracker).getHierarchy!({
-        cwd: "/tmp",
-        host,
-        scope: "ENG",
-        key: "ENG-2",
+        ...issueTarget("ENG-2"),
         limit: 10,
       }).pipe(Effect.flip);
       expect(error.detail).toContain(String(status));
@@ -540,7 +541,7 @@ it.effect.each(["comment", "update", "setState"] as const)(
         return undefined;
       });
       const tracker = yield* f.tracker;
-      const target = { cwd: "/tmp", host, scope: "ENG", key: "ENG-1" };
+      const target = issueTarget();
       const permissions = yield* tracker.getViewerPermissions(target);
       expect(permissions).toMatchObject({ edit: true, comment: true, setState: true });
       expect(permissions.updateParent).toBeUndefined();
@@ -574,13 +575,7 @@ it.effect.each(["ENG-1", "ENG-3", "OPS-1"])(
             }
           : undefined,
       );
-      yield* (yield* f.tracker).setParent!({
-        cwd: "/tmp",
-        host,
-        scope: "ENG",
-        key: "ENG-1",
-        parentKey,
-      }).pipe(Effect.flip);
+      yield* (yield* f.tracker).setParent!({ ...issueTarget(), parentKey }).pipe(Effect.flip);
       expect(f.calls.every((r) => r.method === "GET")).toBe(true);
     }),
 );
@@ -597,7 +592,7 @@ it.effect(
             : undefined,
       );
       const tracker = yield* f.tracker;
-      const target = { cwd: "/tmp", host, scope: "ENG", key: "ENG-1" };
+      const target = issueTarget();
       expect((yield* tracker.getIssue(target)).viewerPermissions.updateParent).toBe(false);
       expect((yield* tracker.getViewerPermissions(target)).updateParent).toBeUndefined();
       const error = yield* tracker.setParent!({ ...target, parentKey: "ENG-2" }).pipe(Effect.flip);
@@ -611,14 +606,9 @@ it.effect.each(["epic:bad", "epic:-1", "epic:1.5"])(
   (cursor) =>
     Effect.gen(function* () {
       const f = epicFixture();
-      yield* (yield* f.tracker).getHierarchy!({
-        cwd: "/tmp",
-        host,
-        scope: "ENG",
-        key: "ENG-2",
-        limit: 1,
-        cursor,
-      }).pipe(Effect.flip);
+      yield* (yield* f.tracker).getHierarchy!({ ...issueTarget("ENG-2"), limit: 1, cursor }).pipe(
+        Effect.flip,
+      );
       expect(f.calls.every((r) => r.method === "GET")).toBe(true);
       expect(f.calls.some((r) => r.url.includes("/epic/ENG-2/issue"))).toBe(false);
     }),
@@ -634,10 +624,7 @@ it.effect.each([
       request.url.includes("/agile/1.0/epic/ENG-2/issue") ? { body: page } : undefined,
     );
     yield* (yield* f.tracker).getHierarchy!({
-      cwd: "/tmp",
-      host,
-      scope: "ENG",
-      key: "ENG-2",
+      ...issueTarget("ENG-2"),
       limit: 1,
       cursor: "epic:0",
     }).pipe(Effect.flip);
@@ -737,22 +724,22 @@ it.effect("keeps DC native permission results and translates create metadata val
     }));
     const api = yield* f.api;
     expect(
-      yield* api.request({
-        host,
-        operation: "getViewerPermissions",
-        method: "GET",
-        path: "/mypermissions?issueKey=ENG-1&permissions=EDIT_ISSUES",
-        schema: Schema.Unknown,
-      }),
+      yield* api.request(
+        nativeGet(
+          "getViewerPermissions",
+          "/mypermissions?issueKey=ENG-1&permissions=EDIT_ISSUES",
+          Schema.Unknown,
+        ),
+      ),
     ).toEqual(denied);
     expect(
-      yield* api.request({
-        host,
-        operation: "create",
-        method: "GET",
-        path: "/issue/createmeta/ENG/issuetypes/100?startAt=0&maxResults=100",
-        schema: Schema.Unknown,
-      }),
+      yield* api.request(
+        nativeGet(
+          "create",
+          "/issue/createmeta/ENG/issuetypes/100?startAt=0&maxResults=100",
+          Schema.Unknown,
+        ),
+      ),
     ).toMatchObject({ fields: [{ fieldId: "description", required: false }] });
   }),
 );
@@ -926,15 +913,15 @@ it.effect("keeps native wiki comment bodies and uses public v2 comment operation
           : comment,
     }));
     const api = yield* f.api;
-    const page = yield* api.request({
-      host,
-      operation: "getComments",
-      method: "GET",
-      path: "/issue/ENG-1/comment?orderBy=-created&startAt=0&maxResults=50",
-      schema: Schema.Struct({
-        comments: Schema.Array(Schema.Struct({ body: Schema.String, author: JiraUser })),
-      }),
-    });
+    const page = yield* api.request(
+      nativeGet(
+        "getComments",
+        "/issue/ENG-1/comment?orderBy=-created&startAt=0&maxResults=50",
+        Schema.Struct({
+          comments: Schema.Array(Schema.Struct({ body: Schema.String, author: JiraUser })),
+        }),
+      ),
+    );
     expect(page.comments[0]).toMatchObject({ body: comment.body, author: { accountId: user.key } });
     for (const method of ["POST", "PUT"] as const) {
       yield* api.request({
@@ -965,18 +952,18 @@ it.effect("adapts DC expanded changelog reads and refuses incomplete native hist
     const f = fakeJira(() => ({ body: { changelog: { startAt: 0, total, histories } } }));
     const api = yield* f.api;
     const read = () =>
-      api.request({
-        host,
-        operation: "getHistory",
-        method: "GET",
-        path: "/issue/ENG-1/changelog?startAt=1&maxResults=1",
-        schema: Schema.Struct({
-          startAt: Schema.Int,
-          total: Schema.Int,
-          isLast: Schema.Boolean,
-          values: Schema.Array(Schema.Struct({ id: Schema.String, author: JiraUser })),
-        }),
-      });
+      api.request(
+        nativeGet(
+          "getHistory",
+          "/issue/ENG-1/changelog?startAt=1&maxResults=1",
+          Schema.Struct({
+            startAt: Schema.Int,
+            total: Schema.Int,
+            isLast: Schema.Boolean,
+            values: Schema.Array(Schema.Struct({ id: Schema.String, author: JiraUser })),
+          }),
+        ),
+      );
     expect(yield* read()).toMatchObject({
       startAt: 1,
       total: 3,
@@ -1069,14 +1056,7 @@ it.effect("preserves DC rate-limit and response-size budgets", () =>
   Effect.gen(function* () {
     const f = fakeJira(() => ({ status: 429, body: {}, headers: { "retry-after": "60" } }));
     const api = yield* f.api;
-    const read = () =>
-      api.request({
-        host,
-        operation: "getViewer",
-        method: "GET",
-        path: "/myself",
-        schema: JiraUser,
-      });
+    const read = () => api.request(nativeGet("getViewer", "/myself", JiraUser));
     expect(yield* read().pipe(Effect.flip)).toMatchObject({ reason: "rate-limited" });
     expect(yield* read().pipe(Effect.flip)).toMatchObject({ reason: "rate-limited" });
     expect(f.calls).toHaveLength(1);
@@ -1085,9 +1065,7 @@ it.effect("preserves DC rate-limit and response-size budgets", () =>
     }));
     const largeApi = yield* oversized.api;
     expect(
-      yield* largeApi
-        .request({ host, operation: "getViewer", method: "GET", path: "/myself", schema: JiraUser })
-        .pipe(Effect.flip),
+      yield* largeApi.request(nativeGet("getViewer", "/myself", JiraUser)).pipe(Effect.flip),
     ).toMatchObject({ reason: "failed" });
   }),
 );
@@ -1103,17 +1081,17 @@ it.effect("does not invent a total for a DC metadata page that reports more rows
       },
     }));
     const api = yield* f.api;
-    const page = yield* api.request({
-      host,
-      operation: "create",
-      method: "GET",
-      path: "/issue/createmeta/ENG/issuetypes/100?startAt=100&maxResults=100",
-      schema: Schema.Struct({
-        startAt: Schema.Int,
-        isLast: Schema.Boolean,
-        total: Schema.optional(Schema.Int),
-      }),
-    });
+    const page = yield* api.request(
+      nativeGet(
+        "create",
+        "/issue/createmeta/ENG/issuetypes/100?startAt=100&maxResults=100",
+        Schema.Struct({
+          startAt: Schema.Int,
+          isLast: Schema.Boolean,
+          total: Schema.optional(Schema.Int),
+        }),
+      ),
+    );
     expect(page).toEqual({ startAt: 100, isLast: false });
   }),
 );
@@ -1123,13 +1101,13 @@ it.effect("limits DC assignable-user reads to the documented first 100 native us
     const f = fakeJira(() => ({ body: [user] }));
     const api = yield* f.api;
     const read = (startAt: number) =>
-      api.request({
-        host,
-        operation: "listAssigneeCandidates",
-        method: "GET",
-        path: `/user/assignable/search?project=ENG&startAt=${startAt}&maxResults=200`,
-        schema: Schema.Array(JiraUser),
-      });
+      api.request(
+        nativeGet(
+          "listAssigneeCandidates",
+          `/user/assignable/search?project=ENG&startAt=${startAt}&maxResults=200`,
+          Schema.Array(JiraUser),
+        ),
+      );
     expect((yield* read(0))[0]?.accountId).toBe(user.key);
     expect(f.calls[0]?.url).toBe(
       `${site}/rest/api/2/user/assignable/search?project=ENG&maxResults=100`,
@@ -1163,15 +1141,9 @@ it.effect("uses the native username only when a legacy DC user has no key", () =
   Effect.gen(function* () {
     const f = fakeJira(() => ({ body: { name: "legacy.user", displayName: "Legacy" } }));
     const api = yield* f.api;
-    expect(
-      yield* api.request({
-        host,
-        operation: "getViewer",
-        method: "GET",
-        path: "/myself",
-        schema: JiraUser,
-      }),
-    ).toMatchObject({ accountId: "legacy.user" });
+    expect(yield* api.request(nativeGet("getViewer", "/myself", JiraUser))).toMatchObject({
+      accountId: "legacy.user",
+    });
   }),
 );
 
@@ -1212,13 +1184,9 @@ it.effect("keeps embedded DC history truncation visible and reloads displaced co
       },
     }));
     const api = yield* f.api;
-    const detail = yield* api.request({
-      host,
-      operation: "getIssue",
-      method: "GET",
-      path: "/issue/ENG-1?expand=changelog",
-      schema: JiraIssue,
-    });
+    const detail = yield* api.request(
+      nativeGet("getIssue", "/issue/ENG-1?expand=changelog", JiraIssue),
+    );
     expect(detail.changelog?.histories).toHaveLength(100);
     expect(detail.changelog?.total).toBe(101);
     expect(detail.fields.comment).toEqual({ startAt: 10, total: 20 });
@@ -1229,7 +1197,7 @@ it.effect.each(["listIssues", "listLabelCandidates", "getHierarchy", "listCandid
   "runs DC %s through the real tracker and transport with native search field arrays",
   (operation) =>
     Effect.gen(function* () {
-      const target = { cwd: "/tmp", host, scope: "ENG", key: "ENG-1", viewer: user.key };
+      const target = { ...issueTarget(), viewer: user.key };
       const f = fakeJira((request) => {
         const path = new URL(request.url).pathname;
         if (path.endsWith("/search")) {
@@ -1328,17 +1296,13 @@ it.effect("normalizes complete DC embedded comments to a bounded newest page", (
       },
     }));
     const api = yield* f.api;
-    expect(
-      yield* api.request({
-        host,
-        operation: "getIssue",
-        method: "GET",
-        path: "/issue/ENG-1",
-        schema: Schema.Unknown,
-      }),
-    ).toMatchObject({
-      fields: { comment: { startAt: 0, maxResults: 50, total: 60, comments: comments.slice(-50) } },
-    });
+    expect(yield* api.request(nativeGet("getIssue", "/issue/ENG-1", Schema.Unknown))).toMatchObject(
+      {
+        fields: {
+          comment: { startAt: 0, maxResults: 50, total: 60, comments: comments.slice(-50) },
+        },
+      },
+    );
     expect(f.calls).toHaveLength(1);
   }),
 );
@@ -1352,7 +1316,7 @@ it.effect.each([
   { name: "empty", total: 0, startAt: 0, embedded: 0, offsets: [], canEdit: false },
 ])("loads every DC comment exactly once for $name embedded comments", (scenario) =>
   Effect.gen(function* () {
-    const target = { cwd: "/tmp", host, scope: "ENG", key: "ENG-1" };
+    const target = issueTarget();
     const native = Array.from({ length: scenario.total }, (_, index) => ({
       id: String(index + 1),
       author: user,
@@ -1483,7 +1447,7 @@ it.effect("stops DC comment loading when native comment permissions return 403",
     const tracker = yield* JiraIssueTracker.make.pipe(
       Effect.provideServiceEffect(JiraApi.JiraApi, f.api),
     );
-    const target = { cwd: "/tmp", host, scope: "ENG", key: "ENG-1", viewer: user.key };
+    const target = { ...issueTarget(), viewer: user.key };
     const detail = yield* tracker.getIssue(target);
     expect(detail.commentsCursor).not.toBeNull();
     const before = f.calls.length;
@@ -1539,20 +1503,16 @@ it.effect.each(["asc", "desc"] as const)(
       const tracker = yield* JiraIssueTracker.make.pipe(
         Effect.provideService(JiraApi.JiraApi, api),
       );
-      const target = { cwd: "/tmp", host, scope: "ENG", key: "ENG-1" };
+      const target = issueTarget();
       const detail = yield* tracker.getIssue(target);
       expect(detail.events.map((event) => event.detail)).toEqual(
         [1, ...Array.from({ length: 49 }, (_, index) => 204 - index)].map(String),
       );
       expect(detail.historyTruncated).toBe(true);
       expect(f.calls).toHaveLength(4);
-      const expanded = yield* api.request({
-        host,
-        operation: "getIssue",
-        method: "GET",
-        path: "/issue/ENG-1?fields=project&expand=changelog",
-        schema: JiraIssue,
-      });
+      const expanded = yield* api.request(
+        nativeGet("getIssue", "/issue/ENG-1?fields=project&expand=changelog", JiraIssue),
+      );
       expect(expanded.changelog).toMatchObject({ startAt: 105, total: 205 });
       expect(expanded.changelog?.histories.map((entry) => entry.id)).toEqual(
         [...Array.from({ length: 99 }, (_, index) => 106 + index), 1].map(String),
@@ -1593,13 +1553,13 @@ it.effect.each(["asc", "desc"] as const)(
         [205, 5, []],
       ] as const) {
         const before = f.calls.length;
-        const page = yield* api.request({
-          host,
-          operation: "getHistory",
-          method: "GET",
-          path: "/issue/ENG-1/changelog?startAt=" + startAt + "&maxResults=" + limit,
-          schema: pageSchema,
-        });
+        const page = yield* api.request(
+          nativeGet(
+            "getHistory",
+            "/issue/ENG-1/changelog?startAt=" + startAt + "&maxResults=" + limit,
+            pageSchema,
+          ),
+        );
         expect(page).toMatchObject({ startAt, total: 205, isLast: startAt + limit >= 205 });
         expect(page.values.map((entry) => entry.id)).toEqual(ids);
         expect(f.calls).toHaveLength(before + 1);
@@ -1644,13 +1604,7 @@ it.effect.each(["asc", "desc"] as const)(
         },
       }));
       const api = yield* f.api;
-      const result = yield* api.request({
-        host,
-        operation: "getIssue",
-        method: "GET",
-        path: "/issue/ENG-1",
-        schema: JiraIssue,
-      });
+      const result = yield* api.request(nativeGet("getIssue", "/issue/ENG-1", JiraIssue));
       expect(result.fields.comment).toMatchObject({ startAt: 0, total: 205 });
       expect(result.fields.comment?.comments?.map((entry) => entry.id)).toEqual(
         Array.from({ length: 50 }, (_, index) => String(index + 156)),
@@ -1690,21 +1644,17 @@ it.effect.each([{ created: "not-a-native-date" }, { created: "" }, { id: "" }])(
       const tracker = yield* JiraIssueTracker.make.pipe(
         Effect.provideService(JiraApi.JiraApi, api),
       );
-      expect(
-        (yield* tracker
-          .getIssue({ cwd: "/tmp", host, scope: "ENG", key: "ENG-1" })
-          .pipe(Effect.flip)).reason,
-      ).toBe("failed");
+      expect((yield* tracker.getIssue(issueTarget()).pipe(Effect.flip)).reason).toBe("failed");
       expect(f.calls).toHaveLength(1);
       expect(
         (yield* api
-          .request({
-            host,
-            operation: "getHistory",
-            method: "GET",
-            path: "/issue/ENG-1/changelog?startAt=155&maxResults=50",
-            schema: Schema.Unknown,
-          })
+          .request(
+            nativeGet(
+              "getHistory",
+              "/issue/ENG-1/changelog?startAt=155&maxResults=50",
+              Schema.Unknown,
+            ),
+          )
           .pipe(Effect.asVoid, Effect.flip)).reason,
       ).toBe("failed");
       expect(f.calls).toHaveLength(2);

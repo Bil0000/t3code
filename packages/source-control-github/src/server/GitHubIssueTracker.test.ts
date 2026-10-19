@@ -14,7 +14,11 @@ import { HttpClient, HttpClientResponse } from "effect/http";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import * as GitHubIssueTracker from "./GitHubIssueTracker.ts";
 
-import { templateEntry } from "./issue-test-fixtures.ts";
+import { issueTarget, templateEntry } from "./issue-test-fixtures.ts";
+
+function restResponse(body: string): GitHubRest.GitHubRestResponse {
+  return { status: 200, headers: {}, body, truncated: false, invalidUtf8: false };
+}
 
 const decodeDetailWire = Schema.decodeEffect(IssueDetail);
 
@@ -168,13 +172,8 @@ const DETAIL_RESPONSE = JSON.stringify(DETAIL_FIXTURE);
 
 function tracker(
   graphql: (query: string, variables: Readonly<Record<string, unknown>>) => string | Response,
-  rest: (input: GitHubRest.GitHubRestInput) => GitHubRest.GitHubRestResponse = () => ({
-    status: 200,
-    headers: {},
-    body: JSON.stringify({ labels: [{ name: "bug", color: "d73a4a" }] }),
-    truncated: false,
-    invalidUtf8: false,
-  }),
+  rest: (input: GitHubRest.GitHubRestInput) => GitHubRest.GitHubRestResponse = () =>
+    restResponse(JSON.stringify({ labels: [{ name: "bug", color: "d73a4a" }] })),
 ) {
   const services = Layer.mergeAll(
     Layer.succeed(
@@ -604,7 +603,7 @@ describe("GitHubIssueTracker", () => {
           };
         },
       );
-      const target = { cwd: "/w", host: "github.com", scope: "acme/web", key: "42" };
+      const target = issueTarget();
       expect(api.capabilities.dependencies).toBe(true);
       const page = yield* api.getDependencies!({ ...target, direction: "blocked-by", limit: 1 });
       expect(page.items).toMatchObject([{ scope: "other/repo", key: "21", kind: "issue" }]);
@@ -698,10 +697,8 @@ describe("GitHubIssueTracker", () => {
           (input) => {
             if (input.method) writes.push(input);
             const source = input.path === "repos/acme/web/issues/42";
-            return {
-              status: 200,
-              headers: {},
-              body: JSON.stringify({
+            return restResponse(
+              JSON.stringify({
                 id: source ? 1042 : 9021,
                 number: source ? 42 : 21,
                 title: "Issue",
@@ -710,12 +707,10 @@ describe("GitHubIssueTracker", () => {
                   ? "https://github.com/acme/web/issues/42"
                   : "https://github.com/other/repo/issues/21",
               }),
-              truncated: false,
-              invalidUtf8: false,
-            };
+            );
           },
         );
-        const input = { cwd: "/w", host: "github.com", scope: "acme/web", key: "42" };
+        const input = issueTarget();
         expect(yield* api.getViewerPermissions(input)).toMatchObject({
           edit: false,
           updateDependencies: !scenario.archived && scenario.role !== "READ",
@@ -763,10 +758,7 @@ describe("GitHubIssueTracker", () => {
       );
       expect(
         yield* api.setDependency!({
-          cwd: "/w",
-          host: "github.com",
-          scope: "acme/web",
-          key: "42",
+          ...issueTarget(),
           direction: "blocks",
           linked: true,
           ...target,
@@ -812,21 +804,12 @@ describe("GitHubIssueTracker", () => {
                   : "https://github.com/other/repo/issues/21",
             ...(!source && kind === "pull-request" ? { pull_request: {} } : {}),
           };
-          return {
-            status: 200,
-            headers: {},
-            body: !source && kind === "malformed" ? "{" : JSON.stringify(row),
-            truncated: false,
-            invalidUtf8: false,
-          };
+          return restResponse(!source && kind === "malformed" ? "{" : JSON.stringify(row));
         },
       );
       expect(
         yield* api.setDependency!({
-          cwd: "/w",
-          host: "github.com",
-          scope: "acme/web",
-          key: "42",
+          ...issueTarget(),
           targetScope: "other/repo",
           targetKey: "21",
           direction: "blocked-by",
@@ -851,10 +834,7 @@ describe("GitHubIssueTracker", () => {
         );
         expect(
           yield* api.getDependencies!({
-            cwd: "/w",
-            host: "github.com",
-            scope: "acme/web",
-            key: "42",
+            ...issueTarget(),
             direction: "blocks",
             cursor,
           }).pipe(Effect.flip),
@@ -903,10 +883,7 @@ describe("GitHubIssueTracker", () => {
       );
       expect(
         yield* api.getDependencies!({
-          cwd: "/w",
-          host: "github.com",
-          scope: "acme/web",
-          key: "42",
+          ...issueTarget(),
           direction: "blocked-by",
           limit: 1,
         }).pipe(Effect.flip),
@@ -949,16 +926,10 @@ describe("GitHubIssueTracker", () => {
         },
         () => {
           labelReads++;
-          return {
-            status: 200,
-            headers: {},
-            body: '{"labels":[]}',
-            truncated: false,
-            invalidUtf8: false,
-          };
+          return restResponse('{"labels":[]}');
         },
       );
-      const target = { cwd: "/w", host: "git.acme.test", scope: "acme/web", key: "42" };
+      const target = issueTarget("git.acme.test");
       const permission = yield* api.getViewerPermissions(target);
       expect(permission).toEqual({
         edit: !input.archived,
@@ -989,10 +960,8 @@ describe("GitHubIssueTracker", () => {
           },
           (input) => {
             requests.push(input);
-            return {
-              status: 200,
-              headers: {},
-              body: JSON.stringify({
+            return restResponse(
+              JSON.stringify({
                 number: 43,
                 html_url: "https://github.com/acme/web/issues/43",
                 labels: [],
@@ -1000,13 +969,11 @@ describe("GitHubIssueTracker", () => {
                   login,
                 })),
               }),
-              truncated: false,
-              invalidUtf8: false,
-            };
+            );
           },
         );
         expect(api.capabilities.maxAssignees).toBe(10);
-        const target = { cwd: "/w", host: "github.com", scope: "acme/web", key: "42" };
+        const target = issueTarget();
         const assignees = Array.from({ length: 11 }, (_, index) => `user-${index}`);
         const refused =
           operation === "create"
@@ -1328,16 +1295,10 @@ describe("GitHubIssueTracker", () => {
           },
           () => {
             restReads++;
-            return {
-              status: 200,
-              headers: {},
-              body: JSON.stringify({ labels }),
-              truncated: false,
-              invalidUtf8: false,
-            };
+            return restResponse(JSON.stringify({ labels }));
           },
         );
-        const target = { cwd: "/w", host: "github.com", scope: "acme/web", key: "42" };
+        const target = issueTarget();
         const page = yield* api.listIssues({
           ...target,
           query: "focus",
@@ -1390,16 +1351,10 @@ describe("GitHubIssueTracker", () => {
         },
         () => {
           restReads++;
-          return {
-            status: 200,
-            headers: {},
-            body: JSON.stringify({ labels: [] }),
-            truncated: false,
-            invalidUtf8: false,
-          };
+          return restResponse(JSON.stringify({ labels: [] }));
         },
       );
-      const context = { cwd: "/w", host: "github.com", scope: "acme/web", key: "42" };
+      const context = issueTarget();
       const issue = yield* api.getIssue(context);
       expect(issue).toHaveProperty("milestone", milestone?.title ?? null);
       expect(
@@ -1430,7 +1385,7 @@ describe("GitHubIssueTracker", () => {
     { role: "UNRECOGNIZED", allowed: false },
   ])("keeps native metadata permission for role $role", ({ role, allowed }) =>
     Effect.gen(function* () {
-      const context = { cwd: "/w", host: "github.com", scope: "acme/web", key: "42" };
+      const context = issueTarget();
       let reads = 0;
       const api = yield* tracker(() => {
         reads++;
@@ -1497,12 +1452,7 @@ describe("GitHubIssueTracker", () => {
             throw new Error("Unexpected extra REST read");
           },
         );
-        const page = yield* api.getComments({
-          cwd: "/w",
-          host: "github.com",
-          scope: "acme/web",
-          key: "42",
-        });
+        const page = yield* api.getComments(issueTarget());
         expect(page.comments[0]?.canEdit).toBe(canEdit);
         expect(reads).toBe(1);
       }),
@@ -1576,7 +1526,7 @@ describe("GitHubIssueTracker", () => {
                   html_url: `https://github.com/acme/web/issues/${input.method ? 43 : 21}`,
                   state: "open",
                 });
-            return { status: 200, headers: {}, body, truncated: false, invalidUtf8: false };
+            return restResponse(body);
           },
         );
         expect(
@@ -1623,10 +1573,7 @@ describe("GitHubIssueTracker", () => {
         });
         const result = yield* Effect.result(
           api.editComment!({
-            cwd: "/w",
-            host: "github.com",
-            scope: "acme/web",
-            key: "42",
+            ...issueTarget(),
             commentId: "IC_1",
             body: "Updated",
           }),
@@ -1668,7 +1615,7 @@ describe("GitHubIssueTracker", () => {
           };
         },
       );
-      const target = { cwd: "/w", host: "github.com", scope: "acme/web", key: "42" };
+      const target = issueTarget();
       const hierarchy = yield* api.getHierarchy!({ ...target, limit: 1 });
       expect(hierarchy.parent).toMatchObject({ scope: "acme/other", key: "21" });
       expect(hierarchy.children).toMatchObject({
@@ -1737,7 +1684,7 @@ describe("GitHubIssueTracker", () => {
           throw new Error("Unexpected REST history read");
         },
       );
-      const input = { cwd: "/w", host: "github.com", scope: "acme/web", key: "42", limit: 3 };
+      const input = { ...issueTarget(), limit: 3 };
       const first = yield* api.getHistory!(input);
       expect(first).toMatchObject({
         items: [{ id: "2", kind: "updated", detail: "milestoned" }],
@@ -1783,7 +1730,7 @@ describe("GitHubIssueTracker", () => {
           },
         });
       });
-      const target = { cwd: "/w", host: "github.com", scope: "acme/web", key: "42", limit: 1 };
+      const target = { ...issueTarget(), limit: 1 };
       const closing = yield* api.getLinkedPullRequests!(target);
       expect(closing).toMatchObject({
         items: [{ repository: "acme/other", closesIssue: true }],
@@ -1804,20 +1751,11 @@ describe("GitHubIssueTracker", () => {
           () => DETAIL_RESPONSE,
           (input) => {
             requests.push(input);
-            return {
-              status: 200,
-              headers: {},
-              body: JSON.stringify({ labels: [], assignees: [] }),
-              truncated: false,
-              invalidUtf8: false,
-            };
+            return restResponse(JSON.stringify({ labels: [], assignees: [] }));
           },
         );
         const error = yield* api.update!({
-          cwd: "/w",
-          host: "github.com",
-          scope: "acme/web",
-          key: "42",
+          ...issueTarget(),
           [field]: ["expected"],
         }).pipe(Effect.flip);
         expect(error.detail).toBe(`GitHub did not save the requested ${field}.`);
@@ -1947,10 +1885,7 @@ describe("GitHubIssueTracker", () => {
         });
         const error = yield* Effect.flip(
           api.setReaction!({
-            cwd: "/w",
-            host: "github.com",
-            scope: "acme/web",
-            key: "42",
+            ...issueTarget(),
             subjectId: "IC_foreign",
             content: "thumbs-up",
             reacted,
@@ -1974,16 +1909,10 @@ describe("GitHubIssueTracker", () => {
         () => DETAIL_RESPONSE,
         (input) => {
           requests.push(input);
-          return {
-            status: 200,
-            headers: {},
-            body: JSON.stringify({ labels }),
-            truncated: false,
-            invalidUtf8: false,
-          };
+          return restResponse(JSON.stringify({ labels }));
         },
       );
-      const context = { cwd: "/w", host: "github.com", scope: "acme/web", key: "42" };
+      const context = issueTarget();
       const issue = yield* api.getIssue(context);
       expect(issue.labels).toEqual(labels);
       yield* api.getViewerPermissions(context);
@@ -2008,9 +1937,7 @@ describe("GitHubIssueTracker", () => {
           invalidUtf8: false,
         }),
       );
-      const error = yield* Effect.flip(
-        api.getIssue({ cwd: "/w", host: "github.com", scope: "acme/web", key: "42" }),
-      );
+      const error = yield* Effect.flip(api.getIssue(issueTarget()));
       expect(error.reason).toBe("failed");
     }),
   );
@@ -2024,12 +1951,7 @@ describe("GitHubIssueTracker", () => {
         sentQuery = query;
         return DETAIL_RESPONSE;
       });
-      const issue = yield* api.getIssue({
-        cwd: "/w",
-        host: "github.com",
-        scope: "acme/web",
-        key: "42",
-      });
+      const issue = yield* api.getIssue(issueTarget());
       expect(seen).toEqual({ owner: "acme", name: "web", number: 42 });
       // GitHub rejects a query that selects one field twice with different arguments.
       expect(sentQuery.match(/\bcomments\b/g)).toHaveLength(1);
@@ -2102,11 +2024,9 @@ describe("GitHubIssueTracker", () => {
           throw new Error("Unexpected REST metadata read");
         },
       );
-      expect(
-        yield* api
-          .getIssue({ cwd: "/w", host: "github.com", scope: "acme/web", key: "42" })
-          .pipe(Effect.flip),
-      ).toMatchObject({ reason: "failed" });
+      expect(yield* api.getIssue(issueTarget()).pipe(Effect.flip)).toMatchObject({
+        reason: "failed",
+      });
     }),
   );
 
@@ -2166,10 +2086,7 @@ describe("GitHubIssueTracker", () => {
         });
       });
       const input = {
-        cwd: "/w",
-        host: "github.com",
-        scope: "acme/web",
-        key: "42",
+        ...issueTarget(),
         connectionId: "selected",
       };
       const detail = yield* api.getIssue(input);
@@ -2237,7 +2154,7 @@ describe("GitHubIssueTracker", () => {
             },
           }),
         );
-        const input = { cwd: "/w", host: "github.com", scope: "acme/web", key: "42" };
+        const input = issueTarget();
         const detail = yield* api.getIssue(input);
         const history = yield* api.getHistory!(input);
         const expected = {
@@ -2304,12 +2221,7 @@ describe("GitHubIssueTracker", () => {
           },
         }),
       );
-      const page = yield* api.getHistory!({
-        cwd: "/w",
-        host: "github.com",
-        scope: "acme/web",
-        key: "42",
-      });
+      const page = yield* api.getHistory!(issueTarget());
       expect(page.items).toHaveLength(1);
       expect(page.items[0]).not.toHaveProperty("url");
       expect(page.items[0]).not.toHaveProperty("reference");
@@ -2346,12 +2258,7 @@ describe("GitHubIssueTracker", () => {
             },
           });
         });
-        const issue = yield* api.getIssue({
-          cwd: "/w",
-          host: "github.com",
-          scope: "acme/web",
-          key: "42",
-        });
+        const issue = yield* api.getIssue(issueTarget());
         expect(issue.historyTruncated).toBe(hasPreviousPage);
         expect(issue.events).toHaveLength(100);
         expect(queries).toHaveLength(1);

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act } from "react";
+import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 import { EnvironmentId, IssueTrackerKind, ProjectId } from "@t3tools/contracts";
@@ -23,6 +23,18 @@ const reactions = [
 ];
 let root: Root;
 let container: HTMLDivElement;
+const renderReactions = (props: Partial<ComponentProps<typeof IssueReactionBar>> = {}) =>
+  root.render(
+    <IssueReactionBar
+      viewer="viewer"
+      reactions={reactions}
+      canReact
+      contents={undefined}
+      environmentId={environmentId}
+      reference={reference}
+      {...props}
+    />,
+  );
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -44,19 +56,7 @@ it.each([undefined, "latest-comment", "held-older-comment"])(
       .mockResolvedValueOnce({ _tag: "Success" })
       .mockResolvedValueOnce({ _tag: "Failure" })
       .mockResolvedValueOnce({ _tag: "Success" });
-    await act(async () =>
-      root.render(
-        <IssueReactionBar
-          viewer="viewer"
-          reactions={reactions}
-          canReact
-          contents={undefined}
-          environmentId={environmentId}
-          reference={reference}
-          subjectId={subjectId}
-        />,
-      ),
-    );
+    await act(async () => renderReactions({ subjectId }));
     const pill = () =>
       container.querySelector<HTMLButtonElement>('button[aria-label^="thumbs up,"]')!;
     await act(async () => pill().click());
@@ -91,18 +91,7 @@ it.each([
   { canReact: true, contents: [] },
   { canReact: true, contents: ["heart" as const] },
 ])("keeps unsupported reaction counts read-only for %j", async ({ canReact, contents }) => {
-  await act(async () =>
-    root.render(
-      <IssueReactionBar
-        viewer="viewer"
-        reactions={reactions}
-        canReact={canReact}
-        contents={contents}
-        environmentId={environmentId}
-        reference={reference}
-      />,
-    ),
-  );
+  await act(async () => renderReactions({ canReact, contents }));
   const pill = container.querySelector<HTMLButtonElement>('button[aria-label^="thumbs up,"]')!;
   expect(pill.disabled).toBe(true);
   await act(async () => pill.click());
@@ -122,17 +111,7 @@ it.each(
     state.react.mockResolvedValue({ _tag: "Success" });
     const native = [{ ...reactions[0]!, viewerHasReacted: !reacted }];
     const render = (value: typeof native) =>
-      root.render(
-        <IssueReactionBar
-          viewer={viewer}
-          reactions={value}
-          canReact
-          contents={undefined}
-          environmentId={environmentId}
-          reference={reference}
-          subjectId={subjectId}
-        />,
-      );
+      renderReactions({ viewer, reactions: value, subjectId });
     const pill = () =>
       container.querySelector<HTMLButtonElement>('button[aria-label^="thumbs up,"]')!;
     await act(async () => render(native));
@@ -158,17 +137,7 @@ it("does not restore an unknown owner's old choice after a late reverse failure"
     fail = resolve;
   });
   state.react.mockResolvedValueOnce({ _tag: "Success" }).mockReturnValueOnce(reverse);
-  const render = (value: typeof reactions) =>
-    root.render(
-      <IssueReactionBar
-        viewer={null}
-        reactions={value}
-        canReact
-        contents={undefined}
-        environmentId={environmentId}
-        reference={reference}
-      />,
-    );
+  const render = (value: typeof reactions) => renderReactions({ viewer: null, reactions: value });
   const pill = () =>
     container.querySelector<HTMLButtonElement>('button[aria-label^="thumbs up,"]')!;
   await act(async () => render(reactions));
@@ -184,17 +153,7 @@ it("does not restore an unknown owner's old choice after a late reverse failure"
 it("does not treat missing comment reactions as a fresh native empty array", async () => {
   state.react.mockResolvedValue({ _tag: "Success" });
   const render = (value: typeof reactions | undefined) =>
-    root.render(
-      <IssueReactionBar
-        viewer={null}
-        reactions={value}
-        canReact
-        contents={undefined}
-        environmentId={environmentId}
-        reference={reference}
-        subjectId="comment"
-      />,
-    );
+    renderReactions({ viewer: null, reactions: value, subjectId: "comment" });
   const pill = () => container.querySelector<HTMLButtonElement>('button[aria-label^="thumbs up,"]');
   await act(async () => render(reactions));
   await act(async () => pill()!.click());
@@ -208,18 +167,7 @@ it("does not treat missing comment reactions as a fresh native empty array", asy
 
 it("keeps picker selection, keyboard focus and Escape dismissal", async () => {
   state.react.mockResolvedValue({ _tag: "Success" });
-  await act(async () =>
-    root.render(
-      <IssueReactionBar
-        viewer="viewer"
-        reactions={reactions}
-        canReact
-        contents={["thumbs-up", "heart"]}
-        environmentId={environmentId}
-        reference={reference}
-      />,
-    ),
-  );
+  await act(async () => renderReactions({ contents: ["thumbs-up", "heart"] }));
   const trigger = container.querySelector<HTMLButtonElement>('[aria-label="Add a reaction"]')!;
   await act(async () => {
     trigger.focus();
@@ -267,19 +215,7 @@ it.each([undefined, "latest-comment", "held-older-comment"])(
         finish = resolve;
       }),
     );
-    await act(async () =>
-      root.render(
-        <IssueReactionBar
-          viewer="viewer"
-          reactions={reactions}
-          canReact
-          contents={["thumbs-up"]}
-          environmentId={environmentId}
-          reference={reference}
-          subjectId={subjectId}
-        />,
-      ),
-    );
+    await act(async () => renderReactions({ contents: ["thumbs-up"], subjectId }));
     const pill = () =>
       container.querySelector<HTMLButtonElement>('button[aria-label^="thumbs up,"]')!;
     await act(async () => pill().click());

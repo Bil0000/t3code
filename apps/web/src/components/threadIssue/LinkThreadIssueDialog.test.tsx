@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { createIssueTestRoot } from "../issue/issueTestUtils";
 
+import type { Root } from "react-dom/client";
 import { act, createElement } from "react";
 import { expect, it, vi } from "vite-plus/test";
 import {
@@ -114,6 +115,36 @@ import { issueEnvironment } from "~/state/issues";
 import { LinkThreadIssueDialogHost, openLinkThreadIssueDialog } from "./LinkThreadIssueDialog";
 
 const decodeIssueList = Schema.decodeUnknownSync(IssueListResult);
+const listCapabilities = () => ({
+  create: false,
+  edit: false,
+  comment: false,
+  labels: false,
+  assignees: false,
+  reactions: false,
+  templates: false,
+  linkedPullRequests: false,
+  events: false,
+  search: true,
+  states: [],
+  closeReasons: [],
+});
+const listRow = (key: string) => ({
+  ...state.linked,
+  key,
+  title: `Issue ${key}`,
+  author: null,
+  createdAt: "2026-10-01T00:00:00.000Z",
+  updatedAt: "2026-10-01T00:00:00.000Z",
+  closedAt: null,
+  labels: [],
+  assignees: [],
+  commentCount: 0,
+});
+const renderDialog = (root: Root) =>
+  root.render(
+    createElement(AppAtomRegistryProvider, null, createElement(LinkThreadIssueDialogHost)),
+  );
 
 it("blocks a removed account and keeps drafts for explicitly choosing its replacement", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -135,10 +166,7 @@ it("blocks a removed account and keeps drafts for explicitly choosing its replac
   state.link.mockReset().mockResolvedValue({ _tag: "Failure" });
   state.resolve.mockReset();
   const { container, root } = createIssueTestRoot();
-  const render = () =>
-    root.render(
-      createElement(AppAtomRegistryProvider, null, createElement(LinkThreadIssueDialogHost)),
-    );
+  const render = () => renderDialog(root);
   try {
     openLinkThreadIssueDialog({
       environmentId: EnvironmentId.make("environment"),
@@ -259,32 +287,8 @@ it.each([
     state.load
       .mockReset()
       .mockImplementation((target) => atoms.listPage.run(appAtomRegistry, target));
-    const capabilities = {
-      create: false,
-      edit: false,
-      comment: false,
-      labels: false,
-      assignees: false,
-      reactions: false,
-      templates: false,
-      linkedPullRequests: false,
-      events: false,
-      search: true,
-      states: [],
-      closeReasons: [],
-    };
-    const row = (key: string) => ({
-      ...state.linked,
-      key,
-      title: `Issue ${key}`,
-      author: null,
-      createdAt: "2026-10-01T00:00:00.000Z",
-      updatedAt: "2026-10-01T00:00:00.000Z",
-      closedAt: null,
-      labels: [],
-      assignees: [],
-      commentCount: 0,
-    });
+    const capabilities = listCapabilities();
+    const row = (key: string) => listRow(key);
     const cursor = legacy ? "github.com org/repo" : "github github.com org/repo";
     const initial = {
       entries: [row("A-first")],
@@ -342,10 +346,7 @@ it.each([
         environmentId: EnvironmentId.make("restart-environment"),
         threadId: ThreadId.make("restart-thread"),
       });
-      const render = () =>
-        root.render(
-          createElement(AppAtomRegistryProvider, null, createElement(LinkThreadIssueDialogHost)),
-        );
+      const render = () => renderDialog(root);
       await act(async () => render());
       expect(document.body.textContent).toContain("Issue A-first");
       const draft = document.querySelector<HTMLInputElement>('[aria-label="Issue URL"]')!;
@@ -428,34 +429,10 @@ it("refreshes the dialog twice over its last first-page result", async () => {
   state.load
     .mockReset()
     .mockImplementation((target) => atoms.listPage.run(appAtomRegistry, target));
-  const capabilities = {
-    create: false,
-    edit: false,
-    comment: false,
-    labels: false,
-    assignees: false,
-    reactions: false,
-    templates: false,
-    linkedPullRequests: false,
-    events: false,
-    search: true,
-    states: [],
-    closeReasons: [],
-  };
+  const capabilities = listCapabilities();
   const cursor = "github github.com org/repo";
   const first = (keys: ReadonlyArray<string>) => ({
-    entries: keys.map((key) => ({
-      ...state.linked,
-      key,
-      title: `Issue ${key}`,
-      author: null,
-      createdAt: "2026-10-01T00:00:00.000Z",
-      updatedAt: "2026-10-01T00:00:00.000Z",
-      closedAt: null,
-      labels: [],
-      assignees: [],
-      commentCount: 0,
-    })),
+    entries: keys.map((key) => listRow(key)),
     sources: [{ ...state.source, capabilities }],
     viewers: { "github github.com": "A" },
     trackers: [],
@@ -493,10 +470,7 @@ it("refreshes the dialog twice over its last first-page result", async () => {
       (candidate) => candidate.textContent === label,
     )!;
   const text = () => document.body.textContent ?? "";
-  const render = () =>
-    root.render(
-      createElement(AppAtomRegistryProvider, null, createElement(LinkThreadIssueDialogHost)),
-    );
+  const render = () => renderDialog(root);
   try {
     openLinkThreadIssueDialog({
       environmentId: EnvironmentId.make("chain-environment"),
@@ -553,11 +527,7 @@ it("ignores a changed viewer page after the dialog's query changed", async () =>
       environmentId: EnvironmentId.make("stale-environment"),
       threadId: ThreadId.make("stale-thread"),
     });
-    await act(async () =>
-      root.render(
-        createElement(AppAtomRegistryProvider, null, createElement(LinkThreadIssueDialogHost)),
-      ),
-    );
+    await act(async () => renderDialog(root));
     await act(async () =>
       [...document.querySelectorAll<HTMLButtonElement>("button")]
         .find((button) => button.textContent === "Load more")!
@@ -606,20 +576,7 @@ it.each([false, true])(
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     const atoms = createIssueEnvironmentAtoms(issueRuntime());
     const list = vi.spyOn(issueEnvironment, "list").mockImplementation(atoms.list);
-    const capabilities = {
-      create: false,
-      edit: false,
-      comment: false,
-      labels: false,
-      assignees: false,
-      reactions: false,
-      templates: false,
-      linkedPullRequests: false,
-      events: false,
-      search: true,
-      states: [],
-      closeReasons: [],
-    };
+    const capabilities = listCapabilities();
     const candidate = {
       ...state.linked,
       key: "2",
@@ -675,9 +632,7 @@ it.each([false, true])(
         threadId: ThreadId.make("error-thread"),
       });
       await act(async () => {
-        root.render(
-          createElement(AppAtomRegistryProvider, null, createElement(LinkThreadIssueDialogHost)),
-        );
+        renderDialog(root);
         await executeAtomQuery(appAtomRegistry, atoms.list(target));
       });
       expect(document.body.textContent).toContain("Native API rate limit reached");
@@ -726,11 +681,7 @@ it("can load later issues when every issue on the first page is already linked",
       environmentId: EnvironmentId.make("environment"),
       threadId: ThreadId.make("thread"),
     });
-    await act(async () =>
-      root.render(
-        createElement(AppAtomRegistryProvider, null, createElement(LinkThreadIssueDialogHost)),
-      ),
-    );
+    await act(async () => renderDialog(root));
     const load = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
       (button) => button.textContent === "Load more",
     );
@@ -784,11 +735,7 @@ it("shows a source page failure and retries its qualified cursor without paging 
       environmentId: EnvironmentId.make("environment"),
       threadId: ThreadId.make("thread"),
     });
-    await act(async () =>
-      root.render(
-        createElement(AppAtomRegistryProvider, null, createElement(LinkThreadIssueDialogHost)),
-      ),
-    );
+    await act(async () => renderDialog(root));
     const more = () =>
       [...document.querySelectorAll<HTMLButtonElement>("button")].find(
         (button) => button.textContent === "Load more",
@@ -863,11 +810,7 @@ it.each([false, true])(
         environmentId: EnvironmentId.make("environment"),
         threadId: ThreadId.make("thread"),
       });
-      await act(async () =>
-        root.render(
-          createElement(AppAtomRegistryProvider, null, createElement(LinkThreadIssueDialogHost)),
-        ),
-      );
+      await act(async () => renderDialog(root));
       expect(text()).toContain("Issue A-first");
       await act(async () => more()!.click());
       expect(text()).toContain("Issue A-first");
@@ -939,11 +882,7 @@ it.each(["key", "url", "listed", "unsupported-url"])(
         environmentId: EnvironmentId.make("environment"),
         threadId: ThreadId.make("thread"),
       });
-      await act(async () =>
-        root.render(
-          createElement(AppAtomRegistryProvider, null, createElement(LinkThreadIssueDialogHost)),
-        ),
-      );
+      await act(async () => renderDialog(root));
       if (path === "listed") {
         const row = [...document.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
           button.textContent?.includes("Native detail title"),
@@ -1073,11 +1012,7 @@ it.each([
         environmentId: EnvironmentId.make("environment"),
         threadId: ThreadId.make("thread"),
       });
-      await act(async () =>
-        root.render(
-          createElement(AppAtomRegistryProvider, null, createElement(LinkThreadIssueDialogHost)),
-        ),
-      );
+      await act(async () => renderDialog(root));
       if (scenario === "choice") {
         await act(async () =>
           document

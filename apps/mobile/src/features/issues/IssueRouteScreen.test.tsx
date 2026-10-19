@@ -231,6 +231,18 @@ function detail(title: string): IssueDetail {
   return makeIssueDetail({ title });
 }
 
+function renderRoute(
+  root: ReturnType<typeof createRoot>,
+  registry: AtomRegistry.AtomRegistry,
+  params: Parameters<typeof IssueRouteScreen>[0]["route"]["params"],
+) {
+  return root.render(
+    <RegistryContext.Provider value={registry}>
+      <IssueRouteScreen route={{ params }} />
+    </RegistryContext.Provider>,
+  );
+}
+
 const request = vi.spyOn(RpcClient, "request");
 afterEach(() => {
   request.mockReset();
@@ -301,23 +313,15 @@ it("pages an asc-only native account on scroll, retains partial history and fenc
   const container = document.createElement("div");
   const root = createRoot(container);
   const render = (connectionId: string) =>
-    root.render(
-      <RegistryContext.Provider value={registry}>
-        <IssueRouteScreen
-          route={{
-            params: {
-              environmentId: "env",
-              projectId: "project",
-              tracker: "forgejo",
-              host: "forgejo.example",
-              scope: "org/repo",
-              key: "1",
-              connectionId,
-            },
-          }}
-        />
-      </RegistryContext.Provider>,
-    );
+    renderRoute(root, registry, {
+      environmentId: "env",
+      projectId: "project",
+      tracker: "forgejo",
+      host: "forgejo.example",
+      scope: "org/repo",
+      key: "1",
+      connectionId,
+    });
   await act(() => render("A"));
   await settle();
   expect(container.textContent).toContain("A:seed");
@@ -398,23 +402,15 @@ it("starts the true oldest window without a cursor and sends distinct native tra
   const container = document.createElement("div");
   const root = createRoot(container);
   await act(() =>
-    root.render(
-      <RegistryContext.Provider value={registry}>
-        <IssueRouteScreen
-          route={{
-            params: {
-              environmentId: "env",
-              projectId: "project",
-              tracker: "jira",
-              host: "jira.example",
-              scope: "ENG",
-              key: "ENG-1",
-              connectionId: "Account-A",
-            },
-          }}
-        />
-      </RegistryContext.Provider>,
-    ),
+    renderRoute(root, registry, {
+      environmentId: "env",
+      projectId: "project",
+      tracker: "jira",
+      host: "jira.example",
+      scope: "ENG",
+      key: "ENG-1",
+      connectionId: "Account-A",
+    }),
   );
   await settle();
   await act(() =>
@@ -482,22 +478,14 @@ it.each([false, true])(
     const container = document.createElement("div");
     const root = createRoot(container);
     await act(() =>
-      root.render(
-        <RegistryContext.Provider value={registry}>
-          <IssueRouteScreen
-            route={{
-              params: {
-                environmentId: "env",
-                projectId: "project",
-                tracker: "github",
-                host: "github.com",
-                scope: "org/repo",
-                key: "1",
-              },
-            }}
-          />
-        </RegistryContext.Provider>,
-      ),
+      renderRoute(root, registry, {
+        environmentId: "env",
+        projectId: "project",
+        tracker: "github",
+        host: "github.com",
+        scope: "org/repo",
+        key: "1",
+      }),
     );
     await settle();
     expect(cursors).toEqual([undefined, "tail"]);
@@ -558,23 +546,15 @@ it("reloads a shifted Jira window and reaches all 151 native comments without du
   const container = document.createElement("div");
   const root = createRoot(container);
   await act(() =>
-    root.render(
-      <RegistryContext.Provider value={registry}>
-        <IssueRouteScreen
-          route={{
-            params: {
-              environmentId: "env",
-              projectId: "project",
-              tracker: "jira",
-              host: "jira.example",
-              scope: "ENG",
-              key: "ENG-1",
-              connectionId: "A",
-            },
-          }}
-        />
-      </RegistryContext.Provider>,
-    ),
+    renderRoute(root, registry, {
+      environmentId: "env",
+      projectId: "project",
+      tracker: "jira",
+      host: "jira.example",
+      scope: "ENG",
+      key: "ENG-1",
+      connectionId: "A",
+    }),
   );
   await settle();
   shifted = true;
@@ -642,23 +622,15 @@ it("fences older reaction rights when an unknown viewer receives a fresh equal-I
   const container = document.createElement("div");
   const root = createRoot(container);
   await act(() =>
-    root.render(
-      <RegistryContext.Provider value={registry}>
-        <IssueRouteScreen
-          route={{
-            params: {
-              environmentId: "env",
-              projectId: "project",
-              tracker: "jira",
-              host: "jira.example",
-              scope: "ENG",
-              key: "ENG-1",
-              connectionId: "A",
-            },
-          }}
-        />
-      </RegistryContext.Provider>,
-    ),
+    renderRoute(root, registry, {
+      environmentId: "env",
+      projectId: "project",
+      tracker: "jira",
+      host: "jira.example",
+      scope: "ENG",
+      key: "ENG-1",
+      connectionId: "A",
+    }),
   );
   await settle();
   expect(container.querySelector('[aria-label="Heart, 1, including you"]')).not.toBeNull();
@@ -705,22 +677,14 @@ it("keeps a cached issue on a failed refresh, says so, and recovers through Retr
   const container = document.createElement("div");
   const root = createRoot(container);
   await act(() =>
-    root.render(
-      <RegistryContext.Provider value={registry}>
-        <IssueRouteScreen
-          route={{
-            params: {
-              environmentId: "environment",
-              projectId: "project",
-              tracker: "github",
-              host: "github.com",
-              scope: "org/repo",
-              key: "1",
-            },
-          }}
-        />
-      </RegistryContext.Provider>,
-    ),
+    renderRoute(root, registry, {
+      environmentId: "environment",
+      projectId: "project",
+      tracker: "github",
+      host: "github.com",
+      scope: "org/repo",
+      key: "1",
+    }),
   );
   await settle();
   expect(container.textContent).toContain("Old title");
@@ -753,23 +717,15 @@ it.each([{ environmentId: " " }, { projectId: "" }, { tracker: "Not A Tracker" }
     const container = document.createElement("div");
     const root = createRoot(container);
     await act(() =>
-      root.render(
-        <RegistryContext.Provider value={registry}>
-          <IssueRouteScreen
-            route={{
-              params: {
-                environmentId: "environment",
-                projectId: "project",
-                tracker: "github",
-                host: "github.com",
-                scope: "org/repo",
-                key: "1",
-                ...change,
-              },
-            }}
-          />
-        </RegistryContext.Provider>,
-      ),
+      renderRoute(root, registry, {
+        environmentId: "environment",
+        projectId: "project",
+        tracker: "github",
+        host: "github.com",
+        scope: "org/repo",
+        key: "1",
+        ...change,
+      }),
     );
     await settle();
     expect(request).not.toHaveBeenCalled();
@@ -807,23 +763,15 @@ it.each([
     const container = document.createElement("div");
     const root = createRoot(container);
     await act(() =>
-      root.render(
-        <RegistryContext.Provider value={registry}>
-          <IssueRouteScreen
-            route={{
-              params: {
-                environmentId: "environment",
-                projectId: "project",
-                tracker: "github",
-                host: "github.com",
-                scope: "acme/app",
-                key: "456",
-                originalURL,
-              },
-            }}
-          />
-        </RegistryContext.Provider>,
-      ),
+      renderRoute(root, registry, {
+        environmentId: "environment",
+        projectId: "project",
+        tracker: "github",
+        host: "github.com",
+        scope: "acme/app",
+        key: "456",
+        originalURL,
+      }),
     );
     await settle();
     expect(container.textContent).toContain("Couldn't load this issue");
@@ -886,22 +834,14 @@ it.each([true, false])(
     const container = document.createElement("div");
     const root = createRoot(container);
     await act(() =>
-      root.render(
-        <RegistryContext.Provider value={registry}>
-          <IssueRouteScreen
-            route={{
-              params: {
-                environmentId: "issue-env",
-                projectId: "issue-project",
-                tracker: "github",
-                host: "github.com",
-                scope: "acme/app",
-                key: "1",
-              },
-            }}
-          />
-        </RegistryContext.Provider>,
-      ),
+      renderRoute(root, registry, {
+        environmentId: "issue-env",
+        projectId: "issue-project",
+        tracker: "github",
+        host: "github.com",
+        scope: "acme/app",
+        key: "1",
+      }),
     );
     await settle();
     const uris = [...container.querySelectorAll("i")].map((image) => image.dataset.uri);

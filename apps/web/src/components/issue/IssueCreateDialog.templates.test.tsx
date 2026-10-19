@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { createIssueTestRoot, setIssueTestValue } from "./issueTestUtils";
 
 import { RegistryContext } from "@effect/atom-react";
 import {
@@ -21,7 +22,7 @@ import {
 } from "@t3tools/contracts";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { act } from "react";
-import { createRoot, type Root } from "react-dom/client";
+import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({ read: vi.fn(), create: vi.fn(), bytes: 0 }));
@@ -236,9 +237,7 @@ async function attemptCreate() {
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   registry = AtomRegistry.make();
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
+  ({ container, root } = createIssueTestRoot());
   state.bytes = 0;
   state.create.mockReset().mockReturnValue({
     key: "1",
@@ -514,11 +513,7 @@ it("keeps required form fields and their edits from the loaded template", async 
   expect(document.body.textContent).toContain("Fill in Required.");
   const input = document.querySelector<HTMLInputElement>("#issue-field-required")!;
   await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
-      input,
-      "User value",
-    );
-    input.dispatchEvent(new Event("input", { bubbles: true }));
+    setIssueTestValue(input, "User value");
   });
   await render();
   expect(input.value).toBe("User value");

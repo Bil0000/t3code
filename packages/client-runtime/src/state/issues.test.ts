@@ -22,6 +22,7 @@ import { AuthOrchestrationReadScope, AuthSourceControlWriteScope } from "@t3tool
 import * as Session from "./session.ts";
 import * as RpcClient from "../rpc/client.ts";
 import { executeAtomQuery } from "./runtime.ts";
+import { makeIssueTestSession } from "./issues.testkit.ts";
 
 import {
   continueIssueListPage,
@@ -145,17 +146,12 @@ function issueReadHarness() {
     ),
   );
   const session = Atom.make(
-    AsyncResult.success({
-      authenticated: true,
-      auth: {
-        policy: "remote-reachable",
-        bootstrapMethods: [],
-        sessionMethods: [],
-        sessionCookieName: "test",
-      },
-      scopes: [AuthOrchestrationReadScope, AuthSourceControlWriteScope],
-      permissions: [AuthOrchestrationReadScope, AuthSourceControlWriteScope],
-    } satisfies AuthSessionState),
+    AsyncResult.success(
+      makeIssueTestSession(
+        AuthOrchestrationReadScope,
+        AuthSourceControlWriteScope,
+      ) satisfies AuthSessionState,
+    ),
   );
   const sessions = Session.createEnvironmentSessionAtoms(runtime);
   const sessionFactory = vi
@@ -1271,17 +1267,7 @@ it("resolves one clicked issue URL in the requested environment and preferred pr
     key: "ENG-42",
     writable: true,
   };
-  const session: AuthSessionState = {
-    authenticated: true,
-    auth: {
-      policy: "remote-reachable",
-      bootstrapMethods: [],
-      sessionMethods: [],
-      sessionCookieName: "test",
-    },
-    scopes: [AuthOrchestrationReadScope],
-    permissions: [AuthOrchestrationReadScope],
-  };
+  const session: AuthSessionState = makeIssueTestSession(AuthOrchestrationReadScope);
   const sessionAtom = Atom.make(AsyncResult.success(session));
   const sessions = vi
     .spyOn(Session, "createEnvironmentSessionAtoms")

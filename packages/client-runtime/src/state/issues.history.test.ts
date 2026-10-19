@@ -15,7 +15,7 @@ import * as RpcClient from "../rpc/client.ts";
 import * as Session from "./session.ts";
 import { createIssueEnvironmentAtoms } from "./issues.ts";
 import { executeAtomQuery } from "./runtime.ts";
-import { makeIssueTestRuntime } from "./issues.testkit.ts";
+import { makeIssueTestRuntime, makeIssueTestSession } from "./issues.testkit.ts";
 
 it.effect.each([
   "github-state",
@@ -40,17 +40,10 @@ it.effect.each([
   Effect.gen(function* () {
     const runtime = yield* makeIssueTestRuntime;
     yield* Effect.promise(async () => {
-      const session: AuthSessionState = {
-        authenticated: true,
-        auth: {
-          policy: "remote-reachable",
-          bootstrapMethods: [],
-          sessionMethods: [],
-          sessionCookieName: "test",
-        },
-        scopes: [AuthOrchestrationReadScope, AuthSourceControlWriteScope],
-        permissions: [AuthOrchestrationReadScope, AuthSourceControlWriteScope],
-      };
+      const session: AuthSessionState = makeIssueTestSession(
+        AuthOrchestrationReadScope,
+        AuthSourceControlWriteScope,
+      );
       const sessions = vi.spyOn(Session, "createEnvironmentSessionAtoms").mockReturnValue({
         sessionStateAtom: () => Atom.make(AsyncResult.success(session)),
       } as unknown as ReturnType<typeof Session.createEnvironmentSessionAtoms>);
@@ -270,17 +263,7 @@ it.effect.each(
     Effect.gen(function* () {
       const runtime = yield* makeIssueTestRuntime;
       yield* Effect.promise(async () => {
-        const session: AuthSessionState = {
-          authenticated: true,
-          auth: {
-            policy: "remote-reachable",
-            bootstrapMethods: [],
-            sessionMethods: [],
-            sessionCookieName: "test",
-          },
-          scopes: [AuthSourceControlWriteScope],
-          permissions: [AuthSourceControlWriteScope],
-        };
+        const session: AuthSessionState = makeIssueTestSession(AuthSourceControlWriteScope);
         const sessionAtom = Atom.make(AsyncResult.success(session));
         const sessions = vi.spyOn(Session, "createEnvironmentSessionAtoms").mockReturnValue({
           sessionStateAtom: () => sessionAtom,

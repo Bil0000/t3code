@@ -43,6 +43,12 @@ const WORK_ITEM = {
   ],
 };
 
+const markdownWorkItem = () => ({
+  ...WORK_ITEM,
+  rev: 6,
+  multilineFieldsFormat: { "System.Description": "Markdown" },
+});
+
 const requestBodies = new WeakMap<
   ReadonlyArray<string>,
   { ids: number[]; fields?: string[]; asOf?: string; $expand?: string }
@@ -280,11 +286,7 @@ describe("AzureDevOpsIssueTracker", () => {
             operations.push(body[0]!.body);
             return encode({ count: 1, value: [{ code }] });
           }
-          return encode({
-            ...WORK_ITEM,
-            rev: 6,
-            multilineFieldsFormat: { "System.Description": "Markdown" },
-          });
+          return encode(markdownWorkItem());
         });
         const result = yield* api.update!({ ...issueTarget(), body: "" }).pipe(Effect.result);
         expect(Result.isSuccess(result)).toBe(code === 200);
@@ -1333,14 +1335,7 @@ describe("AzureDevOpsIssueTracker", () => {
                       );
                     }
                     return TestSourceControlHost.processOutput(
-                      nativeResponse(
-                        args,
-                        encode({
-                          ...WORK_ITEM,
-                          rev: 6,
-                          multilineFieldsFormat: { "System.Description": "Markdown" },
-                        }),
-                      ),
+                      nativeResponse(args, encode(markdownWorkItem())),
                     );
                   }),
               }),
@@ -1419,14 +1414,7 @@ describe("AzureDevOpsIssueTracker", () => {
                         return !args.includes("PATCH")
                           ? Effect.succeed(
                               TestSourceControlHost.processOutput(
-                                nativeResponse(
-                                  args,
-                                  encode({
-                                    ...WORK_ITEM,
-                                    rev: 6,
-                                    multilineFieldsFormat: { "System.Description": "Markdown" },
-                                  }),
-                                ),
+                                nativeResponse(args, encode(markdownWorkItem())),
                               ),
                             )
                           : Effect.fail(cause);
@@ -1659,11 +1647,7 @@ describe("AzureDevOpsIssueTracker", () => {
                                       format: "markdown",
                                       createdDate: "2026-07-02T00:00:00Z",
                                     }
-                                  : {
-                                      ...WORK_ITEM,
-                                      rev: 6,
-                                      multilineFieldsFormat: { "System.Description": "Markdown" },
-                                    },
+                                  : markdownWorkItem(),
                               ),
                             ),
                           )

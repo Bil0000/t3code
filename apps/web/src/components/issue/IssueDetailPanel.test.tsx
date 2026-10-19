@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-import { createIssueTestRoot } from "./issueTestUtils";
+import { createIssueTestRoot, githubIssueTestRef, setIssueTestValue } from "./issueTestUtils";
 
 import { act } from "react";
-import { createRoot, type Root } from "react-dom/client";
+import type { Root } from "react-dom/client";
 import {
   EnvironmentId,
   IssueTrackerKind,
@@ -18,6 +18,7 @@ import type {
   IssueComment,
   IssueCommentsPage,
   IssueReaction,
+  IssueRef,
   IssueLinkedPullRequestsPage,
 } from "@t3tools/contracts";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
@@ -212,6 +213,12 @@ const encodeCommentPageInput = Schema.encodeSync(IssueCommentsPageInput);
 const decodeCommentPageInput = Schema.decodeUnknownSync(IssueCommentsPageInput);
 const decodeDetail = Schema.decodeUnknownSync(IssueDetail);
 
+function renderPanel(root: Root, environmentId: EnvironmentId, reference: IssueRef) {
+  return act(async () =>
+    root.render(<IssueDetailPanel environmentId={environmentId} reference={reference} />),
+  );
+}
+
 it.each([
   ["external", undefined],
   ["external", "Account/B"],
@@ -275,21 +282,14 @@ it.each([
     const detail = decodeDetail(state.detail);
     const { container, root } = createIssueTestRoot();
     try {
-      await act(async () =>
-        root.render(
-          <IssueDetailPanel
-            environmentId={environmentId}
-            reference={{
-              projectId,
-              tracker: IssueTrackerKind.make("github"),
-              host: "github.com",
-              scope: detail.scope,
-              key: detail.key,
-              ...(connectionId === undefined ? {} : { connectionId }),
-            }}
-          />,
-        ),
-      );
+      await renderPanel(root, environmentId, {
+        projectId,
+        tracker: IssueTrackerKind.make("github"),
+        host: "github.com",
+        scope: detail.scope,
+        key: detail.key,
+        ...(connectionId === undefined ? {} : { connectionId }),
+      });
       const button = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
         (node) => node.textContent?.trim() === "Solve",
       );
@@ -325,21 +325,13 @@ it("refreshes the issue and its scoped history from the header", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   state.detailRefresh.mockClear();
   const environmentId = EnvironmentId.make("manual-environment");
-  const reference = {
-    projectId: ProjectId.make("project"),
-    tracker: IssueTrackerKind.make("github"),
-    host: "github.com",
-    scope: "org/repo",
-    key: "1",
-  };
+  const reference = githubIssueTestRef();
   const { issueEnvironment } = await import("~/state/issues");
   const signal = issueEnvironment.historyRefresh({ environmentId, input: reference });
   appAtomRegistry.set(signal, 0);
   const { container, root } = createIssueTestRoot();
   try {
-    await act(async () =>
-      root.render(<IssueDetailPanel environmentId={environmentId} reference={reference} />),
-    );
+    await renderPanel(root, environmentId, reference);
     await act(async () =>
       container.querySelector<HTMLButtonElement>('button[aria-label="Refresh issue"]')!.click(),
     );
@@ -441,11 +433,7 @@ it.each(["success", "comment-failure", "close-failure", "linear", "no-state-perm
         'textarea[aria-label="Add a comment"]',
       )!;
       await act(async () => {
-        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
-          input,
-          "Keep this comment",
-        );
-        input.dispatchEvent(new Event("input", { bubbles: true }));
+        setIssueTestValue(input, "Keep this comment");
       });
       await act(async () => close!.click());
       expect(state.write.mock.calls[0]![0]).toEqual({
@@ -640,21 +628,12 @@ it.each(["viewer-a", null])(
       },
     };
     const environmentId = EnvironmentId.make("environment");
-    const reference = {
-      projectId: ProjectId.make("project"),
-      tracker: IssueTrackerKind.make("github"),
-      host: "github.com",
-      scope: "org/repo",
-      key: "1",
-    };
+    const reference = githubIssueTestRef();
     const { container, root } = createIssueTestRoot();
     const pills = () => [
       ...container.querySelectorAll<HTMLButtonElement>('button[aria-label^="thumbs up,"]'),
     ];
-    const render = () =>
-      act(async () =>
-        root.render(<IssueDetailPanel environmentId={environmentId} reference={reference} />),
-      );
+    const render = () => renderPanel(root, environmentId, reference);
     try {
       await render();
       expect(pills()).toHaveLength(2);
@@ -748,18 +727,10 @@ it.each([
       },
     };
     const environmentId = EnvironmentId.make("environment");
-    const reference = {
-      projectId: ProjectId.make("project"),
-      tracker: IssueTrackerKind.make("github"),
-      host: "github.com",
-      scope: "org/repo",
-      key: "1",
-    };
+    const reference = githubIssueTestRef();
     const { container, root } = createIssueTestRoot();
     try {
-      await act(async () =>
-        root.render(<IssueDetailPanel environmentId={environmentId} reference={reference} />),
-      );
+      await renderPanel(root, environmentId, reference);
       expect(container.textContent).toContain("Waiting for QA");
       expect(container.textContent).toContain(
         `updated ${formatRelativeTimeLabel(state.detail.updatedAt)}`,
@@ -792,18 +763,10 @@ it("can comment after switching from History to an issue without history support
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   state.write.mockResolvedValue({ _tag: "Success" });
   const environmentId = EnvironmentId.make("environment");
-  const reference = {
-    projectId: ProjectId.make("project"),
-    tracker: IssueTrackerKind.make("github"),
-    host: "github.com",
-    scope: "org/repo",
-    key: "1",
-  };
+  const reference = githubIssueTestRef();
   const { container, root } = createIssueTestRoot();
   try {
-    await act(async () =>
-      root.render(<IssueDetailPanel environmentId={environmentId} reference={reference} />),
-    );
+    await renderPanel(root, environmentId, reference);
     const history = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
       (button) => button.textContent === "History",
     );
@@ -815,11 +778,7 @@ it("can comment after switching from History to an issue without history support
       key: "2",
       capabilities: { ...state.detail.capabilities, events: false },
     };
-    await act(async () =>
-      root.render(
-        <IssueDetailPanel environmentId={environmentId} reference={{ ...reference, key: "2" }} />,
-      ),
-    );
+    await renderPanel(root, environmentId, { ...reference, key: "2" });
     const input = container.querySelector<HTMLTextAreaElement>(
       'textarea[aria-label="Add a comment"]',
     );
@@ -862,18 +821,10 @@ it("closes a parent edit draft when the issue identity changes", async () => {
     viewerPermissions: { ...state.detail.viewerPermissions, edit: true },
   };
   const environmentId = EnvironmentId.make("environment");
-  const reference = {
-    projectId: ProjectId.make("project"),
-    tracker: IssueTrackerKind.make("github"),
-    host: "github.com",
-    scope: "org/repo",
-    key: "1",
-  };
+  const reference = githubIssueTestRef();
   const { container, root } = createIssueTestRoot();
   try {
-    await act(async () =>
-      root.render(<IssueDetailPanel environmentId={environmentId} reference={reference} />),
-    );
+    await renderPanel(root, environmentId, reference);
     const setParent = () =>
       [...container.querySelectorAll<HTMLButtonElement>("button")].find(
         (button) => button.textContent === "Set parent",
@@ -881,11 +832,7 @@ it("closes a parent edit draft when the issue identity changes", async () => {
     await act(async () => setParent().click());
     expect(container.querySelector('input[aria-label="Parent issue key"]')).not.toBeNull();
     state.detail = { ...state.detail, key: "2" };
-    await act(async () =>
-      root.render(
-        <IssueDetailPanel environmentId={environmentId} reference={{ ...reference, key: "2" }} />,
-      ),
-    );
+    await renderPanel(root, environmentId, { ...reference, key: "2" });
     expect(container.querySelector('input[aria-label="Parent issue key"]')).toBeNull();
     await act(async () => setParent().click());
     expect(
@@ -913,18 +860,10 @@ it("closes a sub-issue draft instead of moving it to a different parent", async 
     },
   };
   const environmentId = EnvironmentId.make("environment");
-  const reference = {
-    projectId: ProjectId.make("project"),
-    tracker: IssueTrackerKind.make("github"),
-    host: "github.com",
-    scope: "org/repo",
-    key: "1",
-  };
+  const reference = githubIssueTestRef();
   const { container, root } = createIssueTestRoot();
   try {
-    await act(async () =>
-      root.render(<IssueDetailPanel environmentId={environmentId} reference={reference} />),
-    );
+    await renderPanel(root, environmentId, reference);
     const create = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
       (button) => button.textContent === "New sub-issue",
     )!;
@@ -939,11 +878,7 @@ it("closes a sub-issue draft instead of moving it to a different parent", async 
       title!.dispatchEvent(new Event("input", { bubbles: true }));
     });
     state.detail = { ...state.detail, key: "2", displayKey: "#2" };
-    await act(async () =>
-      root.render(
-        <IssueDetailPanel environmentId={environmentId} reference={{ ...reference, key: "2" }} />,
-      ),
-    );
+    await renderPanel(root, environmentId, { ...reference, key: "2" });
     expect(document.querySelector("#issue-create-title")).toBeNull();
     expect(state.write).not.toHaveBeenCalled();
   } finally {
@@ -994,9 +929,7 @@ describe("native issue state controls", () => {
       },
       viewerPermissions: { ...state.detail.viewerPermissions, setState: true },
     };
-    container = document.createElement("div");
-    document.body.append(container);
-    root = createRoot(container);
+    ({ container, root } = createIssueTestRoot());
   });
   afterEach(async () => {
     await act(async () => root.unmount());
@@ -1145,14 +1078,7 @@ describe("native issue state controls", () => {
       state.candidatesRead.mockClear();
       state.write.mockClear();
       state.detail = { ...state.detail, key: "ENG-2", displayKey: "ENG-2" };
-      await act(async () =>
-        root.render(
-          <IssueDetailPanel
-            environmentId={environmentId}
-            reference={{ ...reference("jira", connectionId), key: "ENG-2" }}
-          />,
-        ),
-      );
+      await renderPanel(root, environmentId, { ...reference("jira", connectionId), key: "ENG-2" });
       expect(state.candidatesRead).not.toHaveBeenCalled();
       expect(items()).toHaveLength(0);
       await act(async () =>
@@ -1195,11 +1121,7 @@ describe("native issue state controls", () => {
       'textarea[aria-label="Add a comment"]',
     )!;
     await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
-        input,
-        "Ready to close",
-      );
-      input.dispatchEvent(new Event("input", { bubbles: true }));
+      setIssueTestValue(input, "Ready to close");
     });
     const trigger = buttons().find((button) => button.textContent === "Close with comment")!;
     await act(async () =>
@@ -1382,9 +1304,7 @@ it.each([
   };
   const { container, root } = createIssueTestRoot();
   try {
-    await act(async () =>
-      root.render(<IssueDetailPanel environmentId={environmentId} reference={reference} />),
-    );
+    await renderPanel(root, environmentId, reference);
     expect(state.commentsRead).toHaveBeenCalledOnce();
     expect(state.commentsRead).toHaveBeenCalledWith({
       environmentId,
@@ -1409,9 +1329,7 @@ it.each([
       ).toBe("Older own comment");
     }
     state.detail = { ...state.detail };
-    await act(async () =>
-      root.render(<IssueDetailPanel environmentId={environmentId} reference={reference} />),
-    );
+    await renderPanel(root, environmentId, reference);
     expect(state.commentsRead).toHaveBeenCalledOnce();
     if (viewer !== null) {
       const read = state.commentsRead.getMockImplementation()!;
@@ -1423,9 +1341,7 @@ it.each([
           }),
       );
       state.detail = { ...state.detail, viewer: "viewer-456" };
-      await act(async () =>
-        root.render(<IssueDetailPanel environmentId={environmentId} reference={reference} />),
-      );
+      await renderPanel(root, environmentId, reference);
       expect(container.querySelector('textarea[aria-label="Edit comment"]')).toBeNull();
       expect(container.querySelector('button[aria-label^="thumbs up,"]')).toBeNull();
       expect(state.commentsRead).toHaveBeenCalledTimes(2);
@@ -1492,9 +1408,7 @@ it.each(["unknown", "allowed", "denied", "unsupported", "no-grant", "read-only"]
     };
     const { container, root } = createIssueTestRoot();
     try {
-      await act(async () =>
-        root.render(<IssueDetailPanel environmentId={environmentId} reference={reference} />),
-      );
+      await renderPanel(root, environmentId, reference);
       const edit = container.querySelector<HTMLButtonElement>('button[aria-label="Edit comment"]');
       expect(edit !== null).toBe(guard === "unknown" || guard === "allowed");
       if (guard === "unknown") {
@@ -1503,11 +1417,7 @@ it.each(["unknown", "allowed", "denied", "unsupported", "no-grant", "read-only"]
           'textarea[aria-label="Edit comment"]',
         )!;
         await act(async () => {
-          Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
-            input,
-            "Keep this draft",
-          );
-          input.dispatchEvent(new Event("input", { bubbles: true }));
+          setIssueTestValue(input, "Keep this draft");
         });
         const save = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
           (button) => button.textContent === "Save",
@@ -1634,11 +1544,7 @@ describe("native issue body editability", () => {
   const description = () =>
     container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Description"]');
   const type = (element: HTMLInputElement | HTMLTextAreaElement, value: string) => {
-    Object.getOwnPropertyDescriptor(Object.getPrototypeOf(element), "value")!.set!.call(
-      element,
-      value,
-    );
-    element.dispatchEvent(new Event("input", { bubbles: true }));
+    setIssueTestValue(element, value);
   };
   beforeEach(() => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -1668,9 +1574,7 @@ describe("native issue body editability", () => {
         states: [],
       },
     };
-    container = document.createElement("div");
-    document.body.append(container);
-    root = createRoot(container);
+    ({ container, root } = createIssueTestRoot());
   });
   afterEach(async () => {
     await act(async () => root.unmount());
@@ -1681,14 +1585,7 @@ describe("native issue body editability", () => {
     "drops the previous account's %s editor on an equal native issue and viewer",
     async (field) => {
       state.detail = { ...state.detail, connectionId: "A", viewer: "same-viewer" };
-      await act(async () =>
-        root.render(
-          <IssueDetailPanel
-            environmentId={environmentId}
-            reference={{ ...reference, connectionId: "A" }}
-          />,
-        ),
-      );
+      await renderPanel(root, environmentId, { ...reference, connectionId: "A" });
       await act(async () => button(field === "body" ? "Edit description" : "Edit title")!.click());
       const editor = () =>
         field === "body"
@@ -1701,14 +1598,7 @@ describe("native issue body editability", () => {
         body: "Native B body",
         title: "Native B title",
       };
-      await act(async () =>
-        root.render(
-          <IssueDetailPanel
-            environmentId={environmentId}
-            reference={{ ...reference, connectionId: "B" }}
-          />,
-        ),
-      );
+      await renderPanel(root, environmentId, { ...reference, connectionId: "B" });
       expect(editor()).toBeNull();
       expect(container.textContent).not.toContain("Private A draft");
       expect(state.write).not.toHaveBeenCalled();
@@ -1882,11 +1772,7 @@ describe("native issue body editability", () => {
       };
       const currentEnvironmentId =
         scope === "environment" ? EnvironmentId.make("other-environment") : environmentId;
-      await act(async () =>
-        root.render(
-          <IssueDetailPanel environmentId={currentEnvironmentId} reference={reference} />,
-        ),
-      );
+      await renderPanel(root, currentEnvironmentId, reference);
       expect(description()).toBeNull();
       expect(button("Edit description")).toBeUndefined();
       expect(container.textContent).toContain("Current native body");
@@ -1948,10 +1834,7 @@ it.each(["retry", "cancel", "permission", "state-only"])(
       },
     };
     const { container, root } = createIssueTestRoot();
-    const render = () =>
-      act(async () =>
-        root.render(<IssueDetailPanel environmentId={environmentId} reference={reference} />),
-      );
+    const render = () => renderPanel(root, environmentId, reference);
     const button = (text: string) =>
       [...document.querySelectorAll<HTMLButtonElement>("button")].find(
         (node) => node.textContent === text,
@@ -1962,11 +1845,7 @@ it.each(["retry", "cancel", "permission", "state-only"])(
         'textarea[aria-label="Add a comment"]',
       )!;
       await act(async () => {
-        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
-          commentInput,
-          "Only post once",
-        );
-        commentInput.dispatchEvent(new Event("input", { bubbles: true }));
+        setIssueTestValue(commentInput, "Only post once");
       });
       await act(async () => button(kind === "state-only" ? "Done" : "Close with comment").click());
       expect(state.write).not.toHaveBeenCalled();
@@ -1979,11 +1858,7 @@ it.each(["retry", "cancel", "permission", "state-only"])(
       }
       const field = document.querySelector<HTMLInputElement>("#issue-native-field-resolution")!;
       await act(async () => {
-        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
-          field,
-          "Fixed",
-        );
-        field.dispatchEvent(new Event("input", { bubbles: true }));
+        setIssueTestValue(field, "Fixed");
       });
       if (kind === "permission") {
         state.detail = {
@@ -2102,9 +1977,7 @@ it("edits native ADF when the markdown body is read-only and clears edits for an
       (node) => node.textContent === text,
     )!;
   try {
-    await act(async () =>
-      root.render(<IssueDetailPanel environmentId={environmentId} reference={reference} />),
-    );
+    await renderPanel(root, environmentId, reference);
     await act(async () =>
       container.querySelector<HTMLButtonElement>('[aria-label="Edit description"]')!.click(),
     );
@@ -2144,9 +2017,7 @@ it("edits native ADF when the markdown body is read-only and clears edits for an
         }),
       },
     };
-    await act(async () =>
-      root.render(<IssueDetailPanel environmentId={environmentId} reference={nextRef} />),
-    );
+    await renderPanel(root, environmentId, nextRef);
     expect(container.querySelector('[role="textbox"][aria-label="Description"]')).toBeNull();
     expect(container.textContent).toContain("Account B native text");
     expect(container.textContent).not.toContain("Account A native text");
@@ -2213,10 +2084,7 @@ it("saves native comment edits, retains failed edits, and blocks a revoked permi
     [...container.querySelectorAll<HTMLButtonElement>("button")].find(
       (node) => node.textContent === text,
     )!;
-  const render = () =>
-    act(async () =>
-      root.render(<IssueDetailPanel environmentId={environmentId} reference={reference} />),
-    );
+  const render = () => renderPanel(root, environmentId, reference);
   try {
     await render();
     await act(async () =>
@@ -2305,16 +2173,10 @@ it("edits DC wiki descriptions and comments as exact source and resets drafts fo
       const textarea = container.querySelector<HTMLTextAreaElement>(
         'textarea[aria-label="' + label + ' · Jira wiki markup"]',
       )!;
-      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
-        textarea,
-        value,
-      );
-      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+      setIssueTestValue(textarea, value);
     });
   try {
-    await act(async () =>
-      root.render(<IssueDetailPanel environmentId={environmentId} reference={reference} />),
-    );
+    await renderPanel(root, environmentId, reference);
     expect(container.textContent).toContain(source);
     expect(container.textContent).toContain(commentSource);
     expect(container.textContent).not.toContain("Converted fallback must not render");
@@ -2362,9 +2224,7 @@ it("edits DC wiki descriptions and comments as exact source and resets drafts fo
       richBody: { format: "jira-wiki", document: " Account B source \n" },
       comments: [],
     };
-    await act(async () =>
-      root.render(<IssueDetailPanel environmentId={environmentId} reference={nextRef} />),
-    );
+    await renderPanel(root, environmentId, nextRef);
     expect(container.textContent).toContain(" Account B source \n");
     expect(container.textContent).not.toContain("Account A unsaved draft");
     expect(container.querySelector('textarea[aria-label$="Jira wiki markup"]')).toBeNull();
@@ -2432,10 +2292,7 @@ it("edits Azure HTML descriptions and comments as exact source and fails closed 
       );
       textarea(label)!.dispatchEvent(new Event("input", { bubbles: true }));
     });
-  const show = (ref = reference) =>
-    act(async () =>
-      root.render(<IssueDetailPanel environmentId={environmentId} reference={ref} />),
-    );
+  const show = (ref = reference) => renderPanel(root, environmentId, ref);
   try {
     await show();
     expect(container.textContent).toContain(source);
