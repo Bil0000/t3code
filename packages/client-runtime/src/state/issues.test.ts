@@ -1,43 +1,66 @@
 import type {
-  AuthSessionState,
   EnvironmentId,
+  AuthSessionState,
   IssueCapabilities,
-  IssueComment,
   IssueCommentsPageInput,
   IssueListEntry,
-  IssueListInput,
   IssueListResult,
   IssueTrackerKind,
   ProjectId,
 } from "@t3tools/contracts";
-import {
-  AuthOrchestrationReadScope,
-  issueListCursorKey,
-  WS_METHODS,
-  WsIssuesRpcGroup,
-} from "@t3tools/contracts";
-import { describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it, vi } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Schema from "effect/Schema";
+import * as Deferred from "effect/Deferred";
+import * as Exit from "effect/Exit";
 import * as Latch from "effect/Latch";
 import * as Layer from "effect/Layer";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 
 import * as EnvironmentRegistry from "../connection/registry.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
-import * as RpcClient from "../rpc/client.ts";
+import { AuthOrchestrationReadScope, AuthSourceControlWriteScope } from "@t3tools/contracts";
 import * as Session from "./session.ts";
+import * as RpcClient from "../rpc/client.ts";
+import { executeAtomQuery } from "./runtime.ts";
 
 import {
   continueIssueListPage,
   createIssueEnvironmentAtoms,
+  createIssueSourceRefreshQueue,
+  holdIssueListAnswer,
+  readIssueListSourcePage,
   issueEntryKey,
+  issueListCursorsOn,
   issueScopeKey,
+  issueSourceMatchesList,
   mergeIssueListPage,
   offeredIssueInvolvements,
-  prependIssueComments,
   refreshIssueListPage,
 } from "./issues.ts";
+
+describe("issueSourceMatchesList", () => {
+  const source = { projectId: "one" as ProjectId, host: "jira.example.com" };
+  it("keeps refreshes from another project or host outside the filtered list", () => {
+    expect(issueSourceMatchesList({ state: "all", projectId: "two" as ProjectId }, source)).toBe(
+      false,
+    );
+    expect(issueSourceMatchesList({ state: "open", host: "github.com" }, source)).toBe(false);
+  });
+  it("refreshes a matching source and leaves state and involvement filtering to the server", () => {
+    expect(
+      issueSourceMatchesList(
+        {
+          state: "closed",
+          involvement: "assigned",
+          projectId: source.projectId,
+          host: "JIRA.EXAMPLE.COM",
+        },
+        source,
+      ),
+    ).toBe(true);
+    expect(issueSourceMatchesList({ state: "all" }, source)).toBe(true);
+  });
+});
 
 describe("issue comment requests", () => {
   it.each([
@@ -45,6 +68,7 @@ describe("issue comment requests", () => {
     { tracker: "github" as IssueTrackerKind },
     { host: undefined },
     { cursor: "next" },
+    { viewer: "native-viewer" },
     {},
   ])("keeps single-flight requests distinct for %j", async (change) => {
     const input: IssueCommentsPageInput = {
@@ -106,6 +130,215 @@ describe("issue comment requests", () => {
   });
 });
 
+function issueReadHarness() {
+  const supervisor = {} as EnvironmentSupervisor.EnvironmentSupervisor["Service"];
+  const runtime = Atom.runtime(
+    Layer.mergeAll(
+      Layer.succeed(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+      Layer.succeed(
+        EnvironmentRegistry.EnvironmentRegistry,
+        EnvironmentRegistry.EnvironmentRegistry.of({
+          run: (_environmentId, effect) =>
+            Effect.provideService(effect, EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        } as EnvironmentRegistry.EnvironmentRegistry["Service"]),
+      ),
+    ),
+  );
+  const session = Atom.make(
+    AsyncResult.success({
+      authenticated: true,
+      auth: {
+        policy: "remote-reachable",
+        bootstrapMethods: [],
+        sessionMethods: [],
+        sessionCookieName: "test",
+      },
+      scopes: [AuthOrchestrationReadScope, AuthSourceControlWriteScope],
+      permissions: [AuthOrchestrationReadScope, AuthSourceControlWriteScope],
+    } satisfies AuthSessionState),
+  );
+  const sessions = Session.createEnvironmentSessionAtoms(runtime);
+  const sessionFactory = vi
+    .spyOn(Session, "createEnvironmentSessionAtoms")
+    .mockReturnValue({ ...sessions, sessionStateAtom: () => session });
+  const registry = AtomRegistry.make();
+  return {
+    runtime,
+    atoms: createIssueEnvironmentAtoms(runtime),
+    registry,
+    dispose: () => {
+      registry.dispose();
+      sessionFactory.mockRestore();
+    },
+  };
+}
+
+const issueListResult = (title: string): IssueListResult => ({
+  entries: [entry({ key: "1", title })],
+  viewers: {},
+  trackers: [],
+  nextCursors: {},
+  errors: [],
+});
+
+describe("post-write issue reads", () => {
+  it.effect("keeps identical page reads separate after two writes", () =>
+    Effect.gen(function* () {
+      const { atoms, registry, dispose } = issueReadHarness();
+      const started = Deferred.makeUnsafe<void>();
+      const firstResponse = Deferred.makeUnsafe<IssueListResult>();
+      let calls = 0;
+      const request = vi.spyOn(RpcClient, "requestGuarded");
+      request.mockImplementation((() =>
+        Effect.suspend(() => {
+          calls += 1;
+          if (calls === 1) {
+            Deferred.doneUnsafe(started, Exit.void);
+            return Deferred.await(firstResponse);
+          }
+          return Effect.succeed(issueListResult("After second write"));
+        })) as unknown as Parameters<typeof request.mockImplementation>[0]);
+      const target = {
+        environmentId: "environment-1" as EnvironmentId,
+        input: { state: "open" as const, projectId: "project-1" as ProjectId },
+      };
+      try {
+        const first = atoms.listPage.run(registry, target);
+        yield* Deferred.await(started);
+        const second = atoms.listPage.run(registry, target);
+        Deferred.doneUnsafe(firstResponse, Exit.succeed(issueListResult("After first write")));
+        expect(yield* Effect.promise(() => first)).toMatchObject({
+          _tag: "Success",
+          value: { entries: [{ title: "After first write" }] },
+        });
+        expect(yield* Effect.promise(() => second)).toMatchObject({
+          _tag: "Success",
+          value: { entries: [{ title: "After second write" }] },
+        });
+        expect(calls).toBe(2);
+      } finally {
+        dispose();
+        request.mockRestore();
+      }
+    }),
+  );
+
+  it.effect.each(["full first", "scoped first", "two writes"])(
+    "keeps the newest source after %s",
+    (order) =>
+      Effect.gen(function* () {
+        const { atoms, runtime, registry, dispose } = issueReadHarness();
+        const fullStarted = Deferred.makeUnsafe<void>();
+        const sourceStarted = Deferred.makeUnsafe<void>();
+        const rejectedSource = Deferred.makeUnsafe<void>();
+        const oldFull = Deferred.makeUnsafe<IssueListResult>();
+        const oldSource = Deferred.makeUnsafe<IssueListResult>();
+        let fullCalls = 0;
+        let sourceCalls = 0;
+        let revision = 1;
+        const cached = Atom.make({
+          answer: null as IssueListResult | null,
+          page: issueListResult("Before writes"),
+        });
+        const request = vi.spyOn(RpcClient, "requestGuarded");
+        request.mockImplementation(((tag: string, input: { projectId?: string }) =>
+          Effect.suspend(() => {
+            if (tag === "issues.setState") return Effect.void;
+            if (input.projectId === undefined) {
+              fullCalls += 1;
+              if (fullCalls === 1) return Effect.succeed(issueListResult("Before writes"));
+              Deferred.doneUnsafe(fullStarted, Exit.void);
+              return Deferred.await(oldFull);
+            }
+            sourceCalls += 1;
+            if (sourceCalls === 1) {
+              Deferred.doneUnsafe(sourceStarted, Exit.void);
+              return Deferred.await(oldSource);
+            }
+            return Effect.succeed(
+              order === "two writes"
+                ? { ...issueListResult("Newest write"), entries: [] }
+                : issueListResult("Newest write"),
+            );
+          })) as unknown as Parameters<typeof request.mockImplementation>[0]);
+        const query = runtime.atom(RpcClient.requestGuarded("issues.list", { state: "open" }));
+        const visible = Atom.make((get) => {
+          const full = get(query);
+          const stored = get(cached);
+          return full._tag === "Success" && full.value !== stored.answer ? full.value : stored.page;
+        });
+        const queue = createIssueSourceRefreshQueue();
+        let writes = 0;
+        const write = () =>
+          atoms.setState.run(registry, {
+            environmentId: "environment-1" as EnvironmentId,
+            input: {
+              projectId: "project-1" as ProjectId,
+              tracker: "github" as IssueTrackerKind,
+              scope: "acme/app",
+              key: String(++writes),
+              state: "closed",
+            },
+          });
+        const committed: string[] = [];
+        const read = async () => {
+          const startedRevision = revision;
+          const response = await readIssueListSourcePage(registry, query, () =>
+            atoms.listPage.run(registry, {
+              environmentId: "environment-1" as EnvironmentId,
+              input: { state: "open", projectId: "project-1" as ProjectId },
+            }),
+          );
+          if (revision !== startedRevision) return;
+          if (!response.isCurrent()) {
+            Deferred.doneUnsafe(rejectedSource, Exit.void);
+            void queue("source", read);
+            return;
+          }
+          if (response.result._tag === "Success") {
+            registry.set(cached, { answer: response.answer, page: response.result.value });
+            committed.push(response.result.value.entries[0]?.title ?? "empty");
+          }
+        };
+        try {
+          yield* Effect.promise(() => executeAtomQuery(registry, query));
+          if (order === "two writes") expect((yield* Effect.promise(write))._tag).toBe("Success");
+          const refresh = queue("source", read);
+          yield* Deferred.await(sourceStarted);
+          if (order === "two writes") {
+            expect((yield* Effect.promise(write))._tag).toBe("Success");
+            revision += 1;
+            void queue("source", read);
+          } else {
+            const full = executeAtomQuery(registry, query, { refresh: true });
+            yield* Deferred.await(fullStarted);
+            if (order === "full first") {
+              Deferred.doneUnsafe(oldFull, Exit.succeed(issueListResult("Old full read")));
+              yield* Effect.promise(() => full);
+            } else {
+              Deferred.doneUnsafe(oldSource, Exit.succeed(issueListResult("After write")));
+              yield* Deferred.await(rejectedSource);
+              expect(registry.get(visible).entries[0]?.title).toBe("Before writes");
+              Deferred.doneUnsafe(oldFull, Exit.succeed(issueListResult("Old full read")));
+              yield* Effect.promise(() => full);
+            }
+          }
+          Deferred.doneUnsafe(oldSource, Exit.succeed(issueListResult("After write")));
+          yield* Effect.promise(() => refresh);
+          if (order === "two writes") expect(registry.get(visible).entries).toEqual([]);
+          else expect(registry.get(visible).entries[0]?.title).toBe("Newest write");
+          expect(committed).toEqual([order === "two writes" ? "empty" : "Newest write"]);
+          expect(writes).toBe(order === "two writes" ? 2 : 0);
+          expect(sourceCalls).toBe(2);
+          expect(fullCalls).toBe(order === "two writes" ? 1 : 2);
+        } finally {
+          dispose();
+          request.mockRestore();
+        }
+      }),
+  );
+});
+
 function entry(overrides: Partial<IssueListEntry> & { key: string }): IssueListEntry {
   return {
     tracker: "github" as IssueTrackerKind,
@@ -158,11 +391,26 @@ describe("mergeIssueListPage", () => {
 });
 
 describe("issue list continuations", () => {
-  const cursors = {
-    "github.com acme/app": "a",
-    "github.com acme/other": "b",
-    "linear.app ENG": "c",
-  };
+  it("continues a held answer only through its own first cursor object", () => {
+    const cursor = "github.com acme/app";
+    const answer: IssueListResult = {
+      entries: [entry({ key: "1" })],
+      viewers: {},
+      trackers: [],
+      nextCursors: { [cursor]: "2" },
+      errors: [],
+    };
+    const held = holdIssueListAnswer(answer);
+    expect(held.firstCursors).toBe(answer.nextCursors);
+    const page = { entries: [entry({ key: "2" })], nextCursors: {}, errors: [] };
+    expect(continueIssueListPage(held, held.nextCursors, page, { ...answer.nextCursors })).toBe(
+      held,
+    );
+    const continued = continueIssueListPage(held, held.nextCursors, page, answer.nextCursors);
+    expect(continued.entries.map((row) => row.key)).toEqual(["1", "2"]);
+    expect(continued.nextCursors).toEqual({});
+    expect(continued.answer).toBe(answer);
+  });
 
   it("keeps a failed scope's cursor when an older server omits error host and tracker", () => {
     const held = {
@@ -182,31 +430,22 @@ describe("issue list continuations", () => {
     const refreshed = refreshIssueListPage(held, failed);
     expect(refreshed.entries).toEqual(held.entries);
     expect(refreshed.nextCursors).toEqual(held.nextCursors);
+    const retried = continueIssueListPage(
+      continued,
+      continued.nextCursors,
+      { entries: [entry({ key: "2" })], nextCursors: {}, errors: [] },
+      continued.firstCursors,
+    );
+    expect(retried.entries).toHaveLength(2);
+    expect(retried.errors).toEqual([]);
+    expect(retried.nextCursors).toEqual({});
   });
 
-  it.each([
-    ["github.com acme/app", "github github.com acme/app"],
-    ["github github.com acme/app", "github.com acme/app"],
-  ])("refreshes a continued scope when cursors change from %s to %s", (oldKey, newKey) => {
-    const first = entry({ key: "1", updatedAt: "2026-10-03T00:00:00.000Z" });
-    const tail = entry({ key: "2" });
-    const held = {
-      entries: [first, tail],
-      firstKeys: new Set([issueEntryKey(first)]),
-      firstCursors: { [oldKey]: "2" },
-      nextCursors: { [oldKey]: "3" },
-      errors: [],
-    };
-    const refreshed = refreshIssueListPage(
-      held,
-      { entries: [{ ...first, title: "Fresh" }], nextCursors: { [newKey]: "2" }, errors: [] },
-      { source: { projectId: first.projectId, host: first.host, scope: first.scope } },
-    );
-    expect(refreshed.entries.map((row) => row.key)).toEqual(["1", "2"]);
-    expect(refreshed.entries[0]?.title).toBe("Fresh");
-    expect(refreshed.firstCursors).toEqual({ [newKey]: "2" });
-    expect(refreshed.nextCursors).toEqual({ [newKey]: "3" });
-  });
+  const cursors = {
+    "github.com acme/app": "a",
+    "github.com acme/other": "b",
+    "linear.app ENG": "c",
+  };
 
   it("keeps same-host trackers separate through retries and source refresh", () => {
     const github = entry({ key: "1", host: "shared.example" });
@@ -221,6 +460,9 @@ describe("issue list continuations", () => {
       errors: [] as IssueListResult["errors"],
     };
     expect(mergeIssueListPage([github], [gitlab])).toHaveLength(2);
+    expect(issueListCursorsOn(held.nextCursors, "Shared.Example", "gitlab")).toEqual({
+      [gl]: "gl2",
+    });
     const down = {
       projectId: gitlab.projectId,
       projectTitle: "App",
@@ -261,6 +503,13 @@ describe("issue list continuations", () => {
     expect(narrowed.nextCursors).toEqual({ [gl]: "gl2" });
   });
 
+  it("continues only the scopes of the chosen host", () => {
+    expect(issueListCursorsOn(cursors, "GitHub.com")).toEqual({
+      "github.com acme/app": "a",
+      "github.com acme/other": "b",
+    });
+  });
+
   it("keeps other hosts' cursors when one host's page lands", () => {
     const held = {
       entries: [entry({ key: "1" })],
@@ -269,7 +518,7 @@ describe("issue list continuations", () => {
       firstKeys: new Set<string>(),
       errors: [],
     };
-    const sent = { "github.com acme/app": "a", "github.com acme/other": "b" };
+    const sent = issueListCursorsOn(cursors, "github.com");
     const next = continueIssueListPage(
       held,
       sent,
@@ -438,82 +687,6 @@ describe("issue list continuations", () => {
 });
 
 describe("issue representative changes", () => {
-  it.each([true, false])(
-    "keeps a single tracker's tail when cursor format changes: %s",
-    (qualified) => {
-      const first = entry({ key: "1", updatedAt: "2026-10-02T00:00:00.000Z" });
-      const tail = entry({ key: "2" });
-      const oldKey = qualified ? "github.com acme/app" : "github github.com acme/app";
-      const freshKey = qualified ? "github github.com acme/app" : "github.com acme/app";
-      const held = {
-        entries: [first, tail],
-        firstKeys: new Set([issueEntryKey(first)]),
-        firstCursors: { [oldKey]: "2" },
-        nextCursors: { [oldKey]: "3" },
-        errors: [],
-      };
-      const refreshed = refreshIssueListPage(held, {
-        entries: [first],
-        nextCursors: { [freshKey]: "2" },
-        errors: [],
-      });
-      expect(refreshed.entries).toEqual(held.entries);
-      expect(refreshed.firstCursors).toEqual({ [freshKey]: "2" });
-      expect(refreshed.nextCursors).toEqual({ [freshKey]: "3" });
-    },
-  );
-
-  it.each([
-    { failed: false, sources: true },
-    { failed: false, sources: false },
-    { failed: true, sources: true },
-    { failed: true, sources: false },
-  ])(
-    "keeps mixed tracker cursors separate when GitHub has no fresh cursor: %j",
-    ({ failed, sources }) => {
-      const github = entry({ key: "1" });
-      const tail = entry({ key: "2" });
-      const gitlab = entry({ key: "9", tracker: "gitlab" as IssueTrackerKind });
-      const legacy = "github.com acme/app";
-      const qualified = "gitlab github.com acme/app";
-      const held = {
-        entries: [github, tail, gitlab],
-        ...(sources
-          ? {
-              sources: [github, gitlab].map((row) => ({
-                ...row,
-                capabilities: {} as IssueCapabilities,
-              })),
-            }
-          : {}),
-        firstKeys: new Set([github, gitlab].map(issueEntryKey)),
-        firstCursors: { [qualified]: "o2", [legacy]: "2" },
-        nextCursors: { [qualified]: "o2", [legacy]: "3" },
-        errors: [],
-      };
-      const fresh = {
-        entries: failed ? [gitlab] : [github, gitlab],
-        ...(sources ? { sources: held.sources } : {}),
-        nextCursors: { [qualified]: "o2" },
-        errors: failed
-          ? [
-              {
-                projectId: github.projectId,
-                projectTitle: github.projectTitle,
-                tracker: github.tracker,
-                host: github.host,
-                message: "down",
-              },
-            ]
-          : [],
-      };
-      const refreshed = refreshIssueListPage(held, fresh);
-      expect(refreshed.nextCursors).toEqual(failed ? held.nextCursors : { [qualified]: "o2" });
-      expect(refreshed.firstCursors).toEqual(failed ? held.firstCursors : { [qualified]: "o2" });
-      expect(refreshed.entries).toEqual(failed ? held.entries : [github, gitlab]);
-    },
-  );
-
   it.each([
     { cursor: "github github.com acme/app", sources: true },
     { cursor: "github github.com acme/app", sources: false },
@@ -774,6 +947,29 @@ describe("refreshIssueListPage", () => {
     errors: [] as IssueListResult["errors"],
   };
 
+  it("removes every changed tail row when source writes share one trailing refresh", () => {
+    const next = refreshIssueListPage(
+      loaded,
+      {
+        entries: rows(1, 50),
+        nextCursors: { "github.com acme/app": "2" },
+        errors: [],
+      },
+      {
+        source: {
+          tracker: "github",
+          projectId: "project-1",
+          host: "github.com",
+          scope: "acme/app",
+        },
+        removed: new Set(["60", "61"].map((key) => issueEntryKey(entry({ key })))),
+      },
+    );
+    expect(next.entries.filter((row) => row.scope === "acme/app")).toHaveLength(98);
+    expect(next.entries.some((row) => row.key === "60" || row.key === "61")).toBe(false);
+    expect(next.entries.filter((row) => row.scope === "acme/other")).toHaveLength(50);
+  });
+
   it("keeps a continued scope's tail and cursor under a fresh first page", () => {
     const next = refreshIssueListPage(loaded, {
       entries: [...rows(1, 50), ...rows(202, 251, "acme/other")],
@@ -900,7 +1096,7 @@ describe("refreshIssueListPage", () => {
       errors: [],
     });
     expect(refreshed.entries.map((row) => row.key)).toEqual(["0", "1", "3"]);
-    expect(refreshed.nextCursors).toEqual({
+    expect(issueListCursorsOn(refreshed.nextCursors, "github.com")).toEqual({
       "github.com acme/app": "2",
     });
     const continued = continueIssueListPage(
@@ -1062,849 +1258,20 @@ describe("offeredIssueInvolvements", () => {
   });
 });
 
-describe("prependIssueComments", () => {
-  const comment = (id: string): IssueComment => ({
-    id,
-    author: null,
-    body: id,
-    createdAt: "2026-10-01T00:00:00.000Z",
-    url: null,
-  });
-
-  it("puts older comments first and drops ones already shown", () => {
-    const current = [comment("c3"), comment("c4")];
-    const older = [comment("c1"), comment("c2"), comment("c3")];
-    expect(prependIssueComments(current, older).map((c) => c.id)).toEqual(["c1", "c2", "c3", "c4"]);
-  });
-});
-
-describe("held issue list viewers", () => {
-  function issueReadHarness() {
-    const runtime = Atom.runtime(
-      Layer.succeed(
-        EnvironmentRegistry.EnvironmentRegistry,
-        EnvironmentRegistry.EnvironmentRegistry.of({
-          run: (_environmentId, effect) =>
-            Effect.provideService(
-              effect,
-              EnvironmentSupervisor.EnvironmentSupervisor,
-              {} as EnvironmentSupervisor.EnvironmentSupervisor["Service"],
-            ),
-        } as EnvironmentRegistry.EnvironmentRegistry["Service"]),
-      ),
-    );
-    const registry = AtomRegistry.make();
-    return {
-      atoms: createIssueEnvironmentAtoms(runtime),
-      registry,
-      dispose: () => registry.dispose(),
-    };
-  }
-
-  const row = (key: string, overrides: Partial<IssueListEntry> = {}) =>
-    entry({ ...overrides, key });
-  const source = (entry: IssueListEntry) => ({ ...entry, capabilities: {} as IssueCapabilities });
-  const cursor = "github github.com acme/app";
-  const answer = (
-    entries: IssueListResult["entries"],
-    nextCursors: IssueListResult["nextCursors"],
-    viewer: string | null = "A",
-  ): IssueListResult => ({
-    entries,
-    nextCursors,
-    viewers: viewer === null ? {} : { "github github.com": viewer },
-    sources: [source(row("source"))],
-    trackers: [],
-    errors: [],
-  });
-  const first = (page = answer([row("first")], { [cursor]: "A2" })) => ({
-    answer: page,
-    entries: page.entries,
-    sources: page.sources,
-    errors: page.errors,
-    nextCursors: page.nextCursors,
-    firstCursors: page.nextCursors,
-    firstKeys: new Set(page.entries.map(issueEntryKey)),
-  });
-  const loaded = (key = cursor) => {
-    const held = first(answer([row("first")], { [key]: "A2" }));
-    return continueIssueListPage(
-      held,
-      held.nextCursors,
-      answer([row("A-tail")], { [key]: "A3" }),
-      held.firstCursors,
-    );
+it("resolves one clicked issue URL in the requested environment and preferred project", async () => {
+  const input = {
+    url: "https://linear.app/workspace/issue/ENG-42/name",
+    projectId: "project-1" as ProjectId,
   };
-  const keys = (page: { entries: IssueListResult["entries"] }) =>
-    page.entries.map((entry) => entry.key);
-
-  it.each([
-    { from: cursor, to: "github.com acme/app", migrateFirst: false },
-    { from: cursor, to: "github.com acme/app", migrateFirst: true },
-    { from: "github.com acme/app", to: cursor, migrateFirst: false },
-    { from: "github.com acme/app", to: cursor, migrateFirst: true },
-  ])("resets viewer cursors across native cursor aliases: %j", ({ from, to, migrateFirst }) => {
-    const other = row("other-first", {
-      tracker: "gitlab" as IssueTrackerKind,
-      projectId: "other" as ProjectId,
-    });
-    const otherCursor = "gitlab github.com acme/app";
-    const initial = {
-      ...answer([row("first"), other], { [from]: "A2", [otherCursor]: "O2" }),
-      sources: [source(row("first")), source(other)],
-      viewers: { "github github.com": "A", "gitlab github.com": "other" },
-    };
-    const held = first(initial);
-    const continued = continueIssueListPage(
-      held,
-      held.nextCursors,
-      {
-        ...initial,
-        entries: [row("A-tail"), row("other-tail", other)],
-        nextCursors: { [from]: "A3", [otherCursor]: "O3" },
-      },
-      held.firstCursors,
-    );
-    const before = migrateFirst
-      ? continueIssueListPage(
-          continued,
-          { [from]: "A3" },
-          {
-            ...initial,
-            entries: [row("A-more")],
-            nextCursors: { [to]: "A4" },
-          },
-          continued.firstCursors,
-        )
-      : continued;
-    const sent = migrateFirst ? { [to]: "A4" } : { [from]: "A3" };
-    const switched = continueIssueListPage(
-      before,
-      sent,
-      {
-        ...initial,
-        viewers: { "github github.com": "B" },
-        entries: [row("B-first")],
-        nextCursors: { [to]: "B2" },
-      },
-      before.firstCursors,
-    );
-    expect(keys(switched).toSorted()).toEqual(["B-first", "other-first", "other-tail"]);
-    expect(switched.nextCursors).toEqual({ [to]: "B2", [otherCursor]: "O3" });
-    expect(switched.firstCursors).toEqual({ [to]: "B2", [otherCursor]: "O2" });
-    expect(switched.firstKeys).toEqual(
-      new Set([issueEntryKey(row("B-first")), issueEntryKey(other)]),
-    );
-  });
-
-  it.each([cursor, "github.com acme/app"])(
-    "drops old private rows and resets %s on a changed or missing viewer",
-    (key) => {
-      for (const viewer of ["B", null]) {
-        const held = loaded(key);
-        const fresh = answer(
-          [row("first", { title: "Shared issue under B" })],
-          { [key]: "B2" },
-          viewer,
-        );
-        const next = refreshIssueListPage(held, fresh);
-        expect(keys(next)).toEqual(["first"]);
-        expect(next.nextCursors).toEqual(fresh.nextCursors);
-        expect(next.firstCursors).toEqual(fresh.nextCursors);
-        expect(next.firstKeys).toEqual(new Set([issueEntryKey(row("first"))]));
-      }
-    },
-  );
-
-  it.each(["B", null])(
-    "resets legacy host-only viewer A to %s without losing unrelated hosts",
-    (viewer) => {
-      const remote = row("remote", { host: "github.corp" });
-      const initial = {
-        ...answer([row("first"), remote], { [cursor]: "A2" }),
-        viewers: { "github.com": "A", "github.corp": "remote" },
-        sources: [source(row("first")), source(remote)],
-      };
-      const held = first(initial);
-      const continued = continueIssueListPage(
-        held,
-        held.nextCursors,
-        {
-          ...initial,
-          entries: [row("A-tail")],
-          nextCursors: { [cursor]: "A3" },
-        },
-        held.firstCursors,
-      );
-      const fresh = {
-        ...initial,
-        entries: [row("B-first"), remote],
-        viewers:
-          viewer === null
-            ? { "github.corp": "remote" }
-            : { "github.com": viewer, "github.corp": "remote" },
-        nextCursors: { [cursor]: "B2" },
-      };
-      const next = refreshIssueListPage(continued, fresh);
-      expect(keys(next)).toEqual(["B-first", "remote"]);
-      expect(next.nextCursors).toEqual({ [cursor]: "B2" });
-      const switched = continueIssueListPage(
-        continued,
-        continued.nextCursors,
-        {
-          ...fresh,
-          entries: [row("B-first")],
-        },
-        continued.firstCursors,
-      );
-      expect(keys(switched)).toEqual(["remote", "B-first"]);
-      expect(switched.nextCursors).toEqual({ [cursor]: "B2" });
-    },
-  );
-
-  it.each([true, false])(
-    "does not borrow a host-only viewer across trackers, with source metadata %s",
-    (sources) => {
-      const other = row("other", {
-        tracker: "gitlab" as IssueTrackerKind,
-        projectId: "other" as ProjectId,
-      });
-      const initial = {
-        ...answer([row("first")], { [cursor]: "A2" }),
-        sources: sources ? [source(row("first")), source(other)] : undefined,
-        trackers: [row("first"), other].map((entry) => ({
-          tracker: entry.tracker,
-          host: entry.host,
-          projectCount: 1,
-          configured: true,
-          capabilities: {} as IssueCapabilities,
-          detail: null,
-        })),
-        viewers: { "github github.com": "A", "gitlab github.com": "other", "github.com": "legacy" },
-      };
-      const held = first(initial);
-      const continued = continueIssueListPage(
-        held,
-        held.nextCursors,
-        {
-          ...initial,
-          entries: [row("A-tail")],
-          nextCursors: { [cursor]: "A3" },
-        },
-        held.firstCursors,
-      );
-      const ambiguous = refreshIssueListPage(continued, {
-        ...initial,
-        viewers: { "github.com": "B" },
-      });
-      expect(keys(ambiguous)).toEqual(["A-tail", "first"]);
-      expect(ambiguous.nextCursors).toEqual({ [cursor]: "A3" });
-      const resolved = refreshIssueListPage(ambiguous, {
-        ...initial,
-        entries: [row("B-first")],
-        viewers: { "github github.com": "B" },
-        nextCursors: { [cursor]: "B2" },
-      });
-      expect(keys(resolved)).toEqual(["B-first"]);
-      expect(resolved.nextCursors).toEqual({ [cursor]: "B2" });
-    },
-  );
-
-  it("keeps pagination for the same viewer and for pages without viewer context", () => {
-    const held = loaded();
-    for (const fresh of [
-      answer([row("first")], { [cursor]: "A2" }),
-      { entries: [row("first")], nextCursors: { [cursor]: "A2" }, errors: [] },
-    ]) {
-      const next = refreshIssueListPage(held, fresh);
-      expect(keys(next)).toEqual(["A-tail", "first"]);
-      expect(next.nextCursors).toEqual({ [cursor]: "A3" });
-    }
-  });
-
-  it.each(["refresh", "continue"])(
-    "keeps failed and unrelated sources during %s, then drops a recovered source's old viewer tail",
-    (operation) => {
-      const failed = row("failed-first", {
-        scope: "acme/failed",
-        projectId: "failed" as ProjectId,
-      });
-      const other = row("other-first", {
-        tracker: "gitlab" as IssueTrackerKind,
-        projectId: "other" as ProjectId,
-      });
-      const failedCursor = "github github.com acme/failed";
-      const otherCursor = "gitlab github.com acme/app";
-      const initial = {
-        ...answer([row("first"), failed, other], {
-          [cursor]: "A2",
-          [failedCursor]: "F2",
-          [otherCursor]: "O2",
-        }),
-        sources: [source(row("first")), source(failed), source(other)],
-        viewers: { "github github.com": "A", "gitlab github.com": "other" },
-      };
-      const held = first(initial);
-      const continued = continueIssueListPage(
-        held,
-        held.nextCursors,
-        {
-          ...initial,
-          entries: [row("A-tail"), row("failed-tail", failed), row("other-tail", other)],
-          nextCursors: { [cursor]: "A3", [failedCursor]: "F3", [otherCursor]: "O3" },
-        },
-        held.firstCursors,
-      );
-      const fresh = {
-        ...initial,
-        viewers: { "github github.com": "B", "gitlab github.com": "other" },
-        entries: [row("B-first"), other],
-        nextCursors: { [cursor]: "B2", [otherCursor]: "O2" },
-        errors: [
-          {
-            projectId: failed.projectId,
-            projectTitle: failed.projectTitle,
-            tracker: failed.tracker,
-            host: failed.host,
-            message: "unavailable",
-          },
-        ],
-      };
-      const next =
-        operation === "refresh"
-          ? refreshIssueListPage(continued, fresh)
-          : continueIssueListPage(
-              continued,
-              { [cursor]: "A3", [failedCursor]: "F3" },
-              {
-                ...fresh,
-                entries: [row("B-first")],
-                viewers: { "github github.com": "B" },
-                nextCursors: { [cursor]: "B2" },
-              },
-              continued.firstCursors,
-            );
-      expect(keys(next).toSorted()).toEqual([
-        "B-first",
-        "failed-first",
-        "failed-tail",
-        "other-first",
-        "other-tail",
-      ]);
-      expect(next.nextCursors).toEqual({
-        [cursor]: "B2",
-        [failedCursor]: "F3",
-        [otherCursor]: "O3",
-      });
-      const recovered = refreshIssueListPage(
-        next,
-        {
-          ...answer([row("recovered", failed)], { [failedCursor]: "B2" }, "B"),
-          sources: [source(failed)],
-        },
-        { source: failed },
-      );
-      expect(keys(recovered).toSorted()).toEqual([
-        "B-first",
-        "other-first",
-        "other-tail",
-        "recovered",
-      ]);
-      expect(recovered.nextCursors).toEqual({
-        [cursor]: "B2",
-        [failedCursor]: "B2",
-        [otherCursor]: "O3",
-      });
-    },
-  );
-
-  it("limits a continued viewer change to the requested scopes and native host", () => {
-    const sibling = row("sibling", { scope: "acme/sibling" });
-    const remote = row("remote", { host: "github.corp" });
-    const siblingCursor = "github github.com acme/sibling";
-    const remoteCursor = "github github.corp acme/app";
-    const page = {
-      ...answer([row("first"), sibling, remote], {
-        [cursor]: "A2",
-        [siblingCursor]: "S2",
-        [remoteCursor]: "R2",
-      }),
-      sources: [source(row("first")), source(sibling), source(remote)],
-      viewers: { "github github.com": "A", "github github.corp": "remote" },
-    };
-    const held = first(page);
-    const next = continueIssueListPage(
-      held,
-      { [cursor]: "A2" },
-      {
-        ...answer([row("B-first")], { [cursor]: "B2" }, "B"),
-        sources: page.sources,
-      },
-      held.firstCursors,
-    );
-    expect(keys(next).toSorted()).toEqual(["B-first", "remote", "sibling"]);
-    expect(next.nextCursors).toEqual({
-      [cursor]: "B2",
-      [siblingCursor]: "S2",
-      [remoteCursor]: "R2",
-    });
-    expect(next.firstCursors).toEqual(next.nextCursors);
-  });
-
-  it("uses the continued viewer instead of the original answer on the next refresh", () => {
-    const held = loaded();
-    const switched = continueIssueListPage(
-      held,
-      held.nextCursors,
-      answer([row("B-first")], { [cursor]: "B2" }, "B"),
-      held.firstCursors,
-    );
-    expect(keys(switched)).toEqual(["B-first"]);
-    expect(switched.firstCursors).toEqual({ [cursor]: "B2" });
-    const continued = continueIssueListPage(
-      switched,
-      switched.nextCursors,
-      answer([row("B-tail")], { [cursor]: "B3" }, "B"),
-      switched.firstCursors,
-    );
-    const next = refreshIssueListPage(continued, answer([row("B-first")], { [cursor]: "B2" }, "B"));
-    expect(keys(next)).toEqual(["B-tail", "B-first"]);
-    expect(next.nextCursors).toEqual({ [cursor]: "B3" });
-    expect(keys(refreshIssueListPage(next, answer([row("A-again")], { [cursor]: "A2" })))).toEqual([
-      "A-again",
-    ]);
-  });
-
-  it.each([
-    { cursor: "gitlab shared.example acme/app", viewer: "B" },
-    { cursor: "shared.example acme/app", viewer: "B" },
-    { cursor: "gitlab shared.example acme/app", viewer: "A" },
-    { cursor: "shared.example acme/app", viewer: "A" },
-  ])("restarts a changed viewer from page one once: %j", async ({ cursor, viewer }) => {
-    const { atoms, registry, dispose } = issueReadHarness();
-    const native = row("A-first", {
-      tracker: "gitlab" as IssueTrackerKind,
-      host: "shared.example",
-      projectId: "old" as ProjectId,
-    });
-    const current = { ...native, projectId: "current" as ProjectId };
-    const failed = row("failed-first", {
-      ...native,
-      projectId: "failed" as ProjectId,
-      scope: "acme/failed",
-    });
-    const unrelated = row("other-first", { host: native.host });
-    const failedCursor = "gitlab shared.example acme/failed";
-    const otherCursor = "github shared.example acme/app";
-    const firstRows = Array.from({ length: 50 }, (_, index) => row(`A-${index}`, native));
-    const initial = {
-      ...answer([...firstRows, failed, unrelated], {
-        [cursor]: "2",
-        [failedCursor]: "failed-2",
-        [otherCursor]: "other-2",
-      }),
-      sources: [source(native), source(failed), source(unrelated)],
-      viewers: { "gitlab shared.example": "A", "github shared.example": "other" },
-    };
-    const pageTwo = {
-      ...initial,
-      entries: viewer === "B" ? [] : [row("A-tail", current)],
-      sources: [source(current), source(current), source(failed)],
-      viewers: { "gitlab shared.example": viewer },
-      nextCursors: {},
-      errors: [
-        {
-          projectId: failed.projectId,
-          projectTitle: failed.projectTitle,
-          tracker: failed.tracker,
-          host: failed.host,
-          message: "unavailable",
-        },
-      ],
-    };
-    const firstForB = {
-      ...initial,
-      entries: [row("B-only", current)],
-      sources: [source(current)],
-      viewers: { "gitlab shared.example": "B" },
-      nextCursors: {},
-    };
-    const replies = viewer === "B" ? [initial, pageTwo, firstForB] : [initial, pageTwo];
-    const request = vi.spyOn(RpcClient, "requestGuarded");
-    request.mockImplementation((() => Effect.succeed(replies.shift()!)) as unknown as Parameters<
-      typeof request.mockImplementation
-    >[0]);
-    const read = async (input: IssueListInput) => {
-      const result = await atoms.listPage.run(registry, {
-        environmentId: "environment" as EnvironmentId,
-        input,
-      });
-      if (result._tag !== "Success") throw new Error("list read failed");
-      return result.value;
-    };
-    try {
-      const input = { state: "all" as const, involvement: "assigned" as const, limit: 50 };
-      const held = first(await read(input));
-      const sent = { [cursor]: "2", [failedCursor]: "failed-2" };
-      const next = continueIssueListPage(
-        held,
-        sent,
-        await read({ ...input, cursors: sent }),
-        held.firstCursors,
-      );
-      let completed = next;
-      for (const restart of next.restartSources ?? []) {
-        const fresh = await read({ ...input, projectId: restart.projectId, host: restart.host });
-        completed = refreshIssueListPage(completed, fresh, {
-          source: { ...restart, host: restart.host! },
-        });
-      }
-      expect(request.mock.calls.map(([tag]) => tag)).toEqual(
-        Array(viewer === "B" ? 3 : 2).fill("issues.list"),
-      );
-      expect(request.mock.calls.map(([, payload]) => payload)).toEqual([
-        input,
-        { ...input, cursors: sent },
-        ...(viewer === "B" ? [{ ...input, projectId: current.projectId, host: current.host }] : []),
-      ]);
-      expect(replies).toEqual([]);
-      expect(keys(completed).toSorted()).toEqual(
-        (viewer === "B"
-          ? ["B-only", "failed-first", "other-first"]
-          : [...firstRows.map((row) => row.key), "A-tail", "failed-first", "other-first"]
-        ).toSorted(),
-      );
-      expect(completed.nextCursors).toEqual({
-        [failedCursor]: "failed-2",
-        [otherCursor]: "other-2",
-      });
-      expect(completed.errors).toEqual(pageTwo.errors);
-      if (viewer === "B")
-        expect(completed.firstKeys).toEqual(
-          new Set([
-            issueEntryKey(row("B-only", current)),
-            issueEntryKey(failed),
-            issueEntryKey(unrelated),
-          ]),
-        );
-      expect(next.restartSources).toEqual(viewer === "B" ? [source(current)] : []);
-      expect(completed.restartSources).toEqual([]);
-      const stale = continueIssueListPage(next, sent, pageTwo, held.firstCursors);
-      expect(stale).toBe(next);
-    } finally {
-      dispose();
-      request.mockRestore();
-    }
-  });
-
-  it.each([
-    { tracker: "github", includeFailedSource: true },
-    { tracker: "github", includeFailedSource: false },
-    { tracker: "forgejo", includeFailedSource: true },
-    { tracker: "forgejo", includeFailedSource: false },
-  ])(
-    "keeps failed or bound uncovered source restarts across refreshes: %j",
-    ({ tracker, includeFailedSource }) => {
-      const current = source(
-        row("B-first", { tracker: tracker as IssueTrackerKind, scope: "Mount/Acme/App" }),
-      );
-      const other = source(
-        row("other", {
-          tracker: tracker as IssueTrackerKind,
-          scope: tracker === "forgejo" ? "mount/Acme/App" : "Mount/Acme/Other",
-          projectId: "other" as ProjectId,
-        }),
-      );
-      for (const legacy of [false, true]) {
-        const otherKey = legacy ? `${other.host} ${other.scope}` : issueListCursorKey(other);
-        const pending = {
-          ...first({ ...answer([], {}, "B"), sources: [current, other] }),
-          restartSources: [current, other],
-        };
-        const fresh = {
-          ...answer([other], { [otherKey]: "O2" }, "B"),
-          sources: includeFailedSource ? [current, other] : [other],
-          errors: [
-            {
-              projectId: current.projectId,
-              projectTitle: current.projectTitle,
-              tracker: current.tracker,
-              host: current.host,
-              message: "down",
-            },
-          ],
-        };
-        const failed = refreshIssueListPage(pending, fresh);
-        expect(failed.restartSources).toEqual([current]);
-        expect(failed.restartSources?.[0]).toBe(current);
-        expect(failed.errors).toEqual(fresh.errors);
-        expect(refreshIssueListPage(failed, fresh).restartSources).toEqual([current]);
-        const uncovered = refreshIssueListPage(
-          pending,
-          { ...fresh, errors: [], sources: [other] },
-          { source: other },
-        );
-        expect(uncovered.restartSources).toEqual([current]);
-        const removed = refreshIssueListPage(pending, { ...fresh, sources: [other], errors: [] });
-        expect(removed.restartSources).toEqual([]);
-        const recovered = refreshIssueListPage(
-          failed,
-          { ...fresh, entries: [current], sources: [current], errors: [], nextCursors: {} },
-          { source: current },
-        );
-        expect(recovered.restartSources).toEqual([]);
-        expect(recovered.nextCursors).toEqual({ [otherKey]: "O2" });
-      }
-    },
-  );
-
-  it.each(["gitlab gitlab.example group/app", "gitlab.example group/app"])(
-    "keeps a completed 75-row scope terminal after an unchanged first refresh: %s",
-    async (cursor) => {
-      const { atoms, registry, dispose } = issueReadHarness();
-      const nativeRows = (from: number, to: number) =>
-        Array.from({ length: to - from + 1 }, (_, index) =>
-          entry({
-            key: String(from + index),
-            tracker: "gitlab" as IssueTrackerKind,
-            host: "gitlab.example",
-            scope: "group/app",
-            updatedAt: `2026-10-01T00:00:00.${String(999 - from - index).padStart(3, "0")}Z`,
-          }),
-        );
-      const initial: IssueListResult = {
-        entries: nativeRows(1, 50),
-        nextCursors: { [cursor]: "2" },
-        viewers: { "gitlab gitlab.example": "A" },
-        trackers: [],
-        errors: [],
-      };
-      const last = { ...initial, entries: nativeRows(51, 75), nextCursors: {} };
-      const replies = [initial, last, initial];
-      const request = vi.spyOn(RpcClient, "requestGuarded");
-      request.mockImplementation((() => Effect.succeed(replies.shift()!)) as unknown as Parameters<
-        typeof request.mockImplementation
-      >[0]);
-      const read = async (input: IssueListInput) => {
-        const result = await atoms.listPage.run(registry, {
-          environmentId: "environment" as EnvironmentId,
-          input,
-        });
-        if (result._tag !== "Success") throw new Error("list read failed");
-        return result.value;
-      };
-      try {
-        const input = { state: "all" as const, involvement: "assigned" as const, limit: 50 };
-        const answer = await read(input);
-        const first = {
-          answer,
-          entries: answer.entries,
-          nextCursors: answer.nextCursors,
-          firstCursors: answer.nextCursors,
-          firstKeys: new Set(answer.entries.map(issueEntryKey)),
-          errors: answer.errors,
-        };
-        const completed = continueIssueListPage(
-          first,
-          first.nextCursors,
-          await read({ ...input, cursors: first.nextCursors }),
-          first.firstCursors,
-        );
-        expect(completed.entries).toHaveLength(75);
-        expect(completed.nextCursors).toEqual({});
-        const refreshed = refreshIssueListPage(completed, await read(input));
-        expect(refreshed.entries).toEqual(nativeRows(1, 75));
-        expect(refreshed.nextCursors).toEqual({});
-        expect(refreshed.firstCursors).toEqual(first.firstCursors);
-        expect(refreshed.firstKeys).toEqual(first.firstKeys);
-        expect(refreshIssueListPage(refreshed, initial).nextCursors).toEqual({});
-        expect(request.mock.calls.map(([, payload]) => payload)).toEqual([
-          input,
-          { ...input, cursors: first.nextCursors },
-          input,
-        ]);
-        expect(replies).toEqual([]);
-      } finally {
-        dispose();
-        request.mockRestore();
-      }
-    },
-  );
-
-  it.each([false, true])(
-    "keeps completed scopes separate through a scoped case-alias refresh, legacy: %s",
-    (legacy) => {
-      const upper = entry({
-        key: "42",
-        tracker: "gitlab" as IssueTrackerKind,
-        host: "gitlab.example",
-        scope: "Group/App",
-      });
-      const lower = entry({
-        ...upper,
-        scope: "group/other",
-        projectId: "lower" as ProjectId,
-      });
-      const current = { ...upper, scope: "group/app" };
-      const cursorFor = (row: IssueListEntry) =>
-        legacy ? `${row.host} ${row.scope}` : issueListCursorKey(row);
-      const upperCursor = cursorFor(upper),
-        lowerCursor = cursorFor(lower),
-        freshCursor = cursorFor(current);
-      const initial = {
-        entries: [upper, lower],
-        sources: [source(upper), source(lower)],
-        nextCursors: { [upperCursor]: "2", [lowerCursor]: "other-2" },
-        viewers: { "gitlab gitlab.example": "A" },
-        errors: [],
-      };
-      const first = {
-        ...initial,
-        firstCursors: initial.nextCursors,
-        firstKeys: new Set(initial.entries.map(issueEntryKey)),
-      };
-      const tail = entry({ ...upper, key: "tail" });
-      const completed = continueIssueListPage(
-        first,
-        { [upperCursor]: "2" },
-        { ...initial, entries: [tail], nextCursors: {} },
-        first.firstCursors,
-      );
-      const fresh = {
-        ...initial,
-        entries: [current],
-        sources: [source(current)],
-        nextCursors: { [freshCursor]: "2" },
-      };
-      const refreshed = refreshIssueListPage(completed, fresh, { source: current });
-      expect(refreshed.entries).toEqual([lower, tail, current]);
-      expect(refreshed.nextCursors).toEqual({ [lowerCursor]: "other-2" });
-      expect(refreshed.firstCursors).toEqual({ [lowerCursor]: "other-2", [freshCursor]: "2" });
-      expect(refreshed.firstKeys).toEqual(new Set([issueEntryKey(lower), issueEntryKey(current)]));
-      const failed = refreshIssueListPage(
-        refreshed,
-        {
-          ...fresh,
-          entries: [],
-          nextCursors: {},
-          errors: [
-            {
-              projectId: upper.projectId,
-              projectTitle: upper.projectTitle,
-              tracker: upper.tracker,
-              host: upper.host,
-              message: "down",
-            },
-          ],
-        },
-        { source: current },
-      );
-      expect(failed.entries).toEqual(refreshed.entries);
-      expect(failed.nextCursors).toEqual(refreshed.nextCursors);
-      const switched = refreshIssueListPage(
-        refreshed,
-        { ...fresh, viewers: { "gitlab gitlab.example": "B" } },
-        { source: current },
-      );
-      expect(switched.entries).toEqual([lower, current]);
-      expect(switched.nextCursors).toEqual({ [lowerCursor]: "other-2", [freshCursor]: "2" });
-      const rebound = { ...current, projectId: "replacement" as ProjectId };
-      const replaced = refreshIssueListPage(
-        refreshed,
-        { ...fresh, entries: [rebound], sources: [source(rebound)] },
-        { source: rebound },
-      );
-      expect(replaced.entries).toEqual([lower, rebound]);
-      expect(replaced.nextCursors).toEqual({ [lowerCursor]: "other-2", [freshCursor]: "2" });
-      const terminal = refreshIssueListPage(
-        refreshed,
-        { ...fresh, nextCursors: {} },
-        { source: current },
-      );
-      expect(terminal.entries).toEqual([lower, current]);
-      expect(terminal.nextCursors).toEqual({ [lowerCursor]: "other-2" });
-    },
-  );
-
-  it.each(["assigned", "all"] as const)(
-    "resets %s rows using only the requested list reads",
-    async (involvement) => {
-      const { atoms, registry, dispose } = issueReadHarness();
-      const replies = [
-        answer([row("A-first")], { [cursor]: "A2" }),
-        answer([row("A-tail")], { [cursor]: "A3" }),
-        answer([row("B-first")], { [cursor]: "B2" }, "B"),
-      ];
-      const request = vi.spyOn(RpcClient, "requestGuarded");
-      request.mockImplementation((() => Effect.succeed(replies.shift()!)) as unknown as Parameters<
-        typeof request.mockImplementation
-      >[0]);
-      const target = {
-        environmentId: "environment" as EnvironmentId,
-        input: { state: "all" as const, involvement },
-      };
-      try {
-        const read = async (cursors = {}) => {
-          const result = await atoms.listPage.run(registry, {
-            ...target,
-            input: { ...target.input, cursors },
-          });
-          if (result._tag !== "Success") throw new Error("list read failed");
-          return result.value;
-        };
-        const held = first(await read());
-        const continued = continueIssueListPage(
-          held,
-          held.nextCursors,
-          await read(held.nextCursors),
-          held.firstCursors,
-        );
-        const next = refreshIssueListPage(continued, await read());
-        expect(request.mock.calls.map(([tag]) => tag)).toEqual([
-          "issues.list",
-          "issues.list",
-          "issues.list",
-        ]);
-        expect(replies).toEqual([]);
-        expect(keys(next)).toEqual(["B-first"]);
-        expect(next.nextCursors).toEqual({ [cursor]: "B2" });
-      } finally {
-        dispose();
-        request.mockRestore();
-      }
-    },
-  );
-});
-
-it("resolves clicked URLs through the registered RPC only with the read grant", async () => {
-  const url = "https://linear.app/workspace/issue/ENG-42/name";
-  const projectId = "project-1" as ProjectId;
   const reference = {
-    projectId,
+    projectId: input.projectId,
     tracker: "linear" as IssueTrackerKind,
     host: "linear.app",
     scope: "workspace/ENG",
     key: "ENG-42",
     writable: true,
   };
-  const rpc = WsIssuesRpcGroup.requests.get(WS_METHODS.issuesResolveUrl)!;
-  const decodeInput = Schema.decodeUnknownSync(rpc.payloadSchema);
-  const decodeResult = Schema.decodeSync(rpc.successSchema);
-  const request = vi.spyOn(RpcClient, "requestGuarded");
-  request.mockImplementation(((_tag: string, payload: unknown) => {
-    decodeInput(payload);
-    return Effect.succeed(decodeResult(reference));
-  }) as unknown as Parameters<typeof request.mockImplementation>[0]);
-  const run = vi.fn((_environmentId: EnvironmentId, effect: Effect.Effect<unknown>) => effect);
-  const runtime = Atom.runtime(
-    Layer.succeed(
-      EnvironmentRegistry.EnvironmentRegistry,
-      EnvironmentRegistry.EnvironmentRegistry.of({
-        run,
-      } as unknown as EnvironmentRegistry.EnvironmentRegistry["Service"]),
-    ),
-  );
-  const grant: AuthSessionState = {
+  const session: AuthSessionState = {
     authenticated: true,
     auth: {
       policy: "remote-reachable",
@@ -1915,267 +1282,36 @@ it("resolves clicked URLs through the registered RPC only with the read grant", 
     scopes: [AuthOrchestrationReadScope],
     permissions: [AuthOrchestrationReadScope],
   };
-  const session = Atom.make(AsyncResult.success(grant));
-  const sessions = Session.createEnvironmentSessionAtoms(runtime);
-  const sessionFactory = vi.spyOn(Session, "createEnvironmentSessionAtoms").mockReturnValue({
-    ...sessions,
-    sessionStateAtom: () => session,
-  });
+  const sessionAtom = Atom.make(AsyncResult.success(session));
+  const sessions = vi
+    .spyOn(Session, "createEnvironmentSessionAtoms")
+    .mockReturnValue({ sessionStateAtom: () => sessionAtom } as unknown as ReturnType<
+      typeof Session.createEnvironmentSessionAtoms
+    >);
+  const request = vi.spyOn(RpcClient, "requestGuarded");
+  request.mockImplementation((() => Effect.succeed(reference)) as unknown as Parameters<
+    typeof request.mockImplementation
+  >[0]);
+  const run = vi.fn((_environmentId: EnvironmentId, effect: Effect.Effect<unknown>) => effect);
+  const runtime = Atom.runtime(
+    Layer.succeed(
+      EnvironmentRegistry.EnvironmentRegistry,
+      EnvironmentRegistry.EnvironmentRegistry.of({
+        run,
+      } as unknown as EnvironmentRegistry.EnvironmentRegistry["Service"]),
+    ),
+  );
   const atoms = createIssueEnvironmentAtoms(runtime);
   const registry = AtomRegistry.make();
   const environmentId = "environment-1" as EnvironmentId;
   try {
-    for (const input of [{ url }, { url, projectId }]) {
-      const result = await atoms.resolveUrl.run(registry, { environmentId, input });
-      expect(result).toMatchObject({ _tag: "Success", value: reference });
-      expect(request).toHaveBeenLastCalledWith("issues.resolveUrl", input);
-    }
-    expect(run.mock.calls.map(([id]) => id)).toEqual([environmentId, environmentId]);
-    registry.set(session, AsyncResult.success({ ...grant, permissions: [] }));
-    const denied = await atoms.resolveUrl.run(registry, { environmentId, input: { url } });
-    expect(denied._tag).toBe("Failure");
-    expect(request).toHaveBeenCalledTimes(2);
+    const result = await atoms.resolveUrl.run(registry, { environmentId, input });
+    expect(result).toMatchObject({ _tag: "Success", value: reference });
+    expect(request).toHaveBeenCalledExactlyOnceWith("issues.resolveUrl", input);
+    expect(run.mock.calls[0]?.[0]).toBe(environmentId);
   } finally {
     registry.dispose();
     request.mockRestore();
-    sessionFactory.mockRestore();
+    sessions.mockRestore();
   }
 });
-
-describe("native Forgejo mount identities and viewers", () => {
-  const upper = entry({
-    key: "42",
-    tracker: "forgejo" as IssueTrackerKind,
-    host: "forgejo.test",
-    scope: "Root/Mount/Acme/Web",
-    projectId: "upper" as ProjectId,
-  });
-  const lower = entry({ ...upper, scope: "Root/mount/Acme/Web", projectId: "lower" as ProjectId });
-  const source = (row: IssueListEntry) => ({ ...row, capabilities: {} as IssueCapabilities });
-  const first = (legacy: boolean, sameMount = false) => {
-    const sibling = sameMount ? { ...lower, scope: "Root/Mount/Other/Api" } : lower;
-    const key = (row: IssueListEntry) =>
-      legacy ? `${row.host} ${row.scope}` : issueListCursorKey(row);
-    const page = {
-      entries: [upper, sibling],
-      sources: [source(upper), source(sibling)],
-      errors: [],
-      nextCursors: { [key(upper)]: "2", [key(sibling)]: "2" },
-      viewers: { [issueListCursorKey(upper)]: "alice", [issueListCursorKey(sibling)]: "bob" },
-    };
-    return {
-      ...page,
-      firstCursors: page.nextCursors,
-      firstKeys: new Set(page.entries.map(issueEntryKey)),
-    };
-  };
-
-  it.each([false, true])("keeps row owners and literal cursors separate, legacy: %s", (legacy) => {
-    const held = first(legacy);
-    const page = {
-      ...held,
-      entries: [entry({ ...upper, key: "43" }), entry({ ...lower, key: "43" })],
-      nextCursors: {},
-    };
-    const next = continueIssueListPage(held, held.nextCursors, page, held.firstCursors);
-    expect(next.entries.map((row) => [row.scope, row.projectId, row.key])).toEqual([
-      [upper.scope, "upper", "42"],
-      [lower.scope, "lower", "42"],
-      [upper.scope, "upper", "43"],
-      [lower.scope, "lower", "43"],
-    ]);
-    const alias = { ...upper, scope: "Root/Mount/acme/web" };
-    const refreshed = refreshIssueListPage(
-      next,
-      {
-        entries: [alias],
-        sources: [source(alias)],
-        errors: [],
-        nextCursors: { [issueListCursorKey(alias)]: "2" },
-        viewers: held.viewers,
-      },
-      { source: alias },
-    );
-    expect(refreshed.entries.map((row) => [row.projectId, row.key])).toEqual([
-      ["lower", "42"],
-      ["upper", "43"],
-      ["lower", "43"],
-      ["upper", "42"],
-    ]);
-    expect(refreshed.nextCursors).toEqual({});
-  });
-
-  it.each([false, true])("restarts only the changed scoped viewer, legacy: %s", (legacy) => {
-    const held = first(legacy);
-    const lowerCursor = Object.keys(held.nextCursors)[1]!;
-    const next = continueIssueListPage(
-      held,
-      { [lowerCursor]: "2" },
-      {
-        ...held,
-        entries: [],
-        nextCursors: {},
-        viewers: {
-          ...held.viewers,
-          [issueListCursorKey(lower)]: "carol",
-          "forgejo forgejo.test": "wrong",
-          "forgejo.test": "wrong",
-        },
-      },
-      held.firstCursors,
-    );
-    expect(next.entries).toEqual([upper]);
-    expect(next.restartSources?.map((row) => [row.projectId, row.scope])).toEqual([
-      ["lower", lower.scope],
-    ]);
-    expect(next.nextCursors).toEqual({ [Object.keys(held.nextCursors)[0]!]: "2" });
-  });
-
-  it.each(["qualified", "legacy", "missing"])(
-    "ignores an ambiguous %s host viewer between native mounts",
-    (kind) => {
-      const held = first(false);
-      const continued = continueIssueListPage(
-        held,
-        held.nextCursors,
-        {
-          ...held,
-          entries: [entry({ ...upper, key: "43" }), entry({ ...lower, key: "43" })],
-          nextCursors: { [issueListCursorKey(upper)]: "3", [issueListCursorKey(lower)]: "3" },
-        },
-        held.firstCursors,
-      );
-      const viewers =
-        kind === "qualified"
-          ? { "forgejo forgejo.test": "carol" }
-          : kind === "legacy"
-            ? { "forgejo.test": "carol" }
-            : {};
-      const next = refreshIssueListPage(continued, { ...held, viewers });
-      expect(next.entries).toHaveLength(4);
-      expect(next.nextCursors).toEqual(continued.nextCursors);
-    },
-  );
-
-  it.each(["forgejo forgejo.test", "forgejo.test"])(
-    "accepts an old %s viewer within one native mount",
-    (viewerKey) => {
-      const initial = first(false, true);
-      const held = { ...initial, viewers: { [viewerKey]: "alice" } };
-      const next = continueIssueListPage(
-        held,
-        held.nextCursors,
-        {
-          ...held,
-          entries: [],
-          nextCursors: {},
-          viewers: { [viewerKey]: "bob" },
-        },
-        held.firstCursors,
-      );
-      expect(next.entries).toEqual([]);
-      expect(next.restartSources).toHaveLength(2);
-    },
-  );
-});
-
-it.each([false, true])(
-  "migrates only the requested Forgejo mount's literal cursor, legacy first: %s",
-  (legacy) => {
-    const upper = entry({
-      key: "42",
-      tracker: "forgejo" as IssueTrackerKind,
-      host: "forgejo.test",
-      scope: "Mount/Acme/Web",
-      projectId: "upper" as ProjectId,
-    });
-    const lower = entry({ ...upper, scope: "mount/Acme/Web", projectId: "lower" as ProjectId });
-    const source = (row: IssueListEntry) => ({ ...row, capabilities: {} as IssueCapabilities });
-    const cursor = (row: IssueListEntry, old: boolean) =>
-      old ? `${row.host} ${row.scope}` : issueListCursorKey(row);
-    const upperKey = cursor(upper, legacy),
-      lowerKey = cursor(lower, legacy);
-    const initial = {
-      entries: [upper, lower],
-      sources: [source(upper), source(lower)],
-      errors: [],
-      nextCursors: { [upperKey]: "2", [lowerKey]: "2" },
-      viewers: { [issueListCursorKey(upper)]: "alice", [issueListCursorKey(lower)]: "bob" },
-    };
-    const held = {
-      ...initial,
-      firstCursors: initial.nextCursors,
-      firstKeys: new Set(initial.entries.map(issueEntryKey)),
-    };
-    const tailed = continueIssueListPage(
-      held,
-      held.nextCursors,
-      {
-        ...initial,
-        entries: [entry({ ...upper, key: "43" }), entry({ ...lower, key: "43" })],
-        nextCursors: { [upperKey]: "3", [lowerKey]: "3" },
-      },
-      held.firstCursors,
-    );
-    const alias = { ...upper, scope: "Mount/acme/web" };
-    const newKey = cursor(alias, !legacy);
-    const fresh = refreshIssueListPage(
-      tailed,
-      {
-        ...initial,
-        entries: [alias],
-        sources: [source(alias)],
-        nextCursors: { [newKey]: "2" },
-      },
-      { source: alias },
-    );
-    expect(fresh.entries.map((row) => [row.projectId, row.key])).toEqual([
-      ["lower", "42"],
-      ["upper", "43"],
-      ["lower", "43"],
-      ["upper", "42"],
-    ]);
-    expect(fresh.nextCursors).toEqual({ [newKey]: "3", [lowerKey]: "3" });
-    expect(fresh.firstCursors).toEqual({ [newKey]: "2", [lowerKey]: "2" });
-    const failed = continueIssueListPage(
-      fresh,
-      { [lowerKey]: "3" },
-      {
-        ...initial,
-        entries: [],
-        nextCursors: {},
-        viewers: { [issueListCursorKey(lower)]: "carol" },
-        errors: [
-          {
-            projectId: lower.projectId,
-            projectTitle: lower.projectTitle,
-            tracker: lower.tracker,
-            host: lower.host,
-            message: "unavailable",
-          },
-        ],
-      },
-      fresh.firstCursors,
-    );
-    expect(failed.entries).toEqual(fresh.entries);
-    expect(failed.nextCursors).toEqual(fresh.nextCursors);
-    const recovered = refreshIssueListPage(
-      failed,
-      {
-        ...initial,
-        entries: [lower],
-        sources: [source(lower)],
-        viewers: { [issueListCursorKey(lower)]: "carol" },
-        nextCursors: { [lowerKey]: "2" },
-      },
-      { source: lower },
-    );
-    expect(recovered.entries.map((row) => [row.projectId, row.key])).toEqual([
-      ["upper", "43"],
-      ["upper", "42"],
-      ["lower", "42"],
-    ]);
-    expect(recovered.nextCursors).toEqual({ [newKey]: "3", [lowerKey]: "2" });
-    expect(recovered.errors).toEqual([]);
-  },
-);

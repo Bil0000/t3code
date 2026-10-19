@@ -1,8 +1,8 @@
 import type { IssueReaction, IssueReactionContent } from "@t3tools/contracts";
 import { Pressable, View } from "react-native";
-import { AppText as Text } from "../../components/AppText";
-import { SymbolView } from "../../components/AppSymbol";
-import { ControlPillMenu } from "../../components/ControlPillMenu";
+import { AppText as Text } from "../../components/ui/AppText";
+import { SymbolView } from "../../components/ui/AppSymbol";
+import { Menu } from "../../components/ui/Menu";
 import { cn } from "../../lib/cn";
 import { ISSUE_REACTIONS, issueReactionOptions } from "./issueDetail";
 
@@ -47,7 +47,7 @@ export function IssueReactions(props: {
         );
       })}
       {onToggle && options.length > 0 ? (
-        <ControlPillMenu
+        <Menu
           title="Add reaction"
           actions={options.map((item) => ({
             id: item.content,
@@ -78,7 +78,7 @@ export function IssueReactions(props: {
           >
             <SymbolView name="plus" size={13} tintColorClassName="accent-icon-muted" />
           </Pressable>
-        </ControlPillMenu>
+        </Menu>
       ) : null}
     </View>
   );

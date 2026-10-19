@@ -1,6 +1,6 @@
 import type { IssueInvolvement, IssueListState, IssueTrackerSummary } from "@t3tools/contracts";
 import { ScrollView } from "react-native";
-import { ControlPill } from "../../components/ControlPill";
+import { Chip } from "../../components/ui/Chip";
 import type { IssueListFilters as Controls } from "../../persistence/mobile-preferences";
 import { ListFilterMenu } from "../workspace/ListFilterMenu";
 
@@ -25,7 +25,7 @@ export function IssueListFilters(props: {
   readonly value: Controls;
   readonly onChange: (value: Controls) => void;
   readonly involvements: ReadonlySet<IssueInvolvement> | null;
-  readonly trackers: readonly IssueTrackerSummary[];
+  readonly accounts: readonly (IssueTrackerSummary & { readonly environmentId: string })[];
   readonly projects: readonly { id: string; title: string; environmentId: string }[];
   readonly onCreate: (() => void) | null;
 }) {
@@ -45,7 +45,13 @@ export function IssueListFilters(props: {
     )
       return;
     const [field, next] = selection;
-    const { projectId: _projectId, projectEnvironmentId: _projectEnvironmentId, ...rest } = value;
+    const {
+      projectId: _projectId,
+      projectEnvironmentId: _projectEnvironmentId,
+      connectionId: _connectionId,
+      accountEnvironmentId: _accountEnvironmentId,
+      ...rest
+    } = value;
     switch (field) {
       case "environment":
         if (next === "") props.onChange({ ...rest, environmentId: null });
@@ -63,8 +69,37 @@ export function IssueListFilters(props: {
           props.onChange({ ...value, involvement: next as IssueInvolvement });
         break;
       case "tracker": {
-        const { host: _host, ...withoutHost } = value;
-        props.onChange(next ? { ...value, host: next } : withoutHost);
+        const {
+          host: _host,
+          tracker: _tracker,
+          connectionId: _connectionId,
+          accountEnvironmentId: _accountEnvironmentId,
+          ...withoutAccount
+        } = value;
+        const account = props.accounts.find(
+          (account) =>
+            JSON.stringify([
+              account.environmentId,
+              account.tracker,
+              account.host,
+              account.connectionId ?? null,
+            ]) === next,
+        );
+        props.onChange(
+          account
+            ? {
+                ...withoutAccount,
+                host: account.host,
+                tracker: account.tracker,
+                accountEnvironmentId: account.environmentId,
+                ...(account.connectionId === undefined
+                  ? {}
+                  : {
+                      connectionId: account.connectionId,
+                    }),
+              }
+            : withoutAccount,
+        );
         break;
       }
       case "project": {
@@ -74,7 +109,7 @@ export function IssueListFilters(props: {
         props.onChange(
           project
             ? { ...value, projectId: project.id, projectEnvironmentId: project.environmentId }
-            : rest,
+            : { ...value, projectId: undefined, projectEnvironmentId: undefined },
         );
         break;
       }
@@ -91,7 +126,24 @@ export function IssueListFilters(props: {
         props.involvements === null || props.involvements.has(involvement as IssueInvolvement),
     ),
   );
-  const hosts = [...new Set(props.trackers.map((tracker) => tracker.host))];
+  const accounts = [
+    ...new Map(
+      props.accounts
+        .filter(
+          (account) =>
+            value.environmentId === null || account.environmentId === value.environmentId,
+        )
+        .map((account) => [
+          JSON.stringify([
+            account.environmentId,
+            account.tracker,
+            account.host,
+            account.connectionId ?? null,
+          ]),
+          account,
+        ]),
+    ).entries(),
+  ];
   return (
     <ScrollView
       horizontal
@@ -99,11 +151,11 @@ export function IssueListFilters(props: {
       contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 2, paddingBottom: 10, gap: 8 }}
     >
       {props.onCreate ? (
-        <ControlPill
+        <Chip
           icon="plus"
           label="New issue"
           accessibilityLabel="New issue"
-          variant="primary"
+          selected
           onPress={props.onCreate}
         />
       ) : null}
@@ -113,6 +165,34 @@ export function IssueListFilters(props: {
         active={count > 0}
         accessibilityLabel={count ? `Filters, ${count} active` : "More filters"}
         actions={[
+          { id: "states", title: "State", subactions: choices("state", STATES, value.state) },
+          {
+            id: "involvement",
+            title: "Involvement",
+            subactions: choices("involvement", involvements, value.involvement),
+          },
+          {
+            id: "accounts",
+            title: "Tracker account",
+            subactions: choices(
+              "tracker",
+              Object.fromEntries([
+                ["", "All tracker accounts"],
+                ...accounts.map(([key, account]) => [
+                  key,
+                  `${account.tracker} · ${account.host}${account.connectionId === undefined ? "" : ` · ${account.connectionId}`}${props.environments.length > 1 ? ` · ${props.environments.find((environment) => environment.id === account.environmentId)?.label ?? account.environmentId}` : ""}`,
+                ]),
+              ]),
+              value.host
+                ? JSON.stringify([
+                    value.accountEnvironmentId ?? value.environmentId,
+                    value.tracker,
+                    value.host,
+                    value.connectionId ?? null,
+                  ])
+                : "",
+            ),
+          },
           {
             id: "projects",
             title:
@@ -151,33 +231,6 @@ export function IssueListFilters(props: {
               ...props.environments.map((environment) => [environment.id, environment.label]),
             ]),
             value.environmentId ?? "",
-          )}
-          onSelect={select}
-        />
-      ) : null}
-      <ListFilterMenu
-        label={STATES[value.state]}
-        active={value.state !== "open"}
-        accessibilityLabel="Filter by state"
-        actions={choices("state", STATES, value.state)}
-        onSelect={select}
-      />
-      <ListFilterMenu
-        label={INVOLVEMENT[value.involvement]}
-        active={value.involvement !== "all"}
-        accessibilityLabel="Filter by involvement"
-        actions={choices("involvement", involvements, value.involvement)}
-        onSelect={select}
-      />
-      {hosts.length > 1 || value.host ? (
-        <ListFilterMenu
-          label={value.host ?? "All trackers"}
-          active={Boolean(value.host)}
-          accessibilityLabel="Filter by tracker"
-          actions={choices(
-            "tracker",
-            Object.fromEntries([["", "All trackers"], ...hosts.map((host) => [host, host])]),
-            value.host ?? "",
           )}
           onSelect={select}
         />

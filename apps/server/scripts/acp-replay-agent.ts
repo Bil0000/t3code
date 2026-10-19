@@ -173,8 +173,6 @@ function logicalIncoming(message: JsonRpcMessage): LogicalFrame | undefined {
   };
 }
 
-// Recorded agent frames name workspace paths (tool inputs, fs requests) as
-// <workspace>; point them at this replay's workspace like expectations do.
 function materializeInbound(value: unknown): unknown {
   if (typeof value === "string") return expandExpectedString(value);
   if (Array.isArray(value)) return value.map(materializeInbound);
@@ -188,6 +186,7 @@ function emitInbound(recorded: LogicalFrame): void {
   const frame = materializeInbound(recorded) as LogicalFrame;
   switch (frame.kind) {
     case "notification":
+      advance();
       send({
         jsonrpc: "2.0",
         method: frame.method,
@@ -198,6 +197,7 @@ function emitInbound(recorded: LogicalFrame): void {
       const id = nextAgentRequestId;
       nextAgentRequestId += 1;
       pendingAgentRequestMethods.set(String(id), frame.method);
+      advance();
       send({
         jsonrpc: "2.0",
         id,
@@ -214,6 +214,7 @@ function emitInbound(recorded: LogicalFrame): void {
         return;
       }
       pendingClientRequestIds.delete(frame.method);
+      advance();
       send({
         jsonrpc: "2.0",
         id,
@@ -248,7 +249,6 @@ function flushInbound(): void {
     }
     emitInbound(frame);
     if (stopped) return;
-    advance();
   }
 }
 

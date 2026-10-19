@@ -283,7 +283,8 @@ watching inside GitHub's rate limit. Comments from your own account do not wake 
 when the pull request merges or closes, after 10 wakes in a row that bring only comments, after 8
 failed reads in a row, or when you press Stop on the thread. A rate limit only pauses watching.
 Settling or archiving a thread also ends all its watches. Unsettle the thread before starting a new
-watch. Subagents cannot watch pull requests; the thread that delegated to them does. To start or stop
+watch. Watching a pull request again does not repeat check or conflict news its last
+watch already reported; unlinking the pull request clears that. Subagents cannot watch pull requests; the thread that delegated to them does. To start or stop
 it yourself, use the row menu in the **Linked pull requests** panel. In the thread details card, a
 watched pull request shows an eye; click it to stop watching.
 
@@ -296,27 +297,41 @@ out from the matching organization and repository.
 
 ## Issues
 
-The Issues page lists the issues of every project whose remote is on a supported tracker
-(GitHub today), grouped per tracker account. Open it from the sidebar's utility row or with
-**Open issues** in the command palette. Filter by open or closed, by your involvement
-(assigned, opened by you, mentioning you), and by tracker; the search box asks the tracker
-itself where it can search. Press **Load more** at the end of a group to read further back.
+Open **Issues** from the sidebar or command palette to work with GitHub, GitLab,
+Azure DevOps, Forgejo/Gitea, GitCafe, Linear, and Jira Cloud or Data Center issues.
+Repository trackers use the source control login for that project. Use **Filters**
+to narrow or sort the list. More issues load as you scroll.
 
-Select an issue to open it beside the list: description, comments, state changes, linked pull
-requests, labels, assignees, and reactions. Linked pull requests open in the same panel. You can
-comment, edit the title and description, change labels and assignees, react, and close or
-reopen (with a close reason where the tracker records one) when the tracker and your account
-allow it. An issue read through a project that does not own its repository is shown read-only.
+For Linear or Jira, connect an account under **Settings → Integrations → Issue
+trackers** for the environment that owns your project, then bind the project to a
+Linear team or Jira project. Jira Cloud needs your site URL, account email, and API
+token. For Jira Data Center, set **Deployment** to `data-center` and use your
+instance URL and personal access token. Credentials stay on the environment that
+owns the project.
 
-**New issue** files an issue on a project's tracker. Where the repository offers issue templates,
-pick one to start from its title, body, labels, and assignees.
+Select an issue to read its conversation, history, and any linked pull requests. You
+can create issues, edit comments, change native workflow states, labels, and assignees,
+and use reactions or templates when the tracker and your account allow them. Some
+trackers also support parent issues and subissues. Issues outside the project scope
+are read-only.
 
-An issue can be kept with a thread the way a pull request can: open it beside the thread (issue
-links in the conversation open there) and use **Link to this thread** in its header; **Unlink**
-undoes it. Linked issues are listed in the thread's details beside its pull requests, with their
-last known state. Agents link the issues they work on with the `link_issue` tool.
+Comments and activity load as you scroll. Use the order control to change their
+order where the tracker supports it. Available issue templates are selected by
+default; choose **Blank issue** to start without one when the project allows it.
 
-Writing to a tracker over a remote connection requires the `source-control:write` scope.
+Some actions still need the native tracker. Jira reactions, general templates,
+and complete Development-panel pull request discovery are unavailable through the
+APIs used by the current Jira connection. Remote links remain visible. Jira Software
+Data Center supports moving standard issues between epics. Use Jira for subtask
+moves and changes to higher-level parents. GitCafe does not expose parent/subissue
+or activity history APIs.
+
+Link an issue to a thread to keep its current state with your work. You can also
+start a thread from an issue, show linked issues from the command palette, and
+remove a link without changing the issue. Linked issues refresh when you view them
+and when a turn ends. Agents can use the same issue tools.
+
+Changing issues requires the connection’s `source-control:write` scope.
 
 ## GitHub stacks
 

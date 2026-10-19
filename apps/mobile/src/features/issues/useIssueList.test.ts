@@ -32,6 +32,12 @@ vi.mock("../../state/issues", () => ({ issueEnvironment: {} }));
 
 import { issueEnvironment } from "../../state/issues";
 import { useIssueList, type IssueListTarget } from "./useIssueList";
+import {
+  issueCreateScopes,
+  issueListTrackers,
+  issueListNotices,
+  markIssueWritten,
+} from "./issueList";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -656,109 +662,324 @@ effectIt.effect(
     }),
 );
 
-effectIt.effect("keeps an exhausted native list terminal after a first-page refresh", () =>
-  Effect.gen(function* () {
-    const runtime = Atom.runtime(
-      Layer.effect(
-        EnvironmentRegistry.EnvironmentRegistry,
-        Effect.gen(function* () {
-          const supervisor = {
-            state: yield* SubscriptionRef.make({
-              ...AVAILABLE_CONNECTION_STATE,
-              phase: "connected" as const,
-            }),
-            session: yield* SubscriptionRef.make(Option.some({} as RpcSession)),
-          } as EnvironmentSupervisor.EnvironmentSupervisor["Service"];
-          return EnvironmentRegistry.EnvironmentRegistry.of({
-            run: (_id, effect) =>
-              Effect.provideService(
-                effect,
-                EnvironmentSupervisor.EnvironmentSupervisor,
-                supervisor,
-              ),
-            followStream: (_id, stream) =>
-              Stream.provideService(
-                stream,
-                EnvironmentSupervisor.EnvironmentSupervisor,
-                supervisor,
-              ),
-          } as EnvironmentRegistry.EnvironmentRegistry["Service"]);
-        }),
-      ),
-    );
-    Object.assign(issueEnvironment, createIssueEnvironmentAtoms(runtime));
-    const rows = Array.from({ length: 75 }, (_, index) =>
-      row(String(index + 1), {
-        updatedAt: `2026-10-01T00:00:00.${String(999 - index).padStart(3, "0")}Z`,
-      }),
-    );
-    const first: IssueListResult = {
-      entries: rows.slice(0, 50),
-      sources: [source(rows[0]!)],
-      nextCursors: { [cursor]: "2" },
-      viewers: { "gitlab gitlab.example": "A" },
-      trackers: [],
-      errors: [],
-    };
-    const last = { ...first, entries: rows.slice(50), nextCursors: {} };
-    const request = vi.spyOn(RpcClient, "request");
-    request.mockImplementation((() => Effect.succeed(first)) as unknown as Parameters<
-      typeof request.mockImplementation
-    >[0]);
-    const page = vi.spyOn(RpcClient, "requestGuarded");
-    page.mockImplementation((() => Effect.succeed(last)) as unknown as Parameters<
-      typeof page.mockImplementation
-    >[0]);
-    const targets: IssueListTarget[] = [
-      {
-        environmentId: EnvironmentId.make("terminal-list"),
-        input: { state: "all", involvement: "assigned", limit: 50 },
-      },
-    ];
-    const registry = AtomRegistry.make();
-    const query = issueEnvironment.list(targets[0]!);
-    const release = registry.mount(query);
-    const root = createRoot(document.createElement("div"));
-    let result: ReturnType<typeof useIssueList>;
-    function Probe() {
-      const current = useIssueList(targets);
-      useLayoutEffect(() => {
-        result = current;
-      });
-      return null;
-    }
-    try {
-      yield* AtomRegistry.getResult(registry, query);
-      yield* Effect.promise(() =>
-        act(async () =>
-          root.render(
-            createElement(RegistryContext.Provider, { value: registry }, createElement(Probe)),
-          ),
+effectIt.effect.each([undefined, "Account-A"])(
+  "keeps an exhausted native list terminal after a first-page refresh for account %s",
+  (connectionId) =>
+    Effect.gen(function* () {
+      const runtime = Atom.runtime(
+        Layer.effect(
+          EnvironmentRegistry.EnvironmentRegistry,
+          Effect.gen(function* () {
+            const supervisor = {
+              state: yield* SubscriptionRef.make({
+                ...AVAILABLE_CONNECTION_STATE,
+                phase: "connected" as const,
+              }),
+              session: yield* SubscriptionRef.make(Option.some({} as RpcSession)),
+            } as EnvironmentSupervisor.EnvironmentSupervisor["Service"];
+            return EnvironmentRegistry.EnvironmentRegistry.of({
+              run: (_id, effect) =>
+                Effect.provideService(
+                  effect,
+                  EnvironmentSupervisor.EnvironmentSupervisor,
+                  supervisor,
+                ),
+              followStream: (_id, stream) =>
+                Stream.provideService(
+                  stream,
+                  EnvironmentSupervisor.EnvironmentSupervisor,
+                  supervisor,
+                ),
+            } as EnvironmentRegistry.EnvironmentRegistry["Service"]);
+          }),
         ),
       );
-      expect(result!.hasMore).toBe(true);
-      yield* Effect.promise(() => act(async () => result!.loadMore()));
-      expect(result!.lists[0]!.held.entries).toEqual(rows);
-      expect(result!.hasMore).toBe(false);
-      yield* Effect.promise(() => act(async () => result!.onRefresh()));
-      expect(result!.lists[0]!.held.entries).toEqual(rows);
-      expect(result!.lists[0]!.held.nextCursors).toEqual({});
-      expect(result!.hasMore).toBe(false);
-      yield* Effect.promise(() => act(async () => result!.loadMore()));
-      expect(request.mock.calls.map(([, input]) => input)).toEqual([
-        targets[0]!.input,
-        targets[0]!.input,
-      ]);
-      expect(page).toHaveBeenCalledExactlyOnceWith("issues.list", {
-        ...targets[0]!.input,
-        cursors: first.nextCursors,
-      });
-    } finally {
-      yield* Effect.promise(() => act(async () => root.unmount()));
-      release();
-      registry.dispose();
-      request.mockRestore();
-      page.mockRestore();
-    }
-  }),
+      Object.assign(issueEnvironment, createIssueEnvironmentAtoms(runtime));
+      const rows = Array.from({ length: 75 }, (_, index) =>
+        row(String(index + 1), {
+          updatedAt: `2026-10-01T00:00:00.${String(999 - index).padStart(3, "0")}Z`,
+          ...(connectionId === undefined ? {} : { connectionId }),
+        }),
+      );
+      const first: IssueListResult = {
+        entries: rows.slice(0, 50),
+        sources: [source(rows[0]!)],
+        nextCursors: {
+          [connectionId === undefined ? cursor : `@${encodeURIComponent(connectionId)} ${cursor}`]:
+            "2",
+        },
+        viewers: { "gitlab gitlab.example": "A" },
+        trackers: [],
+        errors: [],
+      };
+      const last = { ...first, entries: rows.slice(50), nextCursors: {} };
+      const request = vi.spyOn(RpcClient, "request");
+      request.mockImplementation((() => Effect.succeed(first)) as unknown as Parameters<
+        typeof request.mockImplementation
+      >[0]);
+      const page = vi.spyOn(RpcClient, "requestGuarded");
+      page.mockImplementation((() => Effect.succeed(last)) as unknown as Parameters<
+        typeof page.mockImplementation
+      >[0]);
+      const targets: IssueListTarget[] = [
+        {
+          environmentId: EnvironmentId.make("terminal-list"),
+          input: {
+            state: "all",
+            involvement: "assigned",
+            limit: 50,
+            ...(connectionId === undefined ? {} : { connectionId }),
+          },
+        },
+      ];
+      const registry = AtomRegistry.make();
+      const query = issueEnvironment.list(targets[0]!);
+      const release = registry.mount(query);
+      const root = createRoot(document.createElement("div"));
+      let result: ReturnType<typeof useIssueList>;
+      function Probe() {
+        const current = useIssueList(targets);
+        useLayoutEffect(() => {
+          result = current;
+        });
+        return null;
+      }
+      try {
+        yield* AtomRegistry.getResult(registry, query);
+        yield* Effect.promise(() =>
+          act(async () =>
+            root.render(
+              createElement(RegistryContext.Provider, { value: registry }, createElement(Probe)),
+            ),
+          ),
+        );
+        expect(result!.hasMore).toBe(true);
+        expect(result!.continued).toBe(false);
+        yield* Effect.promise(() => act(async () => result!.loadMore()));
+        expect(result!.continued).toBe(true);
+        expect(result!.lists[0]!.held.entries).toEqual(rows);
+        expect(result!.hasMore).toBe(false);
+        yield* Effect.promise(() => act(async () => result!.onRefresh()));
+        expect(result!.lists[0]!.held.entries).toEqual(rows);
+        expect(result!.lists[0]!.held.nextCursors).toEqual({});
+        expect(result!.hasMore).toBe(false);
+        yield* Effect.promise(() => act(async () => result!.loadMore()));
+        expect(request.mock.calls.map(([, input]) => input)).toEqual([
+          targets[0]!.input,
+          targets[0]!.input,
+        ]);
+        expect(page).toHaveBeenCalledExactlyOnceWith("issues.list", {
+          ...targets[0]!.input,
+          cursors: first.nextCursors,
+        });
+      } finally {
+        yield* Effect.promise(() => act(async () => root.unmount()));
+        release();
+        registry.dispose();
+        request.mockRestore();
+        page.mockRestore();
+      }
+    }),
+);
+
+effectIt.effect.each([false, true])(
+  "keeps explicit default account paging and writes separate from All accounts: %s",
+  (defaultAccount) =>
+    Effect.gen(function* () {
+      const runtime = Atom.runtime(
+        Layer.effect(
+          EnvironmentRegistry.EnvironmentRegistry,
+          Effect.gen(function* () {
+            const supervisor = {
+              state: yield* SubscriptionRef.make({
+                ...AVAILABLE_CONNECTION_STATE,
+                phase: "connected" as const,
+              }),
+              session: yield* SubscriptionRef.make(Option.some({} as RpcSession)),
+            } as EnvironmentSupervisor.EnvironmentSupervisor["Service"];
+            return EnvironmentRegistry.EnvironmentRegistry.of({
+              run: (_id, effect) =>
+                Effect.provideService(
+                  effect,
+                  EnvironmentSupervisor.EnvironmentSupervisor,
+                  supervisor,
+                ),
+              followStream: (_id, stream) =>
+                Stream.provideService(
+                  stream,
+                  EnvironmentSupervisor.EnvironmentSupervisor,
+                  supervisor,
+                ),
+            } as EnvironmentRegistry.EnvironmentRegistry["Service"]);
+          }),
+        ),
+      );
+      Object.assign(issueEnvironment, createIssueEnvironmentAtoms(runtime));
+
+      const environmentId = EnvironmentId.make(defaultAccount ? "default-only" : "all-accounts");
+      const nativeTracker = IssueTrackerKind.make("linear");
+      const capabilities: IssueCapabilities = {
+        create: true,
+        edit: true,
+        comment: true,
+        labels: true,
+        assignees: true,
+        reactions: false,
+        templates: false,
+        linkedPullRequests: false,
+        events: true,
+        search: true,
+        states: [],
+        closeReasons: [],
+      };
+      const native = (key: string, connectionId?: string) =>
+        row(key, {
+          tracker: nativeTracker,
+          host: "api.linear.app",
+          scope: "ENG",
+          ...(connectionId === undefined ? {} : { connectionId }),
+        });
+      const a = native("default-first");
+      const b = native("named-first", "Account-B");
+      const defaultCursor = "linear api.linear.app ENG";
+      const namedCursor = "@Account-B linear api.linear.app ENG";
+      const first: IssueListResult = {
+        entries: [a, b],
+        sources: [a, b].map((entry) => ({ ...entry, capabilities })),
+        nextCursors: { [defaultCursor]: "D2", [namedCursor]: "B2" },
+        viewers: {
+          "linear api.linear.app": "default-viewer",
+          "@Account-B linear api.linear.app": "named-viewer",
+        },
+        errors: [
+          {
+            projectId: b.projectId,
+            projectTitle: b.projectTitle,
+            tracker: nativeTracker,
+            host: b.host,
+            connectionId: b.connectionId,
+            message: "Named account warning",
+          },
+        ],
+        trackers: [a, b].map((entry) => ({
+          tracker: entry.tracker,
+          host: entry.host,
+          ...(entry.connectionId === undefined ? {} : { connectionId: entry.connectionId }),
+          configured: true,
+          projectCount: 1,
+          capabilities,
+          detail: null,
+        })),
+      };
+      const request = vi.spyOn(RpcClient, "request");
+      request.mockImplementation((() => Effect.succeed(first)) as unknown as Parameters<
+        typeof request.mockImplementation
+      >[0]);
+      const page = vi.spyOn(RpcClient, "requestGuarded");
+      page.mockImplementation(((_tag: string, input: IssueListInput) =>
+        Effect.succeed({
+          ...first,
+          entries: input.cursors
+            ? [native("default-tail"), native("named-tail", "Account-B")]
+            : [native("default-refreshed"), native("named-refreshed", "Account-B")],
+          errors: [],
+          nextCursors: {},
+        })) as unknown as Parameters<typeof page.mockImplementation>[0]);
+      const targets: IssueListTarget[] = [
+        {
+          environmentId,
+          input: {
+            state: "all",
+            involvement: "all",
+            host: a.host,
+            tracker: nativeTracker,
+            limit: 50,
+          },
+          ...(defaultAccount ? { defaultAccount: true } : {}),
+        },
+      ];
+      const registry = AtomRegistry.make();
+      const query = issueEnvironment.list(targets[0]!);
+      const release = registry.mount(query);
+      const root = createRoot(document.createElement("div"));
+      let result: ReturnType<typeof useIssueList>;
+      function Probe() {
+        const current = useIssueList(targets);
+        useLayoutEffect(() => {
+          result = current;
+        });
+        return null;
+      }
+      try {
+        yield* AtomRegistry.getResult(registry, query);
+        yield* Effect.promise(() =>
+          act(async () =>
+            root.render(
+              createElement(RegistryContext.Provider, { value: registry }, createElement(Probe)),
+            ),
+          ),
+        );
+        expect(result!.lists[0]!.held.entries.map((entry) => entry.key)).toEqual(
+          defaultAccount ? ["default-first"] : ["default-first", "named-first"],
+        );
+        expect(issueListTrackers(result!.lists).map((tracker) => tracker.connectionId)).toEqual(
+          defaultAccount ? [undefined] : ["Account-B", undefined],
+        );
+        expect(issueListNotices(result!.lists).map((error) => error.message)).toEqual(
+          defaultAccount ? [] : ["Named account warning"],
+        );
+        expect(
+          issueCreateScopes(result!.lists, []).map((scope) => scope.scope.connectionId),
+        ).toEqual(defaultAccount ? [undefined] : [undefined, "Account-B"]);
+        expect(Object.keys(result!.lists[0]!.held.answer.viewers)).toEqual(
+          defaultAccount ? ["linear api.linear.app"] : Object.keys(first.viewers),
+        );
+        yield* Effect.promise(() => act(async () => result!.loadMore()));
+        expect(page).toHaveBeenCalledExactlyOnceWith("issues.list", {
+          ...targets[0]!.input,
+          cursors: defaultAccount ? { [defaultCursor]: "D2" } : first.nextCursors,
+        });
+        expect(result!.lists[0]!.held.entries.map((entry) => entry.key)).toEqual(
+          defaultAccount
+            ? ["default-first", "default-tail"]
+            : ["default-first", "named-first", "default-tail", "named-tail"],
+        );
+        const beforeNamedWrite = page.mock.calls.length;
+        yield* Effect.promise(() =>
+          act(async () => {
+            markIssueWritten(registry, environmentId, b);
+          }),
+        );
+        expect(page.mock.calls.length).toBe(beforeNamedWrite + (defaultAccount ? 0 : 1));
+        const beforeDefaultWrite = page.mock.calls.length;
+        yield* Effect.promise(() =>
+          act(async () => {
+            markIssueWritten(registry, environmentId, a);
+          }),
+        );
+        expect(page.mock.calls.length).toBe(beforeDefaultWrite + 1);
+        const defaultWrite = page.mock.calls.at(-1)!;
+        expect(defaultWrite).toEqual([
+          "issues.list",
+          { ...targets[0]!.input, projectId: a.projectId },
+        ]);
+        expect(
+          result!.lists[0]!.held.entries.some((entry) => entry.connectionId !== undefined),
+        ).toBe(!defaultAccount);
+        yield* Effect.promise(() => act(async () => result!.onRefresh()));
+        expect(result!.loadMoreError).toBe(defaultAccount ? null : "Named account warning");
+        expect(result!.lists[0]!.held.entries.map((entry) => entry.key)).toEqual(
+          defaultAccount ? ["default-first"] : ["named-refreshed", "default-first"],
+        );
+        expect(
+          issueCreateScopes(result!.lists, []).map((scope) => scope.scope.connectionId),
+        ).toEqual(defaultAccount ? [undefined] : [undefined, "Account-B"]);
+      } finally {
+        yield* Effect.promise(() => act(async () => root.unmount()));
+        release();
+        registry.dispose();
+        request.mockRestore();
+        page.mockRestore();
+      }
+    }),
 );

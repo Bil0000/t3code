@@ -30,6 +30,7 @@ import {
   issueListRows,
   issueListTrackers,
   scopedIssueKey,
+  issueListRowsAreEqual,
 } from "./issueList";
 
 const environmentId = EnvironmentId.make("env-one");
@@ -848,7 +849,12 @@ describe("held issue pages", () => {
       held.firstCursors,
     );
     const removed = new Set([issueEntryKey(entry("2")), issueEntryKey(entry("3"))]);
-    const scope = { projectId: entry("1").projectId, host: "github.com", scope: "org/repo" };
+    const scope = {
+      projectId: entry("1").projectId,
+      tracker,
+      host: "github.com",
+      scope: "org/repo",
+    };
     const fresh = answer({ entries: [entry("1")], nextCursors: { [cursorKey]: "first" } });
     expect(
       refreshIssueListPage(loaded, fresh, { source: scope, removed }).entries.map((row) => row.key),
@@ -1028,4 +1034,143 @@ it("keeps native Forgejo mounts separate for creation, write refresh and project
   } finally {
     registry.dispose();
   }
+});
+
+it("keeps selected native accounts separate in rows, create scopes, source aliases and refresh errors", () => {
+  const a = entry("42", {
+    tracker: IssueTrackerKind.make("linear"),
+    host: "api.linear.app",
+    scope: "ENG",
+    connectionId: "Account-A",
+  });
+  const b = entry("42", {
+    ...a,
+    projectId: ProjectId.make("second-project"),
+    connectionId: "account-a",
+  });
+  const first = answer({
+    entries: [a, b],
+    sources: [a, b].map((row) => ({
+      ...row,
+      capabilities: { ...capabilities, createFields: true },
+    })),
+    trackers: [a, b].map((row) => ({
+      tracker: row.tracker,
+      host: row.host,
+      connectionId: row.connectionId,
+      capabilities,
+      configured: true,
+      detail: null,
+      projectCount: 1,
+    })),
+  });
+  const held = heldIssueList(first);
+  expect(scopedIssueKey({ ...a, environmentId })).not.toBe(scopedIssueKey({ ...b, environmentId }));
+  expect(issueListTrackers([{ environmentId, held }])).toHaveLength(2);
+  expect(
+    issueCreateScopes([{ environmentId, held }], []).map((scope) => [
+      scope.connectionId,
+      scope.scope.connectionId,
+      scope.createFields,
+    ]),
+  ).toEqual([
+    ["Account-A", "Account-A", true],
+    ["account-a", "account-a", true],
+  ]);
+  const target = {
+    environmentId,
+    input: {
+      state: "open" as const,
+      connectionId: "Account-A",
+      projectId: a.projectId,
+      host: a.host,
+    },
+  };
+  expect(issueListTargetIncludesSource(target, environmentId, a, held)).toBe(true);
+  expect(
+    issueListTargetIncludesSource(
+      { ...target, input: { ...target.input, tracker: IssueTrackerKind.make("jira") } },
+      environmentId,
+      a,
+      held,
+    ),
+  ).toBe(false);
+  expect(issueListTargetIncludesSource(target, environmentId, b, held)).toBe(false);
+  expect(issueListTargetIncludesSource(target, EnvironmentId.make("other"), a, held)).toBe(false);
+  expect(
+    issueListCanonicalSource(held, { ...b, projectId: ProjectId.make("alias") }).projectId,
+  ).toBe(b.projectId);
+  const writes = new Map([
+    [
+      "a",
+      {
+        revision: 1,
+        environmentId,
+        source: a,
+        removedKeys: new Map<string, number>(),
+        updatedAt: Date.now(),
+      },
+    ],
+  ]);
+  const result = refreshWrittenIssueList(
+    held,
+    answer({
+      errors: [
+        {
+          projectId: a.projectId,
+          projectTitle: "Project",
+          tracker: a.tracker,
+          host: a.host,
+          connectionId: b.connectionId,
+          message: "Other account failed",
+        },
+      ],
+    }),
+    writes,
+  );
+  expect(result.handledWrites.get("a")).toBe(1);
+  const registry = AtomRegistry.make();
+  try {
+    markIssueWritten(registry, environmentId, a);
+    markIssueWritten(registry, environmentId, b);
+    expect(registry.get(issueWrites)?.sources.size).toBe(2);
+  } finally {
+    registry.dispose();
+  }
+});
+
+it("drops stale account filters and compares native list rows without object identity churn", () => {
+  const saved = {
+    environmentId: null,
+    state: "open" as const,
+    involvement: "all" as const,
+    connectionId: "Account-A",
+    accountEnvironmentId: "env-one",
+  };
+  expect(issueListControlsFor(saved, ["env-one"], [])).toEqual(saved);
+  const { connectionId: _connectionId, ...defaultAccount } = saved;
+  expect(issueListControlsFor(defaultAccount, ["env-one"], [])).toEqual(defaultAccount);
+  expect(issueListControlsFor(saved, ["env-two"], []).connectionId).toBeUndefined();
+  const selected = { ...saved, projectId: "project", projectEnvironmentId: "env-one" };
+  expect(
+    issueListControlsFor(
+      selected,
+      ["env-one"],
+      [{ environmentId, id: ProjectId.make("project"), isScratch: true }],
+    ).projectId,
+  ).toBeUndefined();
+  expect(
+    issueListControlsFor(
+      { ...selected, projectEnvironmentId: "env-two" },
+      ["env-one", "env-two"],
+      [{ environmentId: EnvironmentId.make("env-two"), id: ProjectId.make("project") }],
+    ).projectId,
+  ).toBeUndefined();
+  const row = { ...entry("1", { connectionId: "Account-A" }), environmentId };
+  expect(issueListRowsAreEqual(row, { ...row, labels: [...row.labels] })).toBe(true);
+  expect(issueListRowsAreEqual(row, { ...row, connectionId: "account-a" })).toBe(false);
+  expect(issueListRowsAreEqual(row, { ...row, environmentId: EnvironmentId.make("other") })).toBe(
+    false,
+  );
+  expect(issueListRowsAreEqual(row, { ...row, title: "Changed" })).toBe(false);
 });

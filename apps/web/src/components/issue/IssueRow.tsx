@@ -5,15 +5,14 @@ import { memo } from "react";
 import { cn } from "~/lib/utils";
 
 import {
+  PULL_REQUEST_PAGE_ROW_CLASS,
   PULL_REQUEST_ROW_CLASS,
   PULL_REQUEST_ROW_NUMBER_CLASS,
   PullRequestRowAuthor,
+  PullRequestRowLabels,
   PullRequestRowLines,
 } from "../pullRequest/PullRequestListRow";
-import {
-  PullRequestLabelChip,
-  PullRequestActorAvatar,
-} from "../pullRequest/pullRequestPresentation";
+import { PullRequestActorAvatar } from "../pullRequest/pullRequestPresentation";
 import { IssueStateGlyph, issueTrackerPresentation } from "./issuePresentation";
 
 export interface EnvironmentIssueEntry extends IssueListEntry {
@@ -22,7 +21,7 @@ export interface EnvironmentIssueEntry extends IssueListEntry {
 
 export type IssueRowTarget = Pick<
   EnvironmentIssueEntry,
-  "environmentId" | "projectId" | "tracker" | "host" | "scope" | "key" | "url"
+  "environmentId" | "projectId" | "tracker" | "host" | "connectionId" | "scope" | "key" | "url"
 >;
 
 /** The page row in the pull-request list's shape: state glyph, then key and title over meta. */
@@ -56,7 +55,7 @@ function IssueRowImpl({
         type="button"
         aria-current={selected ? "true" : undefined}
         onClick={() => onSelect(entry)}
-        className={cn(PULL_REQUEST_ROW_CLASS, "@container/issue-row-meta px-3 py-2.5")}
+        className={cn(PULL_REQUEST_ROW_CLASS, PULL_REQUEST_PAGE_ROW_CLASS)}
       >
         <IssueStateGlyph state={entry.state} />
         <PullRequestRowLines
@@ -68,14 +67,14 @@ function IssueRowImpl({
                 <span className="flex items-center -space-x-1">
                   {entry.assignees.slice(0, 3).map((assignee) => (
                     <PullRequestActorAvatar
-                      key={assignee.login}
+                      key={assignee.id ?? assignee.login}
                       actor={assignee}
                       className="ring-1 ring-background"
                     />
                   ))}
                 </span>
               ) : null}
-              {(entry.commentCount ?? 0) > 0 ? (
+              {entry.commentCount !== null && entry.commentCount > 0 ? (
                 <span className="inline-flex items-center gap-0.5 tabular-nums">
                   <MessageSquareIcon aria-hidden className="size-3" />
                   {entry.commentCount}
@@ -83,9 +82,11 @@ function IssueRowImpl({
               ) : null}
             </>
           }
+          metaClassName="@container/pr-row-meta"
           meta={
             <>
               <PullRequestRowAuthor actor={entry.author} />
+              <span className="truncate">{entry.projectTitle}</span>
               {showTracker ? (
                 <span className="inline-flex shrink-0 items-center gap-1">
                   <tracker.Icon aria-hidden className="size-3" />
@@ -94,17 +95,7 @@ function IssueRowImpl({
               ) : null}
               {showScope ? <span className="truncate">{entry.scope}</span> : null}
               {environmentLabel ? <span className="truncate">{environmentLabel}</span> : null}
-              {entry.labels.length > 0 ? (
-                <span className="hidden min-w-0 items-center gap-1 @xl/issue-row-meta:flex">
-                  {entry.labels.slice(0, 3).map((label, index) => (
-                    <PullRequestLabelChip key={label.name} label={label}>
-                      {index === 2 && entry.labels.length > 3 ? (
-                        <span className="shrink-0">+{entry.labels.length - 3}</span>
-                      ) : null}
-                    </PullRequestLabelChip>
-                  ))}
-                </span>
-              ) : null}
+              <PullRequestRowLabels labels={entry.labels} />
             </>
           }
           updatedAt={entry.updatedAt}

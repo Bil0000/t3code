@@ -22,15 +22,16 @@ function distinguishTitles<Project extends FilterProject>(
   );
 }
 
-/** One choice per repository per server, retaining the selected checkout for saved scopes. */
 export function pullRequestFilterProjects<Project extends FilterProject>(
   projects: ReadonlyArray<Project>,
   environmentLabels: ReadonlyMap<EnvironmentId, string>,
   selectedProject?: Pick<AssignableProject, "id" | "environmentId">,
+  preserveCanonicalKeyCase = false,
 ) {
   const byRepository = new Map<string, Project>();
   for (const project of projects) {
-    const repository = project.repositoryIdentity?.canonicalKey?.toLowerCase();
+    const canonicalKey = project.repositoryIdentity?.canonicalKey;
+    const repository = preserveCanonicalKeyCase ? canonicalKey : canonicalKey?.toLowerCase();
     const key = JSON.stringify([
       project.environmentId,
       repository ? ["repository", repository] : ["project", project.id],
@@ -45,7 +46,6 @@ export function pullRequestFilterProjects<Project extends FilterProject>(
     (project) => environmentLabels.get(project.environmentId) ?? project.environmentId,
   );
   const byPath = distinguishTitles(byServer, (project) => project.workspaceRoot);
-  // Separate environments can share both their display name and their checkout path.
   const byEnvironment = distinguishTitles(byPath, (project) => project.environmentId);
   return distinguishTitles(byEnvironment, (project) => project.id).toSorted((left, right) =>
     left.title.localeCompare(right.title),

@@ -10,6 +10,7 @@ export type IssueParams = {
   readonly scope: string;
   readonly key: string;
   readonly displayKey?: string;
+  readonly connectionId?: string;
   readonly originalURL?: string;
 };
 
@@ -21,6 +22,7 @@ export function issueParamsKey(params: IssueParams) {
     host: params.host,
     scope: params.scope,
     key: params.key,
+    ...(params.connectionId !== undefined ? { connectionId: params.connectionId } : {}),
   });
 }
 
@@ -40,7 +42,8 @@ export function selectedIssueKey(state: Pick<NavigationState, "routes" | "index"
         typeof params.tracker === "string" &&
         typeof params.host === "string" &&
         typeof params.scope === "string" &&
-        typeof params.key === "string"
+        typeof params.key === "string" &&
+        (params.connectionId === undefined || typeof params.connectionId === "string")
         ? issueParamsKey({
             environmentId: params.environmentId,
             projectId: params.projectId,
@@ -48,6 +51,9 @@ export function selectedIssueKey(state: Pick<NavigationState, "routes" | "index"
             host: params.host,
             scope: params.scope,
             key: params.key,
+            ...(typeof params.connectionId === "string"
+              ? { connectionId: params.connectionId }
+              : {}),
           })
         : null;
     } catch {

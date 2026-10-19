@@ -1,13 +1,14 @@
 import * as Context from "effect/Context";
+import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
+import { retryAtFromHeader } from "@t3tools/source-control-core/server/SourceControlRateLimit";
 
 import * as GitCafeCredentials from "./GitCafeCredentials.ts";
 import * as GitCafeHosts from "./gitCafeHosts.ts";
@@ -15,10 +16,6 @@ import * as GitCafeHosts from "./gitCafeHosts.ts";
 const NO_REDIRECT: RequestInit = { redirect: "manual" };
 const TIMEOUT = Duration.seconds(30);
 
-/**
- * Why a request failed, as far as a caller needs to act on it: a missing CLI or refused token
- * disables the provider, a limit pauses the host, and the rest belong to the one request.
- */
 export const GitCafeApiFailure = Schema.Literals([
   "missing-tool",
   "unauthenticated",
@@ -30,10 +27,10 @@ export const GitCafeApiFailure = Schema.Literals([
 export class GitCafeApiError extends Schema.TaggedError<GitCafeApiError>()("GitCafeApiError", {
   host: Schema.String,
   operation: Schema.String,
-  /** GitCafe's HTTP status; null when no answer arrived. */
   status: Schema.NullOr(Schema.Int),
   reason: GitCafeApiFailure,
   detail: Schema.String,
+  retryAt: Schema.optional(Schema.Number),
   cause: Schema.optional(Schema.Defect()),
 }) {
   override get message(): string {
@@ -45,29 +42,16 @@ export interface GitCafeApiRequest {
   readonly host: string;
   readonly operation: string;
   readonly method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
-  /** Below `/api`, query string included, e.g. `/repos/owner/repo/pulls/7`. */
   readonly path: string;
   readonly body?: unknown;
 }
 
-/** GitCafe's REST API on its own hosts, authenticated with the `GitCafeCredentials` token. */
 export class GitCafeApi extends Context.Service<
   GitCafeApi,
   {
-    /** The body of a successful answer. */
     readonly request: (input: GitCafeApiRequest) => Effect.Effect<string, GitCafeApiError>;
   }
 >()("@t3tools/source-control-gitcafe/server/GitCafeApi") {}
-
-/** GitCafe's RFC 7807 error body, e.g. `{"type":"https://cafe.sh/errors/not-found",...}`. */
-const decodeProblem = Schema.decodeUnknownOption(
-  Schema.fromJsonString(
-    Schema.Struct({
-      title: Schema.optional(Schema.String),
-      detail: Schema.optional(Schema.String),
-    }),
-  ),
-);
 
 const reasonForStatus = (status: number): typeof GitCafeApiFailure.Type =>
   status === 401
@@ -77,13 +61,6 @@ const reasonForStatus = (status: number): typeof GitCafeApiFailure.Type =>
       : status === 404
         ? "not-found"
         : "failed";
-
-const MAX_PROBLEM_TEXT = 300;
-const boundedProblemText = (text: string | undefined) => {
-  const line = text?.replace(/\s+/gu, " ").trim();
-  if (!line) return undefined;
-  return line.length > MAX_PROBLEM_TEXT ? `${line.slice(0, MAX_PROBLEM_TEXT)}…` : line;
-};
 
 const credentialFailure = (
   error: GitCafeCredentials.GitCafeCredentialUnavailableError,
@@ -101,7 +78,10 @@ export const make = Effect.gen(function* () {
 
   const request = Effect.fn("GitCafeApi.request")(function* (input: GitCafeApiRequest) {
     const fail = (
-      fields: Pick<GitCafeApiError, "status" | "reason" | "detail"> & { cause?: unknown },
+      fields: Pick<GitCafeApiError, "status" | "reason" | "detail"> & {
+        cause?: unknown;
+        retryAt?: number;
+      },
     ) =>
       new GitCafeApiError({
         host: input.host,
@@ -109,6 +89,7 @@ export const make = Effect.gen(function* () {
         status: fields.status,
         reason: fields.reason,
         detail: fields.detail,
+        ...(fields.retryAt === undefined ? {} : { retryAt: fields.retryAt }),
         ...(fields.cause === undefined ? {} : { cause: fields.cause }),
       });
     // The host comes from a remote URL, so a token never leaves for one GitCafe does not own.
@@ -124,20 +105,23 @@ export const make = Effect.gen(function* () {
       "gitcafe.operation": input.operation,
       "http.request.method": input.method ?? "GET",
     });
-    const credential = yield* credentials
-      .get(host)
-      .pipe(
-        Effect.mapError((cause) =>
-          fail({ status: null, reason: credentialFailure(cause), detail: cause.message, cause }),
-        ),
-      );
+    const credential = yield* credentials.get(host).pipe(
+      Effect.mapError((cause) =>
+        fail({
+          status: null,
+          reason: credentialFailure(cause),
+          detail: "GitCafe credentials are unavailable.",
+          cause,
+        }),
+      ),
+    );
     const base = HttpClientRequest.make(input.method ?? "GET")(
       `https://${host}/api${input.path}`,
     ).pipe(
       HttpClientRequest.bearerToken(Redacted.value(credential.token)),
       HttpClientRequest.setHeaders({ accept: "application/json", "user-agent": "t3code" }),
     );
-    const { status, text } = yield* Effect.gen(function* () {
+    const { status, text, retryAfter } = yield* Effect.gen(function* () {
       const response = yield* httpClient
         .execute(
           input.body === undefined ? base : base.pipe(HttpClientRequest.bodyJsonUnsafe(input.body)),
@@ -149,7 +133,11 @@ export const make = Effect.gen(function* () {
           // GitCafe's API never redirects a request it serves, so a 3xx is answered as a failure.
           Effect.provideService(FetchHttpClient.RequestInit, NO_REDIRECT),
         );
-      return { status: response.status, text: yield* response.text };
+      return {
+        status: response.status,
+        text: yield* response.text,
+        retryAfter: response.headers["retry-after"],
+      };
     }).pipe(
       Effect.timeout(TIMEOUT),
       Effect.mapError((cause) =>
@@ -160,13 +148,14 @@ export const make = Effect.gen(function* () {
     if (status >= 200 && status < 300) return text;
     // The source may hold a newer token than the one that was refused.
     if (status === 401) yield* credentials.invalidate(host);
-    const problem = Option.getOrUndefined(decodeProblem(text));
+    const retryAt =
+      status === 429 ? retryAtFromHeader(retryAfter, yield* Clock.currentTimeMillis) : undefined;
     return yield* fail({
       status,
       reason: reasonForStatus(status),
-      // GitCafe's own explanation is what the user acts on; it is kept short and single-line.
-      detail:
-        boundedProblemText(problem?.detail ?? problem?.title) ?? `GitCafe answered HTTP ${status}.`,
+      detail: `GitCafe answered HTTP ${status}.`,
+      ...(retryAt === undefined ? {} : { retryAt }),
+      cause: { status, body: text.slice(0, 2048) },
     });
   });
 

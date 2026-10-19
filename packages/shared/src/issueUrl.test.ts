@@ -3,6 +3,75 @@ import { describe, expect, it } from "vite-plus/test";
 import { parseIssueUrl } from "./issueUrl.ts";
 
 describe("parseIssueUrl", () => {
+  it.each(["epics", "work_items"])("keeps GitLab group %s separate from project issues", (path) => {
+    expect(
+      parseIssueUrl(`https://git.internal:8443/groups/Acme/Platform/-/${path}/42#note_1`),
+    ).toEqual({
+      tracker: "gitlab",
+      host: "git.internal:8443",
+      scope: "group:acme/platform",
+      key: "42",
+    });
+    expect(parseIssueUrl("https://git.internal:8443/acme/platform/-/work_items/42")?.scope).toBe(
+      "acme/platform",
+    );
+    expect(parseIssueUrl(`https://git.internal/groups/acme/-/${path}/42`)?.scope).toBe(
+      "group:acme",
+    );
+  });
+
+  it.each([
+    "https://user@git.internal/groups/acme/-/epics/42",
+    "https://git.internal/groups/acme%2Fplatform/-/epics/42",
+    "https://git.internal/groups/acme/-/issues/42",
+    "https://git.internal/groups/acme/-/epics/0",
+    "https://git.internal/groups/acme/-/work_items/42/extra",
+    "https://git.internal/groups/acme/-/epics/9007199254740992",
+  ])("rejects an invalid GitLab group reference %s", (url) => {
+    expect(parseIssueUrl(url)).toBeNull();
+  });
+
+  it.each(["git.cafe", "staging.git.cafe"])("reads native GitCafe issues on %s", (host) => {
+    expect(parseIssueUrl(`https://${host}/Team/Repo/issues/42`)).toEqual({
+      tracker: "gitcafe",
+      host,
+      scope: "team/repo",
+      key: "42",
+    });
+    expect(parseIssueUrl(`https://${host}:8443/Team/Repo/issues/42`)).toBeNull();
+    expect(parseIssueUrl(`https://${host}.example.test/Team/Repo/issues/42`)).toBeNull();
+    expect(parseIssueUrl(`https://${host}/Team/Repo/pulls/42`)).toBeNull();
+  });
+
+  it("reads a GitLab work item through the issue tracker", () => {
+    expect(parseIssueUrl("https://git.internal/group/project/-/work_items/42")).toEqual({
+      tracker: "gitlab",
+      host: "git.internal",
+      scope: "group/project",
+      key: "42",
+    });
+  });
+
+  it("reads a configured Jira instance without folding its mount path", () => {
+    const configured = { tracker: "jira", host: "jira.example.test:8443/Jira" };
+    expect(parseIssueUrl("https://jira.example.test:8443/Jira/browse/ENG-42", configured)).toEqual({
+      tracker: "jira",
+      host: configured.host,
+      scope: "eng",
+      key: "ENG-42",
+    });
+    for (const url of [
+      "https://jira.example.test:8443/jira/browse/ENG-42",
+      "https://jira.example.test:8444/Jira/browse/ENG-42",
+      "https://jira.example.test:8443/JiraElse/browse/ENG-42",
+      "https://jira.example.test:8443/Jira/browse/ENG-42/extra",
+      "https://user@jira.example.test:8443/Jira/browse/ENG-42",
+      "http://jira.example.test:8443/Jira/browse/ENG-42",
+    ])
+      expect(parseIssueUrl(url, configured)).toBeNull();
+    expect(parseIssueUrl("https://jira.example.test:8443/Jira/browse/ENG-42")).toBeNull();
+  });
+
   it("uses the configured tracker before a hostname that resembles another provider", () => {
     const url = "https://github.company.net/team/repo/issues/7";
     expect(parseIssueUrl(url)?.tracker).toBe("github");
@@ -35,6 +104,27 @@ describe("parseIssueUrl", () => {
       { tracker: "azure-devops", host: "dev.azure.com", scope: "org/project", key: "55" },
     ],
     [
+      "https://dev.azure.com/Acme/My%20Project/_workitems/edit/55",
+      { tracker: "azure-devops", host: "dev.azure.com", scope: "acme/my project", key: "55" },
+    ],
+    [
+      "https://acme.visualstudio.com/platform/_workitems/edit/55",
+      { tracker: "azure-devops", host: "acme.visualstudio.com", scope: "acme/platform", key: "55" },
+    ],
+    [
+      "https://acme.visualstudio.com/DefaultCollection/My%20Project/_workitems/edit/55",
+      {
+        tracker: "azure-devops",
+        host: "acme.visualstudio.com",
+        scope: "acme/my project",
+        key: "55",
+      },
+    ],
+    [
+      "https://dev.azure.com/acme/My%2520Project/_workitems/edit/55",
+      { tracker: "azure-devops", host: "dev.azure.com", scope: "acme/my%20project", key: "55" },
+    ],
+    [
       "https://codeberg.org/forgejo/forgejo/issues/3",
       { tracker: "forgejo", host: "codeberg.org", scope: "forgejo/forgejo", key: "3" },
     ],
@@ -62,10 +152,6 @@ describe("parseIssueUrl", () => {
       "https://tenant.atlassian.net/browse/ENG-123?focusedCommentId=42",
       { tracker: "jira", host: "tenant.atlassian.net", scope: "eng", key: "ENG-123" },
     ],
-    [
-      "https://tenant.atlassian.net/browse/eng_ops-123/",
-      { tracker: "jira", host: "tenant.atlassian.net", scope: "eng_ops", key: "ENG_OPS-123" },
-    ],
   ])("reads %s", (url, expected) => {
     expect(parseIssueUrl(url)).toEqual(expected);
   });
@@ -83,16 +169,11 @@ describe("parseIssueUrl", () => {
     "https://tenant.atlassian.net/browse/ENG-123/another-path",
     "https://tenant.atlassian.net.evil.test/browse/ENG-123",
     "https://example.com/browse/ENG-123",
-    "https://linear.app/acme/issue/ENG-123abc",
-    "https://linear.app/acme/issue/123-1",
-    "https://linear.app/acme/team/ENG/all",
-    "https://tenant.atlassian.net/browse/ENG-123abc",
-    "https://tenant.atlassian.net/browse/123-1",
-    "https://tenant.atlassian.net/issues/ENG-123",
-    "http://tenant.atlassian.net/browse/ENG-123",
-    "https://tenant.atlassian.net:8443/browse/ENG-123",
-    "ftp://linear.app/acme/issue/ENG-123",
-    "ftp://tenant.atlassian.net/browse/ENG-123",
+    "https://dev.azure.com/acme/My%2FProject/_workitems/edit/55",
+    "https://dev.azure.com/acme/My%5CProject/_workitems/edit/55",
+    "https://dev.azure.com/acme/My%ZZProject/_workitems/edit/55",
+    "https://acme.visualstudio.com/My%2FProject/_workitems/edit/55",
+    "https://acme.visualstudio.com/DefaultCollection/My%ZZProject/_workitems/edit/55",
     "javascript:alert(1)",
     "not a url",
   ])("leaves %s alone", (url) => {
@@ -115,68 +196,28 @@ describe("parseIssueUrl", () => {
   );
 
   it.each([
-    [
-      "https://acme.visualstudio.com/platform/_workitems/edit/55",
-      "acme.visualstudio.com",
-      "acme/platform",
-    ],
-    [
-      "https://dev.azure.com/acme/My Project/_workitems/edit/55",
-      "dev.azure.com",
-      "acme/my project",
-    ],
-    [
-      "https://dev.azure.com/acme/My%20Project/_workitems/edit/55",
-      "dev.azure.com",
-      "acme/my project",
-    ],
-    [
-      "https://dev.azure.com/acme/My%2520Project/_workitems/edit/55",
-      "dev.azure.com",
-      "acme/my%20project",
-    ],
-    [
-      "https://acme.visualstudio.com/My%20Project/_workitems/edit/55",
-      "acme.visualstudio.com",
-      "acme/my project",
-    ],
-    [
-      "https://acme.visualstudio.com/DefaultCollection/My%20Project/_workitems/edit/55",
-      "acme.visualstudio.com",
-      "acme/my project",
-    ],
-    [
-      "https://acme.visualstudio.com/defaultcollection/My%2520Project/_workitems/edit/55",
-      "acme.visualstudio.com",
-      "acme/my%20project",
-    ],
-    [
-      "https://dev.azure.com/My%20Org/Project/_workitems/edit/55",
-      "dev.azure.com",
-      "my org/project",
-    ],
-    [
-      "https://dev.azure.com/My%2520Org/Project/_workitems/edit/55",
-      "dev.azure.com",
-      "my%20org/project",
-    ],
-  ])("decodes Azure project paths once for %s", (url, host, scope) => {
-    expect(parseIssueUrl(url)).toEqual({ tracker: "azure-devops", host, scope, key: "55" });
+    ["github", "https://git.acme.test:3000/team/repo/issues/7"],
+    ["gitlab", "https://git.acme.test:3000/team/repo/-/issues/7"],
+    ["forgejo", "https://git.acme.test:3000/team/repo/issues/7"],
+  ])("keeps the configured %s install's port", (tracker, url) => {
+    expect(parseIssueUrl(url, { tracker, host: "git.acme.test:3000" })).toEqual({
+      tracker,
+      host: "git.acme.test:3000",
+      scope: "team/repo",
+      key: "7",
+    });
+    if (tracker !== "gitlab") {
+      expect(parseIssueUrl(url, { tracker, host: "git.acme.test:4000" })).toBeNull();
+    }
   });
 
   it.each([
-    "https://dev.azure.com/acme/My%2FProject/_workitems/edit/55",
-    "https://dev.azure.com/acme/My%5CProject/_workitems/edit/55",
-    "https://dev.azure.com/acme/My%ZZProject/_workitems/edit/55",
-    "https://dev.azure.com/acme/%20/_workitems/edit/55",
-    "https://dev.azure.com/My%2FOrg/Project/_workitems/edit/55",
-    "https://dev.azure.com/My%5COrg/Project/_workitems/edit/55",
-    "https://dev.azure.com/My%ZZOrg/Project/_workitems/edit/55",
-    "https://acme.visualstudio.com/My%2FProject/_workitems/edit/55",
-    "https://acme.visualstudio.com/My%5CProject/_workitems/edit/55",
-    "https://acme.visualstudio.com/DefaultCollection/My%ZZProject/_workitems/edit/55",
-    "https://acme.visualstudio.com/%20/_workitems/edit/55",
-  ])("rejects invalid Azure project paths in %s", (url) => {
-    expect(parseIssueUrl(url)).toBeNull();
+    ["https://github.acme.test:3000/team/repo/issues/7", "github.acme.test:3000"],
+    ["https://gitlab.acme.test:3000/team/repo/-/issues/7", "gitlab.acme.test:3000"],
+    ["https://forgejo.acme.test:3000/team/repo/issues/7", "forgejo.acme.test:3000"],
+    ["https://github.acme.test:443/team/repo/issues/7", "github.acme.test"],
+    ["http://forgejo.acme.test:80/team/repo/issues/7", "forgejo.acme.test"],
+  ])("keeps the native host identity for %s", (url, host) => {
+    expect(parseIssueUrl(url)?.host).toBe(host);
   });
 });

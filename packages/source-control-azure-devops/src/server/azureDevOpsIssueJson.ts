@@ -15,6 +15,7 @@ import type {
   IssueLabel,
   IssueReaction,
   IssueReactionContent,
+  IssueRichBody,
   IssueState,
 } from "@t3tools/contracts";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
@@ -44,6 +45,7 @@ const IdentityValue = Schema.NullOr(Schema.Union([Identity, Schema.String]));
 
 const Fields = Schema.Struct({
   "System.CommentCount": Schema.optional(Schema.NullOr(Schema.Int)),
+  "System.WorkItemType": Schema.optional(Schema.NullOr(Schema.String)),
   "System.Title": Schema.optional(Schema.NullOr(Schema.String)),
   "System.State": Schema.optional(Schema.NullOr(Schema.String)),
   "System.CreatedDate": Schema.optional(Schema.NullOr(Schema.String)),
@@ -59,6 +61,8 @@ const Fields = Schema.Struct({
 const Relation = Schema.Struct({ rel: Schema.String, url: Schema.String });
 
 const WorkItem = Schema.Struct({
+  rev: Schema.optional(Schema.Int),
+  multilineFieldsFormat: Schema.optional(Schema.Unknown),
   id: Schema.Int,
   url: Schema.optional(Schema.NullOr(Schema.String)),
   fields: Schema.optional(Schema.NullOr(Fields)),
@@ -66,7 +70,9 @@ const WorkItem = Schema.Struct({
 });
 
 const decodeWorkItemEntry = Schema.decodeUnknownExit(WorkItem);
-const decodeUnknownList = decodeJsonResult(Schema.NullOr(Schema.Array(Schema.Unknown)));
+const decodeWorkItemsPage = decodeJsonResult(
+  Schema.Struct({ value: Schema.Array(Schema.Unknown) }),
+);
 const decodeWorkItem = decodeJsonResult(WorkItem);
 
 type DecodeFailure =
@@ -87,8 +93,16 @@ function browserUrl(
   project: string | null,
 ): string | null {
   if (apiUrl === null || apiUrl === undefined || project === null) return null;
-  const match = /^(https?:\/\/[^/]+\/[^/]+)\/(?:[^/]+\/)?_apis\/wit\/workItems\//i.exec(apiUrl);
-  return match === null ? null : `${match[1]}/${encodeURIComponent(project)}/_workitems/edit/${id}`;
+  const url = URL.parse(apiUrl);
+  if (url === null || (url.protocol !== "https:" && url.protocol !== "http:")) return null;
+  const match = (
+    url.hostname.endsWith(".visualstudio.com")
+      ? /^\/(DefaultCollection\/)?(?:[^/]+\/)?_apis\/wit\/workItems\//i
+      : /^\/([^/]+\/)(?:[^/]+\/)?_apis\/wit\/workItems\//i
+  ).exec(url.pathname);
+  return match === null
+    ? null
+    : `${url.origin}/${match[1] ?? ""}${encodeURIComponent(project)}/_workitems/edit/${id}`;
 }
 
 function toActor(value: typeof IdentityValue.Type | undefined): IssueActor | null {
@@ -118,6 +132,12 @@ function toLabels(tags: string | null | undefined): ReadonlyArray<IssueLabel> {
 
 export interface AzureDevOpsWorkItem extends TrackerIssueSummary {
   readonly body: string;
+  readonly bodyFormat: "html" | "markdown" | null;
+  readonly richBody?: IssueRichBody;
+  readonly bodyEditable: boolean;
+  readonly workItemType: string | null;
+  readonly revision: number | null;
+  readonly nativeUrl: string | null;
   readonly project: string | null;
   readonly relations: ReadonlyArray<typeof Relation.Type>;
 }
@@ -134,6 +154,18 @@ function toWorkItem(raw: typeof WorkItem.Type): AzureDevOpsWorkItem | null {
     return null;
   }
   const assignee = toActor(fields["System.AssignedTo"]);
+  const body = fields["System.Description"] ?? "";
+  const formats = raw.multilineFieldsFormat;
+  const nativeFormat =
+    formats === undefined
+      ? "html"
+      : typeof formats === "object" && formats !== null && !Array.isArray(formats)
+        ? "System.Description" in formats
+          ? formats["System.Description"]
+          : "html"
+        : null;
+  const bodyFormat = textFormatOf(nativeFormat);
+  const bodyEditable = bodyFormat !== null && body.length <= 65_536;
   return {
     key: String(raw.id),
     displayKey: `#${raw.id}`,
@@ -147,7 +179,15 @@ function toWorkItem(raw: typeof WorkItem.Type): AzureDevOpsWorkItem | null {
     assignees: assignee === null ? [] : [assignee],
     labels: toLabels(fields["System.Tags"]),
     commentCount: Math.max(0, fields["System.CommentCount"] ?? 0),
-    body: fields["System.Description"] ?? "",
+    body,
+    bodyFormat,
+    bodyEditable,
+    ...(bodyFormat === "html" && bodyEditable
+      ? { richBody: { format: "azure-html" as const, document: body } }
+      : {}),
+    workItemType: fields["System.WorkItemType"] ?? null,
+    revision: raw.rev ?? null,
+    nativeUrl: raw.url ?? null,
     project,
     relations: raw.relations ?? [],
   };
@@ -157,13 +197,26 @@ function toWorkItem(raw: typeof WorkItem.Type): AzureDevOpsWorkItem | null {
 export function decodeWorkItemsJson(
   raw: string,
 ): Result.Result<ReadonlyArray<AzureDevOpsWorkItem>, DecodeFailure> {
-  return Result.map(decodeUnknownList(raw.trim().length === 0 ? "[]" : raw), (rows) =>
-    (rows ?? []).flatMap((entry) => {
+  return Result.map(decodeWorkItemsPage(raw), (page) =>
+    page.value.flatMap((entry) => {
       const item = decodeWorkItemEntry(entry);
       if (Exit.isFailure(item)) return [];
       return toWorkItem(item.value) ?? [];
     }),
   );
+}
+
+const decodeWorkItemsBatch = decodeJsonResult(
+  Schema.Struct({
+    count: Schema.optional(Schema.Int),
+    value: Schema.Array(WorkItem),
+  }).check(
+    Schema.makeFilter((page) => page.count === undefined || page.count === page.value.length),
+  ),
+);
+
+export function decodeWorkItemsBatchJson(raw: string) {
+  return Result.map(decodeWorkItemsBatch(raw), (page) => page.value.map(toWorkItem));
 }
 
 /** Null where az answered with a work item this cannot place, which the caller reports as such. */
@@ -189,8 +242,10 @@ export function azureDevOpsReactionType(content: IssueReactionContent): string |
 
 const Comment = Schema.Struct({
   id: Schema.Int,
+  format: Schema.optional(Schema.Unknown),
   text: Schema.optional(Schema.NullOr(Schema.String)),
   createdDate: Schema.String,
+  modifiedDate: Schema.optional(Schema.String),
   createdBy: Schema.optional(Schema.NullOr(Identity)),
   isDeleted: Schema.optional(Schema.Boolean),
   reactions: Schema.optional(
@@ -207,12 +262,31 @@ const Comment = Schema.Struct({
 });
 
 const CommentsPage = Schema.Struct({
+  count: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+  totalCount: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
   comments: Schema.optional(Schema.NullOr(Schema.Array(Schema.Unknown))),
   continuationToken: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 const decodeCommentsPage = decodeJsonResult(CommentsPage);
 const decodeCommentEntry = Schema.decodeUnknownExit(Comment);
+const decodeComment = decodeJsonResult(Comment);
+
+function textFormatOf(format: unknown): "html" | "markdown" | null {
+  if (format === 0 || (typeof format === "string" && format.toLowerCase() === "markdown"))
+    return "markdown";
+  if (format === 1 || (typeof format === "string" && format.toLowerCase() === "html"))
+    return "html";
+  return null;
+}
+
+export function decodeCommentFormatJson(raw: string) {
+  return Result.map(decodeComment(raw), (comment) => ({
+    id: String(comment.id),
+    format: textFormatOf(comment.format),
+    isDeleted: comment.isDeleted === true,
+  }));
+}
 
 function toReactions(raw: (typeof Comment.Type)["reactions"]): ReadonlyArray<IssueReaction> {
   return (raw ?? []).flatMap((reaction) => {
@@ -233,20 +307,50 @@ function toReactions(raw: (typeof Comment.Type)["reactions"]): ReadonlyArray<Iss
 
 export function decodeCommentsJson(
   raw: string,
+  viewer?: string,
 ): Result.Result<
-  { readonly comments: ReadonlyArray<IssueComment>; readonly nextCursor: string | null },
+  {
+    readonly comments: ReadonlyArray<IssueComment>;
+    readonly nextCursor: string | null;
+    readonly rawCount: number;
+    readonly rawIds: ReadonlyArray<number | null>;
+    readonly count: number | undefined;
+    readonly totalCount: number | undefined;
+  },
   DecodeFailure
 > {
   return Result.map(decodeCommentsPage(raw), (page) => ({
+    count: page.count,
+    totalCount: page.totalCount,
+    rawCount: page.comments?.length ?? 0,
+    rawIds: (page.comments ?? []).map((entry) => {
+      const comment = decodeCommentEntry(entry);
+      return Exit.isSuccess(comment) ? comment.value.id : null;
+    }),
     comments: (page.comments ?? []).flatMap((entry) => {
       const comment = decodeCommentEntry(entry);
       if (Exit.isFailure(comment) || comment.value.isDeleted === true) return [];
+      const body = comment.value.text ?? "";
+      const format = textFormatOf(comment.value.format);
+      const editable = format !== null && body.length <= 65_536;
       return [
         {
           id: String(comment.value.id),
           author: toActor(comment.value.createdBy),
-          body: comment.value.text ?? "",
+          body,
+          ...(format === "html" && editable
+            ? { richBody: { format: "azure-html" as const, document: body } }
+            : {}),
           createdAt: comment.value.createdDate,
+          editedAt:
+            comment.value.modifiedDate && comment.value.modifiedDate !== comment.value.createdDate
+              ? comment.value.modifiedDate
+              : null,
+          canEdit: !editable
+            ? false
+            : viewer === undefined
+              ? undefined
+              : toActor(comment.value.createdBy)?.login.toLowerCase() === viewer.toLowerCase(),
           url: null,
           reactions: toReactions(comment.value.reactions),
         },
@@ -261,7 +365,9 @@ const FieldChange = Schema.Struct({
   newValue: Schema.optional(Schema.Unknown),
 });
 
+const encodeUpdate = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const Update = Schema.Struct({
+  relations: Schema.optional(Schema.Unknown),
   id: Schema.Int,
   revisedDate: Schema.String,
   revisedBy: Schema.optional(Schema.NullOr(Identity)),
@@ -279,66 +385,106 @@ function identityLogin(value: unknown): string | null {
   return Exit.isSuccess(decoded) ? (toActor(decoded.value)?.login ?? null) : null;
 }
 
-/**
- * The timeline, read out of each revision's field changes. Azure reads `9999-01-01` as the changed
- * date of the newest revision, so the revision's own date is what every event carries.
- */
 export function decodeUpdatesJson(
   raw: string,
-): Result.Result<ReadonlyArray<IssueEvent>, DecodeFailure> {
-  return Result.map(decodeUpdatesPage(raw), (page) =>
-    (page.value ?? []).flatMap((entry) => {
+  states?: ReadonlyArray<IssueState>,
+  order: "asc" | "desc" = "asc",
+): Result.Result<
+  {
+    readonly events: ReadonlyArray<IssueEvent>;
+    readonly rawCount: number;
+    readonly rawIds: ReadonlyArray<number | null>;
+  },
+  DecodeFailure
+> {
+  return Result.map(decodeUpdatesPage(raw), (page) => ({
+    rawCount: page.value?.length ?? 0,
+    rawIds: (page.value ?? []).map((entry) => {
       const update = decodeUpdateEntry(entry);
-      if (Exit.isFailure(update) || update.value.id === 1) return [];
-      const { id, revisedBy, revisedDate } = update.value;
-      const fields = update.value.fields ?? {};
-      const events: IssueEvent[] = [];
-      const add = (kind: IssueEvent["kind"], detail: string | null) =>
-        events.push({
-          id: `update-${id}-${events.length}`,
-          kind,
-          actor: toActor(revisedBy),
-          createdAt: revisedDate,
-          detail,
-        });
-      const state = fields["System.State"];
-      if (typeof state?.oldValue === "string" && typeof state.newValue === "string") {
-        const was = toIssueState(state.oldValue);
-        const now = toIssueState(state.newValue);
-        add(
-          was.category === now.category
-            ? "state-changed"
-            : now.category === "closed"
-              ? "closed"
-              : "reopened",
-          now.name,
-        );
-      }
-      const title = fields["System.Title"];
-      if (typeof title?.oldValue === "string" && typeof title.newValue === "string") {
-        add("renamed", trimmed(title.newValue));
-      }
-      const tags = fields["System.Tags"];
-      if (tags !== undefined) {
-        const before = toLabels(typeof tags.oldValue === "string" ? tags.oldValue : null);
-        const after = toLabels(typeof tags.newValue === "string" ? tags.newValue : null);
-        for (const tag of before)
-          if (!after.some((label) => label.name === tag.name)) add("unlabeled", tag.name);
-        for (const tag of after)
-          if (!before.some((label) => label.name === tag.name)) add("labeled", tag.name);
-      }
-      const assigned = fields["System.AssignedTo"];
-      if (assigned !== undefined) {
-        const before = identityLogin(assigned.oldValue);
-        const after = identityLogin(assigned.newValue);
-        if (before !== after) {
-          if (before !== null) add("unassigned", before);
-          if (after !== null) add("assigned", after);
-        }
-      }
-      return events;
+      return Exit.isSuccess(update) ? update.value.id : null;
     }),
-  );
+    events: (order === "desc" ? (page.value ?? []).toReversed() : (page.value ?? [])).flatMap(
+      (entry) => {
+        const update = decodeUpdateEntry(entry);
+        if (
+          Exit.isFailure(update) ||
+          (update.value.id === 1 && update.value.relations === undefined)
+        )
+          return [];
+        const { id, revisedBy, revisedDate } = update.value;
+        const fields = update.value.fields ?? {};
+        const changedAt = fields["System.ChangedDate"]?.newValue;
+        const createdAt = typeof changedAt === "string" ? changedAt : revisedDate;
+        const events: IssueEvent[] = [];
+        const add = (kind: IssueEvent["kind"], detail: string | null) =>
+          events.push({
+            id: `update-${id}-${events.length}`,
+            kind,
+            actor: toActor(revisedBy),
+            createdAt,
+            detail,
+          });
+        const state = fields["System.State"];
+        if (typeof state?.oldValue === "string" && typeof state.newValue === "string") {
+          const was = states?.find((candidate) => candidate.name === state.oldValue);
+          const now = states?.find((candidate) => candidate.name === state.newValue);
+          add(
+            was === undefined || now === undefined || was.category === now.category
+              ? "state-changed"
+              : now.category === "closed"
+                ? "closed"
+                : "reopened",
+            state.newValue,
+          );
+        }
+        const title = fields["System.Title"];
+        if (typeof title?.oldValue === "string" && typeof title.newValue === "string") {
+          add("renamed", trimmed(title.newValue));
+        }
+        const tags = fields["System.Tags"];
+        if (tags !== undefined) {
+          const before = toLabels(typeof tags.oldValue === "string" ? tags.oldValue : null);
+          const after = toLabels(typeof tags.newValue === "string" ? tags.newValue : null);
+          for (const tag of before)
+            if (!after.some((label) => label.name === tag.name)) add("unlabeled", tag.name);
+          for (const tag of after)
+            if (!before.some((label) => label.name === tag.name)) add("labeled", tag.name);
+        }
+        const assigned = fields["System.AssignedTo"];
+        if (assigned !== undefined) {
+          const before = identityLogin(assigned.oldValue);
+          const after = identityLogin(assigned.newValue);
+          if (before !== after) {
+            if (before !== null) add("unassigned", before);
+            if (after !== null) add("assigned", after);
+          }
+        }
+        if (
+          update.value.relations !== undefined ||
+          Object.keys(fields).some(
+            (name) =>
+              ![
+                "System.State",
+                "System.Title",
+                "System.Tags",
+                "System.AssignedTo",
+                "System.ChangedDate",
+              ].includes(name),
+          )
+        )
+          add(
+            "updated",
+            encodeUpdate({
+              fields,
+              ...(update.value.relations === undefined
+                ? {}
+                : { relations: update.value.relations }),
+            }),
+          );
+        return events;
+      },
+    ),
+  }));
 }
 
 /** A relation that links a pull request, as Azure spells it: `vstfs:///Git/PullRequestId/{project}/{repo}/{id}`. */
@@ -346,21 +492,10 @@ export function pullRequestNumberOf(relation: typeof Relation.Type): number | nu
   if (relation.rel !== "ArtifactLink") return null;
   const match = /^vstfs:\/\/\/Git\/PullRequestId\/(.+)$/.exec(relation.url);
   if (match === null) return null;
-  const number = decodeURIComponent(match[1]!).split("/").at(-1) ?? "";
-  return /^[1-9]\d{0,9}$/.test(number) ? Number(number) : null;
-}
-
-const Profile = Schema.Struct({
-  emailAddress: Schema.optional(Schema.NullOr(Schema.String)),
-  displayName: Schema.optional(Schema.NullOr(Schema.String)),
-});
-
-const decodeProfile = decodeJsonResult(Profile);
-
-/** `GET profile/profiles/me` names the signed-in account, which WIQL's `@Me` compares against. */
-export function decodeProfileJson(raw: string): Result.Result<string | null, DecodeFailure> {
-  return Result.map(
-    decodeProfile(raw),
-    (profile) => trimmed(profile.emailAddress) ?? trimmed(profile.displayName),
-  );
+  try {
+    const number = decodeURIComponent(match[1]!).split("/").at(-1) ?? "";
+    return /^[1-9]\d{0,9}$/.test(number) ? Number(number) : null;
+  } catch {
+    return null;
+  }
 }

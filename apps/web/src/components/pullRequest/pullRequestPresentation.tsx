@@ -11,9 +11,11 @@ import type {
 } from "@t3tools/contracts";
 import { formatDiffCount } from "@t3tools/client-runtime/diff-count";
 import {
+  CheckIcon,
   CircleCheckIcon,
   CircleDashedIcon,
   CircleDotIcon,
+  CircleSlashIcon,
   CircleXIcon,
   UserCheckIcon,
   UserRoundIcon,
@@ -22,6 +24,7 @@ import {
 import { Children, type CSSProperties, isValidElement, type ReactNode, useState } from "react";
 
 import { cn } from "~/lib/utils";
+import { formatRelativeTimeLabel } from "~/timestampFormat";
 
 import { Badge } from "../ui/badge";
 import { InlineButton } from "../ui/button";
@@ -35,15 +38,6 @@ import {
   type PullRequestGlyphIcon,
 } from "./pullRequestIcons";
 
-/**
- * A host label as a flat tinted tag in the label's own color: a wash of it behind, the name
- * in a mix of it and the theme foreground. The mix leans to the foreground because hosts hand
- * out any color at all: at 30% of the label on light and 45% on dark, white, black and
- * GitHub's pale yellows all clear 4.5:1 on their wash, selected row included, and
- * saturated colors sit well above.
- * A label with no usable color falls back to the muted tag. Children ride after the name,
- * for an overflow count. The height is pinned so a labeled row is as tall as one without.
- */
 export function PullRequestLabelChip({
   label,
   size = "sm",
@@ -69,11 +63,6 @@ export function PullRequestLabelChip({
   );
 }
 
-/**
- * The review verdict as one glyph beside the checks glyph, so a row answers both "does it
- * build" and "did someone say yes" in the same spot. "Awaiting review" is only drawn when the
- * host reports it, which on GitHub means the branch rules require a review nobody has given.
- */
 function reviewDecisionPresentation(decision: PullRequestReviewDecision) {
   switch (decision) {
     case "approved":
@@ -114,13 +103,6 @@ export function PullRequestReviewDecisionGlyph({
   );
 }
 
-/**
- * How a pull request's state reads anywhere it appears: the thread badge, the right-panel tab,
- * the list, and the detail header all resolve through here so one pull request cannot look like
- * two different things in two places.
- *
- * Closed and merged take precedence over a stale draft flag.
- */
 export function resolvePullRequestState(input: {
   readonly state: PullRequestState;
   readonly isDraft: boolean;
@@ -225,7 +207,7 @@ const CHECK_STATUS_PRESENTATION = {
   },
   failure: { label: "Failed", Icon: CircleXIcon, toneClassName: "text-destructive" },
   cancelled: { label: "Cancelled", Icon: CircleXIcon, toneClassName: "text-destructive" },
-  skipped: { label: "Skipped", Icon: CircleDashedIcon, toneClassName: "text-muted-foreground/70" },
+  skipped: { label: "Skipped", Icon: CircleSlashIcon, toneClassName: "text-muted-foreground/70" },
   neutral: { label: "Neutral", Icon: CircleDashedIcon, toneClassName: "text-muted-foreground/70" },
 } as const satisfies Record<
   PullRequestCheckStatus,
@@ -258,10 +240,6 @@ export function PullRequestCheckStatusIcon({ status }: { status: PullRequestChec
   );
 }
 
-/**
- * The rollup a listing row carries, which is one word rather than the checks behind it. The
- * headline is GitHub's own wording, so a reader who knows that page reads this one the same way.
- */
 const CHECKS_STATE_PRESENTATION = {
   passing: {
     label: "All checks have passed",
@@ -287,12 +265,6 @@ export function pullRequestChecksStatePresentation(state: PullRequestChecksState
   return CHECKS_STATE_PRESENTATION[state];
 }
 
-/**
- * The same rollup the server sends with a listing row, worked out here from the checks a detail
- * already holds — so the header shows the icon without a second field travelling with it.
- *
- * Null for a change request with no checks: nothing to show beats a tick nobody earned.
- */
 export function pullRequestChecksState(
   checks: ReadonlyArray<PullRequestCheck>,
 ): PullRequestChecksState | null {
@@ -303,14 +275,6 @@ export function pullRequestChecksState(
   return statuses.has("success") ? "passing" : null;
 }
 
-/**
- * How a verdict reads, in the one place every surface takes it from. The green is the green a
- * passing check already wears in the same panel, so "approved" and "all checks passed" cannot
- * look like two different kinds of good news.
- *
- * The ring runs a shade stronger than the text tones. At 16px across it is a thin arc, and the
- * muted pairing that reads well as a word was barely there as an outline.
- */
 const REVIEW_OUTCOME_PRESENTATION = {
   approved: {
     label: "Approved",
@@ -354,7 +318,6 @@ export function pullRequestReviewOutcomeToneClassName(outcome: PullRequestReview
   return REVIEW_OUTCOME_PRESENTATION[outcome].toneClassName;
 }
 
-/** Worn by whatever wraps a reviewer's avatar, so their verdict reads without a row of its own. */
 /**
  * A faded verdict is mixed into the background rather than made translucent. The ring is the only
  * separator an avatar carrying one has — the summary drops the opaque `ring-background` where a
@@ -369,15 +332,10 @@ export function pullRequestReviewOutcomeRingClassName(
   return stale ? presentation.staleRingClassName : presentation.ringClassName;
 }
 
-/**
- * What a superseded verdict says, which is the same word with when it applied added. Commits
- * landed after it, so it stands for code the branch no longer has.
- */
 export function pullRequestReviewOutcomeStaleLabel(outcome: PullRequestReviewOutcome): string {
   return `${REVIEW_OUTCOME_PRESENTATION[outcome].label} earlier changes`;
 }
 
-/** Decorative: every caller says which verdict this is in words beside it. */
 export function PullRequestReviewOutcomeIcon({
   outcome,
   className,
@@ -408,8 +366,11 @@ export function PullRequestReviewOutcomeBadge({
   const presentation = REVIEW_OUTCOME_PRESENTATION[outcome];
   return (
     <Badge size="sm" variant={presentation.badgeVariant} className={className}>
-      <presentation.Icon aria-hidden className="size-3" />
-      {presentation.label}
+      {/* Align with surrounding text using the label, rather than the icon's bottom edge. */}
+      <span className="inline-flex items-baseline gap-1">
+        <presentation.Icon aria-hidden className="size-3 self-center" />
+        <span>{presentation.label}</span>
+      </span>
     </Badge>
   );
 }
@@ -425,7 +386,6 @@ export function PullRequestActorAvatar({
   const avatarUrl = actor?.avatarUrl ?? null;
   const [failedAvatarUrl, setFailedAvatarUrl] = useState<string | null>(null);
   return avatarUrl === null || failedAvatarUrl === avatarUrl ? (
-    // Not every host reports an avatar, and a private host may refuse the browser's request.
     <span
       aria-hidden
       className={cn(
@@ -447,12 +407,6 @@ export function PullRequestActorAvatar({
   );
 }
 
-/**
- * GitHub attributes work from a deleted account to "ghost"; say the same word everywhere.
- *
- * An actor as a login beside its avatar, or as the avatar alone. With a profile URL the actor
- * is an inline link; `className` places it and never restyles it.
- */
 export function PullRequestActorLabel({
   actor,
   className,
@@ -467,9 +421,10 @@ export function PullRequestActorLabel({
   profileUrl?: string | null;
 }) {
   const login = actor?.login ?? "ghost";
+  // Let the name supply the group's baseline while the avatar stays vertically centered.
   const label = (
-    <span className={cn("flex min-w-0 items-center", variant === "label" && "gap-1.5")}>
-      <PullRequestActorAvatar actor={actor} />
+    <span className={cn("flex min-w-0 items-baseline", variant === "label" && "gap-1.5")}>
+      <PullRequestActorAvatar actor={actor} className="self-center" />
       <span className={variant === "label" ? "truncate font-medium text-foreground" : "sr-only"}>
         {login}
       </span>
@@ -508,7 +463,6 @@ export function PullRequestActorLabel({
   );
 }
 
-/** Added and removed lines, coloured the way every host colours them. */
 export function PullRequestDiffStat({
   additions,
   deletions,
@@ -518,8 +472,6 @@ export function PullRequestDiffStat({
   deletions: number;
   className?: string;
 }) {
-  // Not every host reports line counts. Showing "+0 -0" would read as an empty change set
-  // rather than as a missing one, so the stat is left out instead.
   if (additions === 0 && deletions === 0) {
     return null;
   }
@@ -531,13 +483,6 @@ export function PullRequestDiffStat({
   );
 }
 
-/**
- * Dot-separated metadata. It owns the separator, and draws one only between the segments that
- * survive, so a caller can render `{condition ? <span/> : null}` without leaving a stray dot.
- * `Children.toArray` drops the nullish entries and keys what remains, which a plain array
- * check would not do for a single child or a fragment. A separator borrows the key of the
- * segment it precedes, so it stays stable without counting positions.
- */
 function separatorKey(segment: ReactNode): string {
   return `separator:${isValidElement(segment) ? String(segment.key) : String(segment)}`;
 }
@@ -592,4 +537,65 @@ export function summarizePullRequestChecks(checks: ReadonlyArray<PullRequestChec
   }
   if (pending > 0) return `${pending} of ${checks.length} running`;
   return passed === checks.length ? "All checks passed" : `${passed} of ${checks.length} passing`;
+}
+
+export function PullRequestCommentTime({
+  at,
+  url,
+}: {
+  at: string;
+  url?: string | null | undefined;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          url ? (
+            <a
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-muted-foreground hover:text-foreground hover:underline"
+            />
+          ) : (
+            <span className="text-muted-foreground" />
+          )
+        }
+      >
+        <time dateTime={at}>{formatRelativeTimeLabel(at)}</time>
+      </TooltipTrigger>
+      <TooltipPopup>
+        {new Date(at).toLocaleString()}
+        {url ? " · Open comment on host" : ""}
+      </TooltipPopup>
+    </Tooltip>
+  );
+}
+
+export function PullRequestLabelOption({
+  label,
+  checked,
+  checkLabel,
+}: {
+  label: Pick<PullRequestLabel, "name" | "color"> & { readonly description?: string | null };
+  checked: boolean;
+  checkLabel: string;
+}) {
+  const dot = pullRequestLabelColor(label.color);
+  return (
+    <>
+      <span
+        aria-hidden
+        className="size-2 shrink-0 rounded-full bg-muted-foreground"
+        {...(dot ? { style: { backgroundColor: dot } } : {})}
+      />
+      <span className="min-w-0 flex-1 truncate">
+        {label.name}
+        {label.description ? (
+          <span className="text-muted-foreground"> · {label.description}</span>
+        ) : null}
+      </span>
+      {checked ? <CheckIcon aria-label={checkLabel} className="size-3.5 shrink-0" /> : null}
+    </>
+  );
 }

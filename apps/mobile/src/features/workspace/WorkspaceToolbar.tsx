@@ -14,12 +14,12 @@ import { KeyboardStickyView, useKeyboardState } from "react-native-keyboard-cont
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useResolveClassNames } from "uniwind";
 
-import { SymbolView, type AppSymbolName } from "../../components/AppSymbol";
-import { GlassSurface } from "../../components/GlassSurface";
+import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
+import { GlassSurface } from "../../components/ui/GlassSurface";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
 import { WorkspaceDock } from "./WorkspaceDock";
 import { useWorkspaceTabs } from "./WorkspaceTabsContext";
-import { WORKSPACE_TAB_PRESENTATION, WORKSPACE_TOOLBAR } from "./workspace-tabs-state";
+import { WORKSPACE_TOOLBAR, WORKSPACE_TAB_PRESENTATION } from "./workspace-tabs-state";
 
 function ToolbarButton(props: {
   label: string;

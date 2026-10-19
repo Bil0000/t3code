@@ -25,7 +25,7 @@ import * as Schema from "effect/Schema";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import * as RpcMiddleware from "effect/rpc/RpcMiddleware";
-import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { NonNegativeInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
   CodexAuthCallbackInput,
   CodexAuthCallbackState,
@@ -163,6 +163,20 @@ import {
 import { ProviderInstanceId, ProviderInstanceMutation } from "./providerInstance.ts";
 import {
   IssueCandidates,
+  IssueDependenciesInput,
+  IssueDependenciesPage,
+  IssueSetDependencyInput,
+  IssueCandidatesInput,
+  IssueAssigneeCandidatesPage,
+  IssueEditCommentInput,
+  IssueHierarchyPage,
+  IssueHistoryPage,
+  IssueLabelCandidatesPage,
+  IssueLinkedPullRequestsPage,
+  IssuePageRef,
+  IssueHistoryInput,
+  IssueScopePageRef,
+  IssueSetParentInput,
   IssueCommentInput,
   IssueCommentsPage,
   IssueCommentsPageInput,
@@ -173,18 +187,21 @@ import {
   IssueListResult,
   IssueOperationError,
   IssueReactionInput,
+  issueAccountRequest,
+  issueListRequest,
   IssueRef,
   IssueResolveUrlInput,
   IssueResolvedUrl,
-  IssueScopeRef,
   IssueSetStateInput,
-  IssueTemplateList,
   IssueTemplatesInput,
+  IssueTemplateList,
   IssueTrackerBindProjectInput,
   IssueTrackerConnectInput,
   IssueTrackerConnection,
   IssueTrackerConnectionError,
   IssueTrackerConnectionList,
+  IssueTrackerScopesInput,
+  IssueTrackerScopePage,
   IssueUnavailableError,
   IssueUpdateInput,
 } from "./issue.ts";
@@ -239,6 +256,7 @@ import {
   OrchestrationV2StopWorkflowError,
   OrchestrationV2DispatchCommandError,
   OrchestrationV2GetShellSnapshotError,
+  OrchestrationV2CommandOutputError,
   OrchestrationV2GetThreadProjectionError,
   OrchestrationV2RpcSchemas,
   OrchestrationV2ThreadLaunchError,
@@ -353,6 +371,7 @@ import {
 import { UsagePricing, UsageReadError, UsageSummary, UsageSummaryInput } from "./usage.ts";
 import {
   StorageCleanupReport,
+  DatabaseStorageStatus,
   ServerSettings,
   ServerSettingsError,
   ServerSettingsPatch,
@@ -397,7 +416,6 @@ import { VcsError } from "./vcs.ts";
 import { Project, ProjectMutation, ProjectMutationError } from "./project.ts";
 
 export const WS_METHODS = {
-  // Project registry methods
   projectsList: "projects.list",
   projectsAdd: "projects.add",
   projectsRemove: "projects.remove",
@@ -410,10 +428,8 @@ export const WS_METHODS = {
   projectsEnsureScratch: "projects.ensureScratch",
   projectsCreateNew: "projects.createNew",
 
-  // Shell methods
   shellOpenInEditor: "shell.openInEditor",
 
-  // Filesystem methods
   filesystemBrowse: "filesystem.browse",
   filesystemGetMetadata: "filesystem.getMetadata",
   agentSessionsScan: "agentSessions.scan",
@@ -423,13 +439,11 @@ export const WS_METHODS = {
   attachmentsCreateUploadUrl: "attachments.createUploadUrl",
   attachmentsDelete: "attachments.delete",
 
-  // MCP Apps methods
   mcpAppsCallTool: "mcpApps.callTool",
   mcpAppsToolInfo: "mcpApps.toolInfo",
   mcpAppsReadResource: "mcpApps.readResource",
   mcpAppsUpdateModelContext: "mcpApps.updateModelContext",
 
-  // Provider methods
   providerUploadFeedback: "provider.uploadFeedback",
   providerAuthStart: "provider.auth.start",
   providerConsumeResetCredit: "provider.consumeResetCredit",
@@ -447,7 +461,6 @@ export const WS_METHODS = {
   providerInstallSubscribe: "provider.install.subscribe",
   providerInstallRemove: "provider.install.remove",
 
-  // VCS methods
   vcsPull: "vcs.pull",
   vcsRefreshStatus: "vcs.refreshStatus",
   vcsListRefs: "vcs.listRefs",
@@ -457,16 +470,13 @@ export const WS_METHODS = {
   vcsSwitchRef: "vcs.switchRef",
   vcsInit: "vcs.init",
 
-  // Git workflow methods
   gitRunStackedAction: "git.runStackedAction",
   gitResolvePullRequest: "git.resolvePullRequest",
   gitPreparePullRequestThread: "git.preparePullRequestThread",
 
-  // Review methods
   reviewGetDiffPreview: "review.getDiffPreview",
   reviewGetDiffFileContents: "review.getDiffFileContents",
 
-  // Terminal methods
   terminalOpen: "terminal.open",
   terminalAttach: "terminal.attach",
   terminalObserve: "terminal.observe",
@@ -476,7 +486,6 @@ export const WS_METHODS = {
   terminalRestart: "terminal.restart",
   terminalClose: "terminal.close",
 
-  // Preview methods
   previewOpen: "preview.open",
   previewNavigate: "preview.navigate",
   previewResize: "preview.resize",
@@ -488,7 +497,6 @@ export const WS_METHODS = {
   previewReportProfiles: "preview.reportProfiles",
   previewReportStatus: "preview.reportStatus",
 
-  // Device methods
   deviceConfigure: "device.configure",
   deviceList: "device.list",
   deviceTestHost: "device.testHost",
@@ -498,7 +506,6 @@ export const WS_METHODS = {
   deviceDetail: "device.detail",
   deviceAction: "device.action",
 
-  // Server meta
   serverProbe: "server.probe",
   serverGetConfig: "server.getConfig",
   serverRefreshProviders: "server.refreshProviders",
@@ -510,6 +517,7 @@ export const WS_METHODS = {
   serverRemoveKeybinding: "server.removeKeybinding",
   serverRunStorageCleanup: "server.runStorageCleanup",
   serverGetStorageCleanupReport: "server.getStorageCleanupReport",
+  serverGetDatabaseStorage: "server.getDatabaseStorage",
   serverGetSettings: "server.getSettings",
   serverUpdateSettings: "server.updateSettings",
   serverDiscoverSourceControl: "server.discoverSourceControl",
@@ -538,7 +546,6 @@ export const WS_METHODS = {
   serverGetUsageSummary: "server.getUsageSummary",
   serverRefreshUsageRates: "server.refreshUsageRates",
 
-  // Scheduled tasks
   scheduledTasksList: "scheduledTasks.list",
   scheduledTasksSubscribe: "scheduledTasks.subscribe",
   scheduledTasksUpsert: "scheduledTasks.upsert",
@@ -550,11 +557,9 @@ export const WS_METHODS = {
   scheduledTasksListWebhookDeliveries: "scheduledTasks.listWebhookDeliveries",
   scheduledTasksGetWebhookDelivery: "scheduledTasks.getWebhookDelivery",
 
-  // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
   cloudInstallRelayClient: "cloud.installRelayClient",
 
-  // Pull request methods
   pullRequestsList: "pullRequests.list",
   pullRequestsListStats: "pullRequests.listStats",
   pullRequestsSummary: "pullRequests.summary",
@@ -600,11 +605,22 @@ export const WS_METHODS = {
   issuesUpdate: "issues.update",
   issuesSetState: "issues.setState",
   issuesReact: "issues.react",
+  issuesHistory: "issues.history",
+  issuesLinkedPullRequests: "issues.linkedPullRequests",
+  issuesHierarchy: "issues.hierarchy",
+  issuesDependencies: "issues.dependencies",
+  issuesSetDependency: "issues.setDependency",
+  issuesLabelCandidates: "issues.labelCandidates",
+  issuesAssigneeCandidates: "issues.assigneeCandidates",
+  issuesEditComment: "issues.editComment",
+  issuesSetParent: "issues.setParent",
+  issuesRefreshThreadLinks: "issues.refreshThreadLinks",
+
   issueTrackersList: "issueTrackers.list",
+  issueTrackersScopes: "issueTrackers.scopes",
   issueTrackersConnect: "issueTrackers.connect",
   issueTrackersBindProject: "issueTrackers.bindProject",
 
-  // Source control methods
   sourceControlLookupRepository: "sourceControl.lookupRepository",
   sourceControlCloneRepository: "sourceControl.cloneRepository",
   sourceControlPublishRepository: "sourceControl.publishRepository",
@@ -613,7 +629,6 @@ export const WS_METHODS = {
   projectCloneRetry: "projectClone.retry",
   subscribeProjectClones: "subscribeProjectClones",
 
-  // Streaming subscriptions
   subscribeVcsStatus: "subscribeVcsStatus",
   subscribeWorktreeSetup: "subscribeWorktreeSetup",
   worktreeSetupCancel: "worktreeSetup.cancel",
@@ -655,16 +670,8 @@ const WsServerGetConfigRpc = Rpc.make(WS_METHODS.serverGetConfig, {
 
 const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProviders, {
   payload: Schema.Struct({
-    /**
-     * When supplied, only refresh this specific provider instance. When
-     * omitted, refresh all configured instances — the legacy `refresh()`
-     * behaviour retained for transports that still dispatch untargeted
-     * refreshes.
-     */
     instanceId: Schema.optional(ProviderInstanceId),
     cwd: Schema.optional(TrimmedNonEmptyString),
-    /** With `instanceId` and `cwd`: rescan the workspace's skills and slash
-     * commands even when a snapshot for that cwd already exists. */
     fresh: Schema.optional(Schema.Boolean),
     /** Explicit user request: bypass T3-owned caches and rediscover models.
      * Background status refreshes must not open agent sessions. */
@@ -800,6 +807,13 @@ const WsServerRunStorageCleanupRpc = Rpc.make(WS_METHODS.serverRunStorageCleanup
 const WsServerGetStorageCleanupReportRpc = Rpc.make(WS_METHODS.serverGetStorageCleanupReport, {
   payload: Schema.Struct({}),
   success: Schema.NullOr(StorageCleanupReport),
+  stream: true,
+  error: EnvironmentAuthorizationError,
+});
+
+const WsServerGetDatabaseStorageRpc = Rpc.make(WS_METHODS.serverGetDatabaseStorage, {
+  payload: Schema.Struct({}),
+  success: Schema.NullOr(DatabaseStorageStatus),
   stream: true,
   error: EnvironmentAuthorizationError,
 });
@@ -948,10 +962,6 @@ const WsServerGetUsageSummaryRpc = Rpc.make(WS_METHODS.serverGetUsageSummary, {
   error: Schema.Union([EnvironmentAuthorizationError, UsageReadError]),
 });
 
-/**
- * Refetches the model rate table ahead of its daily TTL, so a model released
- * since the last fetch gets priced. The next usage summary uses the new table.
- */
 const WsServerRefreshUsageRatesRpc = Rpc.make(WS_METHODS.serverRefreshUsageRates, {
   payload: Schema.Struct({}),
   success: UsagePricing,
@@ -1190,7 +1200,6 @@ const WsPullRequestsRequestReviewersRpc = Rpc.make(WS_METHODS.pullRequestsReques
   error: PullRequestRpcError,
 });
 
-/** Read when the label menu opens, for the same reason the reviewer candidates are. */
 const WsPullRequestsLabelCandidatesRpc = Rpc.make(WS_METHODS.pullRequestsLabelCandidates, {
   payload: PullRequestRef,
   success: PullRequestLabelCandidateList,
@@ -1210,69 +1219,129 @@ const IssueRpcError = Schema.Union([
 ]);
 
 const WsIssuesListRpc = Rpc.make(WS_METHODS.issuesList, {
-  payload: IssueListInput,
+  payload: issueListRequest(IssueListInput),
   success: IssueListResult,
   error: IssueRpcError,
 });
 
 const WsIssuesResolveUrlRpc = Rpc.make(WS_METHODS.issuesResolveUrl, {
-  payload: IssueResolveUrlInput,
+  payload: issueAccountRequest(IssueResolveUrlInput),
   success: IssueResolvedUrl,
   error: IssueRpcError,
 });
 
 const WsIssuesDetailRpc = Rpc.make(WS_METHODS.issuesDetail, {
-  payload: IssueRef,
+  payload: issueAccountRequest(IssueRef),
   success: IssueDetail,
   error: IssueRpcError,
 });
 
 /** Older comments, one page at a time, past the cursor the detail handed over. */
 const WsIssuesCommentsRpc = Rpc.make(WS_METHODS.issuesComments, {
-  payload: IssueCommentsPageInput,
+  payload: issueAccountRequest(IssueCommentsPageInput),
   success: IssueCommentsPage,
   error: IssueRpcError,
 });
 
 const WsIssuesTemplatesRpc = Rpc.make(WS_METHODS.issuesTemplates, {
-  payload: IssueTemplatesInput,
+  payload: issueAccountRequest(IssueTemplatesInput),
   success: IssueTemplateList,
   error: IssueRpcError,
 });
 
 /** Read when a label or assignee picker opens, not with every issue. */
 const WsIssuesCandidatesRpc = Rpc.make(WS_METHODS.issuesCandidates, {
-  payload: IssueScopeRef,
+  payload: issueAccountRequest(IssueCandidatesInput),
   success: IssueCandidates,
   error: IssueRpcError,
 });
 
 const WsIssuesCreateRpc = Rpc.make(WS_METHODS.issuesCreate, {
-  payload: IssueCreateInput,
+  payload: issueAccountRequest(IssueCreateInput, "projectId", "title"),
   success: IssueCreateResult,
   error: IssueRpcError,
 });
 
 const WsIssuesCommentRpc = Rpc.make(WS_METHODS.issuesComment, {
-  payload: IssueCommentInput,
+  payload: issueAccountRequest(IssueCommentInput),
   success: Schema.Void,
   error: IssueRpcError,
 });
 
 const WsIssuesUpdateRpc = Rpc.make(WS_METHODS.issuesUpdate, {
-  payload: IssueUpdateInput,
+  payload: issueAccountRequest(IssueUpdateInput, "projectId", "title"),
   success: Schema.Void,
   error: IssueRpcError,
 });
 
 const WsIssuesSetStateRpc = Rpc.make(WS_METHODS.issuesSetState, {
-  payload: IssueSetStateInput,
+  payload: issueAccountRequest(IssueSetStateInput, "projectId", "state"),
   success: Schema.Void,
   error: IssueRpcError,
 });
 
 const WsIssuesReactRpc = Rpc.make(WS_METHODS.issuesReact, {
-  payload: IssueReactionInput,
+  payload: issueAccountRequest(IssueReactionInput),
+  success: Schema.Void,
+  error: IssueRpcError,
+});
+
+const WsIssuesHistoryRpc = Rpc.make(WS_METHODS.issuesHistory, {
+  payload: issueAccountRequest(IssueHistoryInput),
+  success: IssueHistoryPage,
+  error: IssueRpcError,
+});
+
+const WsIssuesLinkedPullRequestsRpc = Rpc.make(WS_METHODS.issuesLinkedPullRequests, {
+  payload: issueAccountRequest(IssuePageRef),
+  success: IssueLinkedPullRequestsPage,
+  error: IssueRpcError,
+});
+
+const WsIssuesDependenciesRpc = Rpc.make(WS_METHODS.issuesDependencies, {
+  payload: issueAccountRequest(IssueDependenciesInput),
+  success: IssueDependenciesPage,
+  error: IssueRpcError,
+});
+
+const WsIssuesSetDependencyRpc = Rpc.make(WS_METHODS.issuesSetDependency, {
+  payload: issueAccountRequest(IssueSetDependencyInput),
+  success: Schema.Void,
+  error: IssueRpcError,
+});
+
+const WsIssuesHierarchyRpc = Rpc.make(WS_METHODS.issuesHierarchy, {
+  payload: issueAccountRequest(IssuePageRef),
+  success: IssueHierarchyPage,
+  error: IssueRpcError,
+});
+
+const WsIssuesLabelCandidatesRpc = Rpc.make(WS_METHODS.issuesLabelCandidates, {
+  payload: issueAccountRequest(IssueScopePageRef),
+  success: IssueLabelCandidatesPage,
+  error: IssueRpcError,
+});
+
+const WsIssuesAssigneeCandidatesRpc = Rpc.make(WS_METHODS.issuesAssigneeCandidates, {
+  payload: issueAccountRequest(IssueScopePageRef),
+  success: IssueAssigneeCandidatesPage,
+  error: IssueRpcError,
+});
+
+const WsIssuesEditCommentRpc = Rpc.make(WS_METHODS.issuesEditComment, {
+  payload: issueAccountRequest(IssueEditCommentInput, "projectId", "body"),
+  success: Schema.Void,
+  error: IssueRpcError,
+});
+
+const WsIssuesSetParentRpc = Rpc.make(WS_METHODS.issuesSetParent, {
+  payload: issueAccountRequest(IssueSetParentInput),
+  success: Schema.Void,
+  error: IssueRpcError,
+});
+
+const WsIssuesRefreshThreadLinksRpc = Rpc.make(WS_METHODS.issuesRefreshThreadLinks, {
+  payload: Schema.Struct({ threadId: ThreadId }),
   success: Schema.Void,
   error: IssueRpcError,
 });
@@ -1286,6 +1355,12 @@ const IssueTrackerRpcError = Schema.Union([
 const WsIssueTrackersListRpc = Rpc.make(WS_METHODS.issueTrackersList, {
   payload: Schema.Struct({}),
   success: IssueTrackerConnectionList,
+  error: IssueTrackerRpcError,
+});
+
+const WsIssueTrackersScopesRpc = Rpc.make(WS_METHODS.issueTrackersScopes, {
+  payload: IssueTrackerScopesInput,
+  success: IssueTrackerScopePage,
   error: IssueTrackerRpcError,
 });
 
@@ -1390,14 +1465,12 @@ const WsProjectsMutateRpc = Rpc.make(WS_METHODS.projectsMutate, {
   error: Schema.Union([ProjectMutationError, EnvironmentAuthorizationError]),
 });
 
-// Finds or creates the Scratch project rooted at ServerConfig.scratchWorkspaceRoot.
 const WsProjectsEnsureScratchRpc = Rpc.make(WS_METHODS.projectsEnsureScratch, {
   payload: Schema.Struct({}),
   success: ProjectEnsureScratchResult,
   error: Schema.Union([OrchestrationDispatchCommandError, EnvironmentAuthorizationError]),
 });
 
-// Makes a folder under ServerConfig.newProjectsRoot with a first commit, then the project.
 const WsProjectsCreateNewRpc = Rpc.make(WS_METHODS.projectsCreateNew, {
   payload: ProjectCreateNewInput,
   success: ProjectCreateNewResult,
@@ -1548,7 +1621,10 @@ const WsVcsListRefsRpc = Rpc.make(WS_METHODS.vcsListRefs, {
 });
 
 const WsVcsCreateWorktreeRpc = Rpc.make(WS_METHODS.vcsCreateWorktree, {
-  payload: VcsCreateWorktreeInput,
+  // Clients cannot choose the folder: new worktrees go in the server's managed
+  // worktrees folder. `path` stays a required null because older servers
+  // require the key.
+  payload: Schema.Struct({ ...VcsCreateWorktreeInput.fields, path: Schema.Null }),
   success: VcsCreateWorktreeResult,
   error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
 });
@@ -1575,11 +1651,6 @@ const WsVcsInitRpc = Rpc.make(WS_METHODS.vcsInit, {
   error: Schema.Union([VcsError, EnvironmentAuthorizationError]),
 });
 
-/**
- * Ephemeral live diff preview for compact/mobile surfaces.
- * Not the persisted T3 Review model. Future review sessions should use
- * review.open* + review.getSnapshot.
- */
 const WsReviewGetDiffPreviewRpc = Rpc.make(WS_METHODS.reviewGetDiffPreview, {
   payload: ReviewDiffPreviewInput,
   success: ReviewDiffPreviewResult,
@@ -1874,6 +1945,16 @@ const WsOrchestrationV2SubscribeThreadRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS
   stream: true,
 });
 
+const WsOrchestrationV2SubscribeCommandOutputRpc = Rpc.make(
+  ORCHESTRATION_V2_WS_METHODS.subscribeCommandOutput,
+  {
+    payload: OrchestrationV2RpcSchemas.subscribeCommandOutput.input,
+    success: OrchestrationV2RpcSchemas.subscribeCommandOutput.output,
+    error: Schema.Union([OrchestrationV2CommandOutputError, EnvironmentAuthorizationError]),
+    stream: true,
+  },
+);
+
 const WsSubscribeTerminalEventsRpc = Rpc.make(WS_METHODS.subscribeTerminalEvents, {
   payload: Schema.Struct({}),
   success: TerminalEvent,
@@ -1891,14 +1972,11 @@ const WsSubscribeTerminalMetadataRpc = Rpc.make(WS_METHODS.subscribeTerminalMeta
 export const WsSubscribeServerConfigRpc = Rpc.make(WS_METHODS.subscribeServerConfig, {
   payload: Schema.Struct({
     /**
-     * Whether this client understands `environmentThemesUpdated` events.
-     * Already-shipped clients decode the stream against the old event union
-     * and would die on an unknown member, so the server emits the theme
-     * stream only to subscribers that ask for it. Absent on old clients;
-     * dropped by old servers.
+     * Already-shipped clients decode the stream against the old event union and
+     * would die on an unknown member, so the server emits the theme stream only
+     * to subscribers that ask for it.
      */
     environmentThemes: Schema.optional(Schema.Boolean),
-    /** Whether this client understands `usageLimitSourcesUpdated` events. */
     usageLimitSources: Schema.optional(Schema.Boolean),
     /**
      * Whether this client answers `/usage-limits` itself. The server injects
@@ -1925,7 +2003,6 @@ const WsScheduledTasksListRpc = Rpc.make(WS_METHODS.scheduledTasksList, {
   error: Schema.Union([ScheduledTaskError, EnvironmentAuthorizationError]),
 });
 
-/** Streams the full scheduled-task list: one snapshot on subscribe, then a fresh list after every change. */
 const WsScheduledTasksSubscribeRpc = Rpc.make(WS_METHODS.scheduledTasksSubscribe, {
   payload: ScheduledTaskListInput,
   success: ScheduledTaskListResult,
@@ -2010,11 +2087,6 @@ const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeResourceTel
   stream: true,
 });
 
-/**
- * Checks the connection's scopes against the scope each RPC declares, before
- * the handler runs. Every RPC in `WsRpcGroup` carries it, so a handler cannot
- * be added without authorization.
- */
 export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthorization>()(
   "t3/contracts/RpcScopeAuthorization",
   { error: EnvironmentAuthorizationError },
@@ -2038,7 +2110,19 @@ export const WsIssuesRpcGroup = RpcGroup.make(
   WsIssuesUpdateRpc,
   WsIssuesSetStateRpc,
   WsIssuesReactRpc,
+  WsIssuesHistoryRpc,
+  WsIssuesLinkedPullRequestsRpc,
+  WsIssuesHierarchyRpc,
+  WsIssuesDependenciesRpc,
+  WsIssuesSetDependencyRpc,
+  WsIssuesLabelCandidatesRpc,
+  WsIssuesAssigneeCandidatesRpc,
+  WsIssuesEditCommentRpc,
+  WsIssuesSetParentRpc,
+  WsIssuesRefreshThreadLinksRpc,
+
   WsIssueTrackersListRpc,
+  WsIssueTrackersScopesRpc,
   WsIssueTrackersConnectRpc,
   WsIssueTrackersBindProjectRpc,
 ).middleware(RpcScopeAuthorization);
@@ -2071,6 +2155,7 @@ export const WsCoreRpcGroup = RpcGroup.make(
   WsServerRemoveKeybindingRpc,
   WsServerRunStorageCleanupRpc,
   WsServerGetStorageCleanupReportRpc,
+  WsServerGetDatabaseStorageRpc,
   WsServerGetSettingsRpc,
   WsServerUpdateSettingsRpc,
   WsServerDiscoverSourceControlRpc,
@@ -2238,6 +2323,7 @@ export const WsCoreRpcGroup = RpcGroup.make(
   WsOrchestrationV2SubscribeArchivedShellRpc,
   WsOrchestrationV2SubscribeShellRpc,
   WsOrchestrationV2SubscribeThreadRpc,
+  WsOrchestrationV2SubscribeCommandOutputRpc,
 ).middleware(RpcScopeAuthorization);
 
 export const WsRpcGroup = WsCoreRpcGroup.merge(WsIssuesRpcGroup);

@@ -2,7 +2,10 @@ import * as NodeModule from "node:module";
 import { describe, expect, it } from "vite-plus/test";
 import {
   androidWorkspaceNavigationState,
+  androidWorkspaceDestinationAnimation,
+  resetAndroidWorkspace,
   type AndroidWorkspaceDestination,
+  type AndroidWorkspaceResetAction,
 } from "./android-workspace-navigation";
 
 const require = NodeModule.createRequire(import.meta.url);
@@ -198,15 +201,86 @@ describe("Android workspace navigation", () => {
     expect(state.index).toBe(0);
   });
 
-  it("keeps an issue in the shared detail slot and drops its sheets when a peer is selected", () => {
-    let state = select(legacyHistory(), issue);
-    expect(names(state)).toEqual(["Home", "Issue"]);
-    state = apply(state, StackActions.push("IssueCompose", { ...issue.params, mode: "comment" }));
-    const same = select(state, issue);
+  it("keeps issue detail identity scoped to its account", () => {
+    const first = select(legacyHistory(), {
+      ...issue,
+      params: { ...issue.params, connectionId: "CaseSensitive" },
+    });
+    const withSheet = apply(
+      first,
+      StackActions.push("IssueCompose", {
+        ...issue.params,
+        connectionId: "CaseSensitive",
+        mode: "comment",
+      }),
+    );
+    const same = select(withSheet, {
+      ...issue,
+      params: { ...issue.params, connectionId: "CaseSensitive" },
+    });
+    expect(same.routes[1]?.key).toBe(first.routes[1]?.key);
     expect(names(same)).toEqual(["Home", "Issue"]);
-    expect(same.routes[1]?.key).toBe(state.routes[1]?.key);
-    const other = select(state, { name: "Issue", params: { ...issue.params, key: "ENG-8" } });
-    expect(other.routes[1]?.key).not.toBe(state.routes[1]?.key);
+    expect(
+      select(same, {
+        ...issue,
+        params: { ...issue.params, connectionId: "CaseSensitive", key: "ENG-8" },
+      }).routes[1]?.key,
+    ).not.toBe(same.routes[1]?.key);
+    const other = select(first, {
+      ...issue,
+      params: { ...issue.params, connectionId: "casesensitive" },
+    });
+    expect(other.routes[1]?.key).not.toBe(first.routes[1]?.key);
+    expect(names(other)).toEqual(["Home", "Issue"]);
     expect(names(select(other, pullRequest))).toEqual(["Home", "PullRequest"]);
   });
+
+  it("resets the root stack when a nested Settings stack has focus", () => {
+    const root = apply(router.getInitialState(options), StackActions.push("SettingsSheet"));
+    const settings = router.getInitialState({
+      ...options,
+      routeNames: ["SettingsContent", "SettingsEnvironments"],
+    });
+    const actions: AndroidWorkspaceResetAction[] = [];
+    const rootNavigation = {
+      dispatch: () => undefined,
+      getParent: () => undefined,
+      getState: () => root,
+    };
+    resetAndroidWorkspace(
+      {
+        dispatch: (action) => actions.push(action),
+        getParent: () => rootNavigation,
+        getState: () => settings,
+      },
+      thread,
+    );
+    const [action] = actions;
+    expect(action?.target).toBe(root.key);
+    expect(names(apply(root, action!))).toEqual(["Home", "Thread"]);
+  });
+
+  it("resets from the navigation container before any navigation action", () => {
+    const root = router.getInitialState(options);
+    const actions: AndroidWorkspaceResetAction[] = [];
+    // The container only learns the root state after the first action.
+    resetAndroidWorkspace(
+      {
+        dispatch: (action) => actions.push(action),
+        getParent: () => undefined,
+        getState: () => undefined,
+        getRootState: () => root,
+      },
+      thread,
+    );
+    const [action] = actions;
+    expect(action?.target).toBe(root.key);
+    expect(names(apply(root, action!))).toEqual(["Home", "Thread"]);
+  });
+});
+
+it("uses the shared split detail transition for issues without changing compact navigation", () => {
+  expect(androidWorkspaceDestinationAnimation("Issue", true)).toBe("none");
+  expect(androidWorkspaceDestinationAnimation("Issue", false)).toBeUndefined();
+  expect(androidWorkspaceDestinationAnimation("IssueCompose", true)).toBeUndefined();
 });

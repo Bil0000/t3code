@@ -1,11 +1,18 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import type { StaticScreenProps } from "@react-navigation/native";
+import type { IssueFieldValues } from "@t3tools/contracts";
+import {
+  composeTemplateBody,
+  initialTemplateValues,
+  missingRequiredTemplateFields,
+  type IssueTemplateValues,
+} from "@t3tools/client-runtime/issue-form";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { use, useRef, useState } from "react";
 import { Alert, Linking, Platform, Pressable, View } from "react-native";
-import { AppText as Text, AppTextInput as TextInput } from "../../components/AppText";
-import { SymbolView } from "../../components/AppSymbol";
-import { MaterialButton } from "../../components/MaterialButton";
+import { AppText as Text, AppTextInput as TextInput } from "../../components/ui/AppText";
+import { SymbolView } from "../../components/ui/AppSymbol";
+import { Button } from "../../components/ui/Button";
 import { issueEnvironment } from "../../state/issues";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -14,6 +21,8 @@ import { PullRequestSheetContent as SheetContent } from "../pull-requests/PullRe
 import { issueCreateBlocked, resolveIssueType } from "./issueDetail";
 import {
   fillIssueTemplate,
+  mobileNativeFieldError,
+  mobileNativeFieldValues,
   issueTemplateBodyRead,
   issueTemplateCatalogRead,
   selectedIssueTemplate,
@@ -32,13 +41,18 @@ export function IssueCreateSheet({
   const openIssue = useOpenIssue({ replace: true });
   const [scopeIndex, setScopeIndex] = useState(0);
   const scope = scopes[Math.min(scopeIndex, scopes.length - 1)] ?? null;
+  const scopeKey = JSON.stringify([scope?.environmentId, scope?.scope]);
+  const [heldScopeKey, setHeldScopeKey] = useState(scopeKey);
   const [templateKey, setTemplateKey] = useState(BLANK);
+  const [templateChosen, setTemplateChosen] = useState(false);
+  const [values, setValues] = useState<IssueTemplateValues>({});
+  const [nativeValues, setNativeValues] = useState<IssueFieldValues>({});
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [titleEdited, setTitleEdited] = useState(false);
   const [bodyEdited, setBodyEdited] = useState(false);
   const [templateDraft, setTemplateDraft] = useState<{
-    scopeIndex: number;
+    scopeKey: string;
     key: string;
     title: boolean;
     body: boolean;
@@ -51,10 +65,21 @@ export function IssueCreateSheet({
   const pending = useRef(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  if (heldScopeKey !== scopeKey) {
+    setHeldScopeKey(scopeKey);
+    setTemplateKey(BLANK);
+    setTemplateChosen(false);
+    setTemplateDraft(null);
+    setValues({});
+    setNativeValues({});
+    setExtras({ labels: [], assignees: [] });
+    setIssueType(null);
+  }
   const create = useAtomCommand(issueEnvironment.create, { reportFailure: false });
   const canWrite = useAtomValue(
     issueEnvironment.create.permissionAtom(scope?.environmentId ?? null),
   );
+  const requestedIssueType = heldScopeKey === scopeKey ? issueType : null;
   const catalogRead = issueTemplateCatalogRead(scope);
   const templatesQuery = useEnvironmentQuery(
     catalogRead ? issueEnvironment.templates(catalogRead) : null,
@@ -64,7 +89,7 @@ export function IssueCreateSheet({
   const chosenTemplate = selectedIssueTemplate(templateKey, templatesQuery, selectedQuery);
   if (
     templateDraft &&
-    templateDraft.scopeIndex === scopeIndex &&
+    templateDraft.scopeKey === scopeKey &&
     templateDraft.key === templateKey &&
     chosenTemplate.template
   ) {
@@ -72,6 +97,7 @@ export function IssueCreateSheet({
     setTitle(filled.title);
     setBody(filled.body);
     setExtras({ labels: filled.labels, assignees: filled.assignees });
+    setValues(initialTemplateValues(chosenTemplate.template.fields ?? []));
     setTemplateDraft(null);
   }
   const templateRead = templatesQuery.error ? templatesQuery : selectedQuery;
@@ -79,13 +105,31 @@ export function IssueCreateSheet({
   const externalTemplates = templatesQuery.data?.externalTemplates ?? [];
   const blankAllowed = templatesQuery.data?.blankIssuesEnabled ?? true;
   const candidatesQuery = useEnvironmentQuery(
-    scope?.createIssueTypes === true
-      ? issueEnvironment.candidates({ environmentId: scope.environmentId, input: scope.scope })
+    scope && (scope.createIssueTypes === true || scope.createFields === true)
+      ? issueEnvironment.candidates({
+          environmentId: scope.environmentId,
+          input: {
+            ...scope.scope,
+            ...(requestedIssueType === null ? {} : { issueType: requestedIssueType }),
+          },
+        })
       : null,
   );
   const issueTypes = candidatesQuery.data?.issueTypes ?? [];
-  const chosenIssueType = resolveIssueType(issueTypes, issueType);
+  const chosenIssueType = resolveIssueType(issueTypes, requestedIssueType);
+  const nativeFields = candidatesQuery.data?.fields ?? [];
+  const nativeForm = scope?.createFields === true || nativeFields.length > 0;
+  if (nativeForm && issueType === null && chosenIssueType !== null) setIssueType(chosenIssueType);
+  const templateFields = chosenTemplate.template?.fields ?? [];
+  const missing = missingRequiredTemplateFields(templateFields, values);
+  const nativeError = nativeForm
+    ? (candidatesQuery.error ??
+      (candidatesQuery.isPending || candidatesQuery.data === null
+        ? "Loading fields…"
+        : mobileNativeFieldError(nativeFields, nativeValues)))
+    : null;
   const blocked =
+    (scope?.templates ? templatesQuery.error : null) ??
     issueCreateBlocked({
       hasScope: scope !== null,
       canWrite,
@@ -102,7 +146,10 @@ export function IssueCreateSheet({
               chosen: chosenIssueType,
             }
           : null,
-    }) ?? chosenTemplate.blocked;
+    }) ??
+    chosenTemplate.blocked ??
+    nativeError ??
+    (missing.length ? `Fill in ${missing.join(", ")}.` : null);
   const select = (event: string) => {
     let selection: unknown;
     try {
@@ -117,17 +164,22 @@ export function IssueCreateSheet({
       if (!Number.isInteger(index) || !scopes[index]) return;
       setScopeIndex(index);
       setTemplateKey(BLANK);
+      setTemplateChosen(false);
+      setValues({});
+      setNativeValues({});
       setTemplateDraft(null);
       setExtras({ labels: [], assignees: [] });
       setIssueType(null);
     } else if (field === "template") {
       const template = templates.find((entry) => entry.key === value);
       setTemplateKey(template ? template.key : BLANK);
+      setTemplateChosen(true);
+      setValues({});
       setExtras({ labels: [], assignees: [] });
       setTemplateDraft(
         template
           ? {
-              scopeIndex,
+              scopeKey,
               key: template.key,
               title: !titleEdited,
               body: !bodyEdited,
@@ -136,8 +188,21 @@ export function IssueCreateSheet({
       );
     } else if (field === "type" && issueTypes.some((type) => type.id === value)) {
       setIssueType(value);
+      setNativeValues({});
     }
   };
+  if (
+    scope?.templates &&
+    !templateChosen &&
+    !templatesQuery.isPending &&
+    templatesQuery.error === null &&
+    templates[0]
+  ) {
+    const first = templates[0];
+    setTemplateKey(first.key);
+    setTemplateChosen(true);
+    setTemplateDraft({ scopeKey, key: first.key, title: !titleEdited, body: !bodyEdited });
+  }
   const submit = async () => {
     if (pending.current || scope === null || blocked !== null || !title.trim()) return;
     pending.current = true;
@@ -149,7 +214,11 @@ export function IssueCreateSheet({
         input: {
           ...scope.scope,
           title: title.trim(),
-          body,
+          body: templateFields.length ? composeTemplateBody(templateFields, values) : body,
+          ...(templateKey ? { templateKey } : {}),
+          ...(nativeForm
+            ? { fieldValues: mobileNativeFieldValues(nativeFields, nativeValues) }
+            : {}),
           labels: extras.labels,
           assignees: extras.assignees,
           ...(chosenIssueType === null ? {} : { issueType: chosenIssueType }),
@@ -160,6 +229,7 @@ export function IssueCreateSheet({
       openIssue({
         environmentId: scope.environmentId,
         projectId: scope.scope.projectId,
+        ...(scope.scope.connectionId ? { connectionId: scope.scope.connectionId } : {}),
         tracker: scope.scope.tracker,
         host: scope.scope.host,
         scope: scope.scope.scope,
@@ -188,7 +258,7 @@ export function IssueCreateSheet({
       }
       busy={busy}
       footer={
-        <MaterialButton
+        <Button
           label={busy ? "Creating…" : "Create issue"}
           fullWidth
           tone={Platform.OS === "android" ? "primary" : "contrast"}
@@ -272,22 +342,164 @@ export function IssueCreateSheet({
         }}
         className="min-h-12 rounded-[20px] bg-grouped-card px-4 text-base text-foreground"
       />
-      <TextInput
-        multiline
-        accessibilityLabel="Description"
-        placeholder="Markdown is supported"
-        placeholderTextColorClassName="accent-foreground-muted"
-        editable={!busy}
-        value={body}
-        maxLength={65536}
-        onChangeText={(next) => {
-          setBodyEdited(true);
-          setTemplateDraft((held) => (held ? { ...held, body: false } : null));
-          setBody(next);
-        }}
-        className="min-h-36 rounded-[20px] bg-grouped-card p-4 text-base text-foreground"
-        style={{ textAlignVertical: "top" }}
-      />
+      {templateFields.length ? (
+        templateFields.map((field) => {
+          if (field.kind === "markdown") return <Text key={field.value}>{field.value}</Text>;
+          const value = values[field.id];
+          const label = `${field.label}${field.required ? " *" : ""}`;
+          const set = (next: string | readonly string[]) =>
+            setValues((held) => ({ ...held, [field.id]: next }));
+          return (
+            <View key={field.id} className="gap-2">
+              <Text>{label}</Text>
+              {field.description ? (
+                <Text className="text-xs text-foreground-muted">{field.description}</Text>
+              ) : null}
+              {field.kind === "dropdown" || field.kind === "checkboxes" ? (
+                <ListFilterMenu
+                  label={
+                    typeof value === "string" ? value || "Choose…" : value?.join(", ") || "Choose…"
+                  }
+                  accessibilityLabel={field.label}
+                  actions={(field.kind === "dropdown"
+                    ? field.options
+                    : field.options.map((option) => option.label)
+                  ).map((option) => ({
+                    id: option,
+                    title: option,
+                    state: (typeof value === "string" ? value === option : value?.includes(option))
+                      ? "on"
+                      : "off",
+                  }))}
+                  onSelect={(next) => {
+                    if (field.kind === "dropdown" && !field.multiple) set(next);
+                    else {
+                      const selected = typeof value === "string" ? [] : (value ?? []);
+                      set(
+                        selected.includes(next)
+                          ? selected.filter((item) => item !== next)
+                          : [...selected, next],
+                      );
+                    }
+                  }}
+                />
+              ) : (
+                <TextInput
+                  accessibilityLabel={field.label}
+                  value={typeof value === "string" ? value : ""}
+                  placeholder={field.placeholder ?? undefined}
+                  multiline={field.kind === "textarea"}
+                  maxLength={65536}
+                  editable={!busy}
+                  onChangeText={set}
+                  className="min-h-12 rounded-[20px] bg-grouped-card p-4 text-base text-foreground"
+                />
+              )}
+            </View>
+          );
+        })
+      ) : (
+        <TextInput
+          multiline
+          accessibilityLabel="Description"
+          placeholder="Markdown is supported"
+          placeholderTextColorClassName="accent-foreground-muted"
+          editable={!busy}
+          value={body}
+          maxLength={65536}
+          onChangeText={(next) => {
+            setBodyEdited(true);
+            setTemplateDraft((held) => (held ? { ...held, body: false } : null));
+            setBody(next);
+          }}
+          className="min-h-36 rounded-[20px] bg-grouped-card p-4 text-base text-foreground"
+          style={{ textAlignVertical: "top" }}
+        />
+      )}
+      {nativeFields.map((field) => {
+        const value = nativeValues[field.id];
+        const set = (next: string | readonly string[]) =>
+          setNativeValues((held) => ({ ...held, [field.id]: next }));
+        return (
+          <View key={field.id} className="gap-2">
+            <Text>
+              {field.label}
+              {field.required ? " *" : ""}
+            </Text>
+            {field.description ? (
+              <Text className="text-xs text-foreground-muted">{field.description}</Text>
+            ) : null}
+            {field.kind === "json" || field.kind === "cascading-select" ? (
+              <Text className="text-xs text-foreground-muted">
+                Fill in this field on the tracker.
+              </Text>
+            ) : field.kind === "select" || field.kind === "multiselect" ? (
+              <ListFilterMenu
+                label={
+                  typeof value === "string"
+                    ? (field.options?.find((option) => option.value === value)?.label ?? "Choose…")
+                    : value
+                        ?.map(
+                          (selected) =>
+                            field.options?.find((option) => option.value === selected)?.label ??
+                            selected,
+                        )
+                        .join(", ") || "Choose…"
+                }
+                accessibilityLabel={field.label}
+                actions={(field.options ?? []).map((option) => ({
+                  id: option.value,
+                  title: option.label,
+                  state: (
+                    typeof value === "string"
+                      ? value === option.value
+                      : value?.includes(option.value)
+                  )
+                    ? "on"
+                    : "off",
+                }))}
+                onSelect={(next) => {
+                  if (field.kind === "select") set(next);
+                  else {
+                    const selected = typeof value === "string" ? [] : (value ?? []);
+                    set(
+                      selected.includes(next)
+                        ? selected.filter((item) => item !== next)
+                        : [...selected, next],
+                    );
+                  }
+                }}
+              />
+            ) : (
+              <TextInput
+                accessibilityLabel={field.label}
+                value={typeof value === "string" ? value : ""}
+                multiline={field.kind === "textarea"}
+                placeholder={
+                  field.kind === "date"
+                    ? "YYYY-MM-DD"
+                    : field.kind === "datetime"
+                      ? "YYYY-MM-DDTHH:mm:ssZ"
+                      : undefined
+                }
+                keyboardType={field.kind === "number" ? "numeric" : "default"}
+                maxLength={65536}
+                editable={!busy}
+                onChangeText={set}
+                className="min-h-12 rounded-[20px] bg-grouped-card p-4 text-base text-foreground"
+              />
+            )}
+          </View>
+        );
+      })}
+      {scope &&
+      nativeFields.some((field) => field.kind === "json" || field.kind === "cascading-select") ? (
+        <Button
+          label="Open tracker"
+          tone="text"
+          onPress={() => void Linking.openURL(`https://${scope.scope.host}`)}
+        />
+      ) : null}
       {extras.labels.length || extras.assignees.length ? (
         <Text className="text-xs text-foreground-muted">
           {[
@@ -306,11 +518,12 @@ export function IssueCreateSheet({
               {templateRead.error}
             </Text>
           ) : null}
-          <MaterialButton label="Retry templates" tone="text" onPress={templateRead.refresh} />
+          <Button label="Retry templates" tone="text" onPress={templateRead.refresh} />
         </View>
       ) : null}
-      {scope?.createIssueTypes === true && candidatesQuery.error ? (
-        <MaterialButton label="Retry issue types" tone="text" onPress={candidatesQuery.refresh} />
+      {(scope?.createIssueTypes === true || scope?.createFields === true) &&
+      candidatesQuery.error ? (
+        <Button label="Retry issue types" tone="text" onPress={candidatesQuery.refresh} />
       ) : null}
       {error ? (
         <Text selectable className="text-sm text-danger-foreground">

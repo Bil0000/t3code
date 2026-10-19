@@ -2,22 +2,44 @@ import { useNavigation, useRoute, StackActions } from "@react-navigation/native"
 import { nativePullRequestDestination } from "../lib/pullRequestNavigation";
 import { useCallback } from "react";
 import { Platform } from "react-native";
-import { CommonActions } from "@react-navigation/native";
-import { androidWorkspaceNavigationState } from "../lib/android-workspace-navigation";
+import { resetAndroidWorkspace } from "../lib/android-workspace-navigation";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { useThreadShell } from "../state/entities";
 import { tryOpenExternalUrl } from "../lib/openExternalUrl";
 
-export function useNativeLinkContext(context?: {
+type PullRequestContext = {
   readonly environmentId: string;
   readonly projectId: string;
-}) {
+  readonly connectionId?: string;
+};
+
+// Route-free so navigator layouts such as the workspace sidebar, which have no
+// route context for useRoute, can open pull requests for any thread.
+export function useNavigateToPullRequest(options?: { readonly replace?: boolean }) {
+  const navigation = useNavigation();
+  const replace = options?.replace;
+  return useCallback(
+    async (url: string, context: PullRequestContext | null) => {
+      const params = nativePullRequestDestination(url, context);
+      if (!params) return tryOpenExternalUrl(url, "pull-request");
+      if (Platform.OS === "android")
+        resetAndroidWorkspace(navigation, { name: "PullRequest", params });
+      else if (replace) navigation.dispatch(StackActions.replace("PullRequest", params));
+      else navigation.navigate("PullRequest", params);
+      return true;
+    },
+    [navigation, replace],
+  );
+}
+
+export function useNativeLinkContext(context?: PullRequestContext) {
   const route = useRoute();
   const routeContext = route.params as
     | {
         environmentId?: string | string[];
         projectId?: string | string[];
         threadId?: string | string[];
+        connectionId?: string | string[];
       }
     | undefined;
   const first = (value: string | string[] | undefined) => {
@@ -32,36 +54,25 @@ export function useNativeLinkContext(context?: {
       : null,
   );
   const projectId = context?.projectId ?? first(routeContext?.projectId) ?? thread?.projectId;
-  return { environmentId, projectId };
+  const connectionId =
+    context === undefined ? first(routeContext?.connectionId) : context.connectionId;
+  return { environmentId, projectId, connectionId };
 }
 
-/** Use the thread's environment; the shared router resolves the repository's project there. */
 export function useOpenPullRequest(options?: {
   readonly replace?: boolean;
-  readonly context?: { readonly environmentId: string; readonly projectId: string };
+  readonly context?: PullRequestContext;
 }) {
-  const navigation = useNavigation();
   const { environmentId, projectId } = useNativeLinkContext(options?.context);
-  const replace = options?.replace;
+  const navigateToPullRequest = useNavigateToPullRequest({ replace: options?.replace });
   return useCallback(
-    async (url: string) => {
-      const params = nativePullRequestDestination(
+    (url: string) =>
+      navigateToPullRequest(
         url,
         environmentId && projectId
           ? { environmentId: String(environmentId), projectId: String(projectId) }
           : null,
-      );
-      if (!params) return tryOpenExternalUrl(url, "pull-request");
-      if (Platform.OS === "android")
-        navigation.dispatch((state) =>
-          CommonActions.reset(
-            androidWorkspaceNavigationState(state, { name: "PullRequest", params }),
-          ),
-        );
-      else if (replace) navigation.dispatch(StackActions.replace("PullRequest", params));
-      else navigation.navigate("PullRequest", params);
-      return true;
-    },
-    [environmentId, projectId, navigation, replace],
+      ),
+    [environmentId, projectId, navigateToPullRequest],
   );
 }

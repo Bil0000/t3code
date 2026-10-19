@@ -19,6 +19,7 @@ import { memo, type ComponentProps } from "react";
 import { ThreadDetailsCard } from "./ThreadDetailsCard";
 import { OpenInPicker } from "./OpenInPicker";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
+import { ThreadDetailsIssueRows } from "./ThreadDetailsIssueRows";
 import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
 import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
 
@@ -46,7 +47,6 @@ export interface ThreadDetailsPanelProps extends Pick<
   onAutoEnvironment?: (() => void) | undefined;
   onEnvironmentChange: (environmentId: EnvironmentId) => void;
   onEnvModeChange: (mode: EnvMode) => void;
-  /** The thread's env mode as ChatView resolves it. */
   envMode: EnvMode;
   activeThreadBranchOverride?: string | null;
   onActiveThreadBranchOverrideChange?: (branch: string | null) => void;
@@ -143,6 +143,10 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                   onUpdateScript={props.onUpdateProjectScript}
                   onDeleteScript={props.onDeleteProjectScript}
                 />
+              ) : null}
+
+              {!props.gitCwd || !props.isGitRepo ? (
+                <ThreadDetailsIssueRows threadRef={activeThreadRef} />
               ) : null}
             </div>
           </ThreadDetailsSection>

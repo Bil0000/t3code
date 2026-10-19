@@ -8,6 +8,9 @@ import {
   ChatImageAttachment,
   CommandId,
   EnvironmentId,
+  IssueTrackerKind,
+  IssueOperationError,
+  ProjectId,
   NodeId,
   OrchestratorMcpThreadReadResult,
   ProviderDriverKind,
@@ -17,11 +20,15 @@ import {
   TurnItemId,
   type OrchestrationV2ProjectedTurnItem,
   type OrchestrationV2ThreadShell,
+  type IssueCreateInput,
+  type IssueCommentsPageInput,
 } from "@t3tools/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as Ref from "effect/Ref";
 import { McpAttachmentInput } from "./attachment/input.ts";
 import { McpSchema, McpServer, Tool } from "effect/ai";
 import { FetchHttpClient } from "effect/http";
@@ -41,6 +48,9 @@ import * as ThreadManagement from "../../orchestration-v2/ThreadManagementServic
 import * as ThreadSearch from "../../orchestration-v2/ThreadSearch.ts";
 import * as PreviewBrowser from "../../preview/PreviewBrowser.ts";
 import * as ProjectService from "../../project/ProjectService.ts";
+import * as IssueService from "../../issue/IssueService.ts";
+import * as ThreadIssueService from "../../orchestration-v2/ThreadIssueService.ts";
+import * as Orchestrator from "../../orchestration-v2/Orchestrator.ts";
 import * as ProviderRegistry from "../../provider/ProviderRegistry.ts";
 import * as SecretRequests from "../../secrets/SecretRequests.ts";
 import * as ScheduledTaskService from "../../scheduledTasks/ScheduledTaskService.ts";
@@ -49,6 +59,7 @@ import * as McpHttpServer from "../McpHttpServer.ts";
 import * as McpInvocationContext from "../McpInvocationContext.ts";
 import * as McpToolAccessTestkit from "../McpToolAccess.testkit.ts";
 import { dispatchFailure } from "../threadAccess.ts";
+import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
 import { OrchestratorToolkit } from "./orchestrator/tools.ts";
 import { PreviewToolkit } from "./preview/tools.ts";
 import { PreviewControlsToolkit } from "./previewControls/tools.ts";
@@ -74,6 +85,7 @@ const declaredFailure = (result: McpSchema.CallToolResult) => {
 };
 import { PullRequestsToolkit } from "./pullRequests/tools.ts";
 import { IssuesToolkit } from "./issues/tools.ts";
+import * as IssuesHandlers from "./issues/handlers.ts";
 import { HtmlToolkit } from "./html/tools.ts";
 import {
   resolveT3McpToolDefinition,
@@ -85,7 +97,6 @@ import { htmlRenderFromToolItem } from "@t3tools/shared/toolOutput";
 const decodeMcpAttachmentInput = Schema.decodeUnknownEffect(McpAttachmentInput);
 const decodeThreadReadResult = Schema.decodeUnknownEffect(OrchestratorMcpThreadReadResult);
 
-// Registration asks for every service the thread tools declare; these cases call none that use them.
 const layerThreadToolkit = McpHttpServer.layerThreadToolkit.pipe(
   Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),
   Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
@@ -112,9 +123,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
       names.add(tool.name);
       const schema = Tool.getJsonSchema(tool);
       expect(schema).toMatchObject({ type: "object" });
-      // The published tool catalog must also work with providers without $ref support.
       expect(JSON.stringify(schema), tool.name).not.toContain('"$ref"');
-      // Every published tool must have labels for its lifecycle, branding, and a summary.
       const definition = resolveT3McpToolDefinition(tool.name);
       expect(definition, tool.name).not.toBeNull();
       expect(
@@ -298,11 +307,9 @@ it.effect("returns an HTML render reference that Codex and Claude tool rows both
         Layer.provide(PreviewBrowser.layer),
         Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-mcp-html-render-" })),
         Layer.provide(NodeServices.layer),
-        // The preview browser is not installed in a fresh home, so nothing downloads.
         Layer.provide(FetchHttpClient.layer),
         Layer.provide(
           Layer.mock(ThreadManagement.ThreadManagementService)({
-            // A live run: publishing stores a page, so it needs the caller's active turn.
             getThreadShell: () =>
               Effect.succeed({
                 id: threadId,
@@ -369,6 +376,131 @@ it.effect("keeps unexpected handler defects private through the production regis
   ),
 );
 
+it.effect("records the calling agent and the agent a tool acted on", () => {
+  // Recording runs detached from the tool response, so each expected event is awaited.
+  const recorded = [
+    Deferred.makeUnsafe<{ event: string; properties: object }>(),
+    Deferred.makeUnsafe<{ event: string; properties: object }>(),
+  ];
+  let recordedCount = 0;
+  const shell = (id: ThreadId, instanceId: string, model: string) =>
+    ({
+      id,
+      projectId: "mcp-core-project",
+      providerInstanceId: ProviderInstanceId.make(instanceId),
+      modelSelection: { instanceId: ProviderInstanceId.make(instanceId), model },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      archivedAt: null,
+      deletedAt: null,
+      activeRunId: "mcp-core-run",
+      createdBy: "agent",
+      creationSource: "mcp",
+      lineage: {
+        parentThreadId: id === threadId ? ThreadId.make("mcp-core-parent") : null,
+        relationshipToParent: id === threadId ? "subagent" : null,
+        rootThreadId: ThreadId.make("mcp-core-parent"),
+      },
+    }) as never;
+  return Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    yield* server
+      .callTool({ name: "t3_thread_fork", arguments: { sourcePoint: { type: "latest_stable" } } })
+      .pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+        Effect.provideService(McpSchema.McpServerClient, client),
+      );
+    const { event, properties } = yield* Deferred.await(recorded[0]!);
+    expect(event).toBe("mcp.tool.invoked");
+    expect(properties).toMatchObject({
+      tool: "t3_thread_fork",
+      outcome: "ok",
+      callerProvider: "codex",
+      callerModel: "gpt-5.5",
+      callerOrigin: "agent",
+      callerDepth: 1,
+      targetProvider: "claudeAgent",
+      targetModel: "claude-opus-5-5",
+      targetRuntimeMode: "full-access",
+      targetInteractionMode: "default",
+      crossProvider: true,
+    });
+    expect(properties).toHaveProperty("durationMs");
+    expect(Object.values(properties).some((value) => String(value).includes("mcp-core"))).toBe(
+      false,
+    );
+
+    // Queue tools return only a sequence, so the receiving thread comes from the input.
+    yield* server
+      .callTool({
+        name: "t3_queue_edit",
+        arguments: { threadId: "mcp-core-other", queuedRunId: "mcp-core-queued", text: "secret" },
+      })
+      .pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+        Effect.provideService(McpSchema.McpServerClient, client),
+      );
+    // The fork recorded a single event, so the next one is the queue edit.
+    expect((yield* Deferred.await(recorded[1]!)).properties).toMatchObject({
+      tool: "t3_queue_edit",
+      outcome: "ok",
+      callerProvider: "codex",
+      targetProvider: "claudeAgent",
+      crossProvider: true,
+    });
+  }).pipe(
+    Effect.provide(
+      layerThreadToolkit.pipe(
+        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provide(NodeCrypto.layer),
+        Layer.provide(
+          Layer.mock(ThreadManagement.ThreadManagementService)({
+            getThreadShell: (id) =>
+              Effect.succeed(
+                id === threadId
+                  ? shell(threadId, "codex", "gpt-5.5")
+                  : shell(id, "claudeAgent", "claude-opus-5-5"),
+              ),
+            getThreadRecords: () => Effect.succeed({ runs: [], messages: [] } as never),
+            getProjectThreadRecords: () =>
+              Effect.succeed({ thread: shell(threadId, "codex", "gpt-5.5") } as never),
+            dispatch: () => Effect.succeed({ sequence: 1 } as never),
+          }),
+        ),
+        Layer.provide(
+          Layer.mock(ProviderRegistry.ProviderRegistry)({
+            getProviders: Effect.succeed([
+              {
+                instanceId: ProviderInstanceId.make("codex"),
+                driver: "codex",
+                models: [{ slug: "gpt-5.5", isCustom: false }],
+              } as never,
+              {
+                instanceId: ProviderInstanceId.make("claudeAgent"),
+                driver: "claudeAgent",
+                models: [{ slug: "claude-opus-5-5", isCustom: false }],
+              } as never,
+            ]),
+          }),
+        ),
+        Layer.provide(
+          Layer.succeed(
+            AnalyticsService.AnalyticsService,
+            AnalyticsService.AnalyticsService.of({
+              record: (event, properties) =>
+                Deferred.succeed(recorded[recordedCount++]!, {
+                  event,
+                  properties: properties ?? {},
+                }).pipe(Effect.asVoid),
+              flush: Effect.void,
+            }),
+          ),
+        ),
+      ),
+    ),
+  );
+});
+
 it("keeps MCP preference output allowlisted and Unicode-bounded", () => {
   const settings = {
     ...DEFAULT_SERVER_SETTINGS,
@@ -430,6 +562,286 @@ const clientScope = (
   issuedAt: 0,
   capabilities: new Set(["orchestration", "worktree", "pull-requests", "issues"]),
 });
+
+it.effect("registers native issue choices and guards reads and typed creation with warnings", () =>
+  Effect.gen(function* () {
+    const projectId = ProjectId.make("mcp-issue-project");
+    const binding = {
+      tracker: IssueTrackerKind.make("jira"),
+      host: "example.atlassian.net",
+      scope: "ENG",
+    };
+    const candidates = {
+      labels: [],
+      assignees: [],
+      issueTypes: [
+        { id: "10001", name: "Bug" },
+        { id: "10002", name: "Task" },
+      ],
+      truncated: false,
+    };
+    const warnings = [
+      "The issue was created, but the tracker could not apply the requested labels.",
+    ];
+    const created = yield* Ref.make<ReadonlyArray<IssueCreateInput>>([]);
+    const candidateReads = yield* Ref.make(0);
+    const commentReads = yield* Ref.make<ReadonlyArray<IssueCommentsPageInput>>([]);
+    const comments = {
+      comments: [
+        {
+          id: "native-comment-id",
+          author: null,
+          body: "Older comment",
+          createdAt: "2026-10-14T00:00:00Z",
+          url: "https://example.atlassian.net/browse/ENG-1#comment-1",
+          reactions: [],
+          reactionsTruncated: false,
+        },
+      ],
+      nextCursor: "next-comment-page",
+    };
+    const services = Layer.mergeAll(
+      Layer.mock(Orchestrator.OrchestratorV2)({}),
+      Layer.mock(ThreadIssueService.ThreadIssueService)({}),
+      Layer.mock(ProjectService.ProjectService)({
+        getShell: () =>
+          Effect.succeedSome({
+            id: projectId,
+            title: "Issues",
+            workspaceRoot: "/fixture",
+            defaultModelSelection: null,
+            scripts: [],
+            createdAt: "2026-10-14T00:00:00Z",
+            updatedAt: "2026-10-14T00:00:00Z",
+          }),
+      }),
+      Layer.mock(IssueService.IssueService)({
+        sources: () =>
+          Effect.succeed([
+            { tracker: IssueTrackerKind.make("github"), host: "github.com", scope: "owner/repo" },
+            binding,
+          ]),
+        candidates: () =>
+          Ref.update(candidateReads, (count) => count + 1).pipe(Effect.as(candidates)),
+        comments: (input) =>
+          Ref.update(commentReads, (calls) => [...calls, input]).pipe(
+            Effect.flatMap(() =>
+              input.cursor === "denied"
+                ? Effect.fail(
+                    new IssueOperationError({
+                      operation: "comments",
+                      detail: "Tracker permission denied",
+                    }),
+                  )
+                : Effect.succeed(
+                    input.cursor === "next-comment-page"
+                      ? { comments: [], nextCursor: null }
+                      : comments,
+                  ),
+            ),
+          ),
+        create: (input) =>
+          Ref.update(created, (calls) => [...calls, input]).pipe(
+            Effect.as({
+              key: "ENG-1",
+              displayKey: "ENG-1",
+              url: "https://example.atlassian.net/browse/ENG-1",
+              warnings,
+            }),
+          ),
+      }),
+      McpToolAccessTestkit.liveThreadsLayer,
+    );
+    yield* Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      const definition = server.tools.find(({ tool }) => tool.name === "read_issue_candidates");
+      expect(definition?.tool.annotations?.readOnlyHint).toBe(true);
+      const entry = {
+        projectId,
+        ...binding,
+        key: "ENG-1",
+        url: "https://example.atlassian.net/browse/ENG-1",
+        displayKey: "ENG-1",
+        title: "Issue",
+        state: { category: "open", name: "Open" },
+        author: null,
+        assignees: [],
+        labels: [],
+        updatedAt: "2026-10-14T00:00:00Z",
+      };
+      const validateList = new AjvJsonSchemaValidator().getValidator(
+        server.tools.find(({ tool }) => tool.name === "list_issues")!.tool
+          .outputSchema! as JsonSchemaType,
+      );
+      for (const [commentCount, valid] of [
+        [null, true],
+        [0, true],
+        [101, true],
+        [-1, false],
+        [1.5, false],
+      ]) {
+        expect(
+          validateList({ issues: [{ ...entry, commentCount }], nextCursors: {}, errors: [] }).valid,
+        ).toBe(valid);
+      }
+      const validateRead = new AjvJsonSchemaValidator().getValidator(
+        server.tools.find(({ tool }) => tool.name === "read_issue")!.tool
+          .outputSchema! as JsonSchemaType,
+      );
+      for (const state of [null, "open", "closed", "merged"]) {
+        expect(
+          validateRead({
+            ...entry,
+            writable: true,
+            capabilities: {
+              create: true,
+              edit: true,
+              comment: true,
+              labels: true,
+              assignees: true,
+              reactions: false,
+              templates: false,
+              linkedPullRequests: true,
+              events: true,
+              search: true,
+              states: [],
+              closeReasons: [],
+            },
+            createdAt: entry.updatedAt,
+            closedAt: null,
+            body: "",
+            comments: [],
+            commentsTruncated: true,
+            commentsCursor: "older-comment-page",
+            linkedPullRequests: [
+              {
+                url: "https://github.com/acme/web/pull/1",
+                title: "Change",
+                state,
+                closesIssue: false,
+              },
+            ],
+          }).valid,
+        ).toBe(true);
+      }
+      const call = (
+        name: string,
+        args: Record<string, unknown>,
+        invocation: McpInvocationContext.McpInvocationScope,
+      ) =>
+        server
+          .callTool({ name, arguments: args })
+          .pipe(
+            Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+            Effect.provideService(McpSchema.McpServerClient, client),
+          );
+      const readOnly = clientScope("read-only");
+      const commentDefinition = server.tools.find(
+        ({ tool }) => tool.name === "read_issue_comments",
+      );
+      expect(commentDefinition?.tool.annotations?.readOnlyHint).toBe(true);
+      const validateComments = new AjvJsonSchemaValidator().getValidator(
+        commentDefinition!.tool.outputSchema! as JsonSchemaType,
+      );
+      const commentInput = { projectId, ...binding, key: "ENG-1", cursor: "older-comment-page" };
+      const commentDenied = yield* call("read_issue_comments", commentInput, {
+        ...readOnly,
+        capabilities: new Set<never>(),
+      });
+      expect(commentDenied.isError).toBe(true);
+      expect(yield* Ref.get(commentReads)).toEqual([]);
+      for (const cursor of ["", "x".repeat(8_193)]) {
+        const invalid = yield* call(
+          "read_issue_comments",
+          { ...commentInput, cursor },
+          readOnly,
+        ).pipe(Effect.flip);
+        expect(invalid).toMatchObject({ _tag: "InvalidParams" });
+      }
+      expect(yield* Ref.get(commentReads)).toEqual([]);
+      const older = yield* call("read_issue_comments", commentInput, readOnly);
+      expect(older.isError).toBe(false);
+      expect(older.structuredContent).toEqual(comments);
+      expect(validateComments(older.structuredContent).valid).toBe(true);
+      const oldest = yield* call(
+        "read_issue_comments",
+        { ...commentInput, cursor: comments.nextCursor },
+        readOnly,
+      );
+      expect(oldest.structuredContent).toEqual({ comments: [], nextCursor: null });
+      expect(validateComments(oldest.structuredContent).valid).toBe(true);
+      const longestCursor = "x".repeat(8_192);
+      const longest = yield* call(
+        "read_issue_comments",
+        { ...commentInput, cursor: longestCursor },
+        readOnly,
+      );
+      expect(longest.isError).toBe(false);
+      expect(longest.structuredContent).toEqual(comments);
+      const trackerDenied = yield* call(
+        "read_issue_comments",
+        { ...commentInput, cursor: "denied" },
+        readOnly,
+      );
+      expect(trackerDenied.isError).toBe(true);
+      expect(trackerDenied.content).toEqual([
+        { type: "text", text: "Issue operation comments failed: Tracker permission denied" },
+      ]);
+      expect(yield* Ref.get(commentReads)).toEqual([
+        commentInput,
+        { ...commentInput, cursor: comments.nextCursor },
+        { ...commentInput, cursor: longestCursor },
+        { ...commentInput, cursor: "denied" },
+      ]);
+      const denied = yield* call(
+        "read_issue_candidates",
+        { projectId, tracker: binding.tracker },
+        { ...readOnly, capabilities: new Set<never>() },
+      );
+      expect(denied.isError).toBe(true);
+      expect(denied.content).toEqual([
+        { type: "text", text: "MCP credential does not grant the issues capability." },
+      ]);
+      expect(yield* Ref.get(candidateReads)).toBe(0);
+      const read = yield* call(
+        "read_issue_candidates",
+        { projectId, tracker: binding.tracker },
+        readOnly,
+      );
+      expect(read.isError).toBe(false);
+      expect(read.structuredContent).toEqual(candidates);
+      const refused = yield* call(
+        "create_issue",
+        { projectId, tracker: binding.tracker, title: "Issue", issueType: "10001" },
+        readOnly,
+      );
+      expect(refused.isError).toBe(true);
+      expect(refused.content).toEqual([
+        {
+          type: "text",
+          text: "This tool changes the environment, and this MCP client was approved for read-only access.",
+        },
+      ]);
+      expect(yield* Ref.get(created)).toEqual([]);
+      const filed = yield* call(
+        "create_issue",
+        { projectId, tracker: binding.tracker, title: "Issue", issueType: "10002" },
+        clientScope("full-access"),
+      );
+      expect(filed.isError).toBe(false);
+      expect(filed.structuredContent).toMatchObject({ warnings });
+      expect((yield* Ref.get(created))[0]).toMatchObject({ ...binding, issueType: "10002" });
+      expect(yield* Ref.get(candidateReads)).toBe(1);
+    }).pipe(
+      Effect.provide(
+        McpHttpServer.toolkitRegistration(IssuesToolkit, IssuesHandlers.layer).pipe(
+          Layer.provideMerge(McpServer.McpServer.layer),
+          Layer.provide(services),
+        ),
+      ),
+    );
+  }),
+);
 
 it.effect("a client caller targets any thread within its ceiling and cannot act as a thread", () =>
   Effect.gen(function* () {
@@ -860,8 +1272,6 @@ it.effect("only the caller that prepared a pending upload can discard it", () =>
     const refused = yield* call("t3_attachment_discard", { attachmentId }, otherThread);
     expect(declaredFailure(refused)).toMatchObject({ code: "invalid_request" });
 
-    // Another prepare a day later keeps it: the file outlives its URL's 24 hours
-    // by as long as the upload took, up to the URL's own lifetime.
     yield* TestClock.adjust(24 * 60 * 60 * 1000 + 5 * 60_000);
     yield* call(
       "t3_attachment_prepare_upload",
@@ -869,7 +1279,6 @@ it.effect("only the caller that prepared a pending upload can discard it", () =>
       scope,
     );
 
-    // A new provider session of the same thread still owns the upload.
     const discarded = yield* call(
       "t3_attachment_discard",
       { attachmentId },

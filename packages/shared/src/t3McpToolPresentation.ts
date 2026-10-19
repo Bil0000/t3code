@@ -61,6 +61,10 @@ export type T3McpToolSummaryAction =
   | "unwatch-pr"
   | "write-pr-guides"
   | "read-pr-guide"
+  | "list-issue-sources"
+  | "update-issue"
+  | "edit-issue-comment"
+  | "react-issue"
   | "list-issues"
   | "read-issue"
   | "create-issue"
@@ -92,7 +96,6 @@ function tool(
 
 const T3_MCP_SERVER_ALIASES = new Set(["t3-code", "t3_code", "t3code"]);
 
-// Cards, activity rows, summaries, and provider identity recovery share this inventory.
 const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
   link_pull_request: tool(
     ["Link", "Linking", "Linked", "a pull request"],
@@ -130,7 +133,30 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
     "pull-request",
   ),
   list_issues: tool(["List", "Listing", "Listed", "issues"], "list-issues"),
+  list_issue_sources: tool(["List", "Listing", "Listed", "issue sources"], "list-issue-sources"),
+  read_issue_history: tool(["Read", "Reading", "Read", "issue history"], "read-issue"),
+  read_issue_hierarchy: tool(["Read", "Reading", "Read", "issue hierarchy"], "read-issue"),
+  read_issue_dependencies: tool(["Read", "Reading", "Read", "issue dependencies"], "read-issue"),
+  read_issue_linked_pull_requests: tool(
+    ["Read", "Reading", "Read", "linked pull requests"],
+    "read-issue",
+  ),
+  read_issue_templates: tool(["Read", "Reading", "Read", "issue templates"], "read-issue"),
+  list_issue_labels: tool(["List", "Listing", "Listed", "issue labels"], "read-issue"),
+  list_issue_assignees: tool(["List", "Listing", "Listed", "issue assignees"], "read-issue"),
+  update_issue: tool(["Edit", "Editing", "Edited", "an issue"], "update-issue"),
+  edit_issue_comment: tool(["Edit", "Editing", "Edited", "an issue comment"], "edit-issue-comment"),
+  set_issue_reaction: tool(["React", "Reacting", "Reacted", "to an issue"], "react-issue"),
+  set_issue_labels: tool(["Change", "Changing", "Changed", "issue labels"], "update-issue"),
+  set_issue_assignees: tool(["Change", "Changing", "Changed", "issue assignees"], "update-issue"),
+  set_issue_parent: tool(["Change", "Changing", "Changed", "an issue parent"], "update-issue"),
+  set_issue_dependency: tool(
+    ["Change", "Changing", "Changed", "an issue dependency"],
+    "update-issue",
+  ),
   read_issue: tool(["Read", "Reading", "Read", "an issue"], "read-issue"),
+  read_issue_comments: tool(["Read", "Reading", "Read", "older issue comments"], "read-issue"),
+  read_issue_candidates: tool(["Read", "Reading", "Read", "issue choices"], "read-issue"),
   create_issue: tool(["File", "Filing", "Filed", "an issue"], "create-issue"),
   comment_on_issue: tool(
     ["Comment on", "Commenting on", "Commented on", "an issue"],
@@ -353,10 +379,6 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
   html_render: tool(["Render", "Rendering", "Rendered", "an HTML page"], "html-render"),
 };
 
-/**
- * The T3 orchestration tool inventory, used to gate loose name matching on
- * both the server (ACP MCP identity recovery) and the client (logo branding).
- */
 export const T3_MCP_TOOL_NAMES: ReadonlySet<string> = new Set(Object.keys(T3_MCP_TOOLS));
 
 function normalizeT3McpToolLabel(value: string): string {
@@ -403,7 +425,6 @@ function resolveT3McpToolName(value: string): string | null {
   return longest;
 }
 
-/** The bare T3 tool name (`html_render`) for any provider's spelling of it. */
 export function resolveT3McpToolId(toolName: string | null | undefined): string | null {
   const name = toolName == null ? null : resolveT3McpToolName(toolName);
   return name !== null && Object.hasOwn(T3_MCP_TOOLS, name) ? name : null;

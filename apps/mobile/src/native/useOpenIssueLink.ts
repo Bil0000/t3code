@@ -13,12 +13,16 @@ import { issueEnvironment } from "../state/issues";
 import { useNativeLinkContext, useOpenPullRequest } from "./useOpenPullRequest";
 
 export function useOpenIssueLink(options?: {
-  readonly context?: { readonly environmentId: string; readonly projectId: string };
+  readonly context?: {
+    readonly environmentId: string;
+    readonly projectId: string;
+    readonly connectionId?: string;
+  };
 }) {
   const registry = use(RegistryContext);
   const openPullRequest = useOpenPullRequest(options);
   const openIssue = useOpenIssue();
-  const { environmentId, projectId } = useNativeLinkContext(options?.context);
+  const { environmentId, projectId, connectionId } = useNativeLinkContext(options?.context);
   const target = environmentId ? EnvironmentId.make(environmentId) : null;
   const configs = useServerConfigs();
   const issues = target !== null && configs.get(target)?.environment.capabilities.issues === true;
@@ -49,10 +53,21 @@ export function useOpenIssueLink(options?: {
       if (candidate) {
         const resolved = await issueEnvironment.resolveUrl.run(registry, {
           environmentId: target,
-          input: { url, ...(projectId ? { projectId: ProjectId.make(projectId) } : {}) },
+          input: {
+            url,
+            ...(projectId ? { projectId: ProjectId.make(projectId) } : {}),
+            ...(connectionId !== undefined ? { connectionId: connectionId } : {}),
+          },
         });
         if (resolved._tag === "Success") {
-          const { projectId: issueProjectId, tracker, host, scope, key } = resolved.value;
+          const {
+            projectId: issueProjectId,
+            tracker,
+            host,
+            scope,
+            key,
+            connectionId,
+          } = resolved.value;
           openIssue({
             environmentId: target,
             projectId: issueProjectId,
@@ -61,12 +76,23 @@ export function useOpenIssueLink(options?: {
             scope,
             key,
             originalURL: url,
+            ...(connectionId !== undefined ? { connectionId } : {}),
           });
           return true;
         }
       }
       return openPullRequest(url);
     },
-    [allowed, issues, openIssue, openPullRequest, projectId, projects, registry, target],
+    [
+      allowed,
+      issues,
+      openIssue,
+      openPullRequest,
+      projectId,
+      connectionId,
+      projects,
+      registry,
+      target,
+    ],
   );
 }

@@ -10,6 +10,21 @@ import * as Schema from "effect/Schema";
 import type * as Effect from "effect/Effect";
 import type {
   IssueCandidates,
+  IssueFieldValues,
+  IssueRichBody,
+  IssueDetail,
+  IssueDependencyDirection,
+  IssueDependenciesPage,
+  IssueState,
+  IssueWorkflowCategory,
+  IssueListSort,
+  IssueListOrder,
+  IssuePageInput,
+  IssueHistoryPage,
+  IssueLinkedPullRequestsPage,
+  IssueLabelCandidatesPage,
+  IssueAssigneeCandidatesPage,
+  IssueHierarchyPage,
   IssueCapabilities,
   IssueComment,
   IssueCommentsPage,
@@ -18,12 +33,12 @@ import type {
   IssueInvolvement,
   IssueLinkedPullRequest,
   IssueListState,
-  IssueReaction,
   IssueReactionContent,
   IssueSummary,
   IssueTemplateList,
   IssueTrackerKind,
   IssueTrackerScope,
+  IssueTrackerScopePage,
   IssueViewerPermissions,
   StandaloneIssueTrackerDescriptor,
 } from "@t3tools/contracts";
@@ -68,6 +83,8 @@ export interface IssueScopeTarget {
 }
 
 export interface IssueTarget extends IssueScopeTarget {
+  readonly connectionId?: string;
+  readonly viewer?: string;
   /** The issue's native id within the scope: `"123"` on GitHub, `"ENG-123"` on Linear. */
   readonly key: string;
 }
@@ -82,18 +99,59 @@ export interface TrackerIssuePage {
 }
 
 export interface TrackerIssueDetail extends TrackerIssueSummary {
+  readonly capabilities?: IssueCapabilities;
+  readonly states?: ReadonlyArray<IssueState>;
   readonly body: string;
+  readonly richBody?: IssueRichBody;
+  readonly externalLinks?: IssueDetail["externalLinks"];
+  readonly bodyEditable?: boolean | undefined;
   readonly viewer: string | null;
   readonly viewerPermissions: IssueViewerPermissions;
-  readonly reactions?: ReadonlyArray<IssueReaction>;
   readonly comments: ReadonlyArray<IssueComment>;
-  /** Where older comments carry on; null once the conversation is whole. */
   readonly commentsCursor: string | null;
   readonly events: ReadonlyArray<IssueEvent>;
   readonly linkedPullRequests: ReadonlyArray<IssueLinkedPullRequest>;
+  readonly historyTruncated?: boolean;
 }
 
 export interface IssueTrackerApi {
+  readonly getDependencies?: (
+    input: IssueTarget & IssuePageInput & { readonly direction: IssueDependencyDirection },
+  ) => Effect.Effect<IssueDependenciesPage, IssueTrackerError>;
+  readonly setDependency?: (
+    input: IssueTarget & {
+      readonly direction: IssueDependencyDirection;
+      readonly targetScope: string;
+      readonly targetKey: string;
+      readonly linked: boolean;
+    },
+  ) => Effect.Effect<void, IssueTrackerError>;
+  readonly getHistory?: (
+    input: IssueTarget & IssuePageInput & { readonly order?: IssueListOrder },
+  ) => Effect.Effect<IssueHistoryPage, IssueTrackerError>;
+  readonly getLinkedPullRequests?: (
+    input: IssueTarget & IssuePageInput,
+  ) => Effect.Effect<IssueLinkedPullRequestsPage, IssueTrackerError>;
+  readonly getHierarchy?: (
+    input: IssueTarget & IssuePageInput,
+  ) => Effect.Effect<IssueHierarchyPage, IssueTrackerError>;
+  readonly listLabelCandidates?: (
+    input: IssueScopeTarget & IssuePageInput,
+  ) => Effect.Effect<IssueLabelCandidatesPage, IssueTrackerError>;
+  readonly listAssigneeCandidates?: (
+    input: IssueScopeTarget & IssuePageInput,
+  ) => Effect.Effect<IssueAssigneeCandidatesPage, IssueTrackerError>;
+  readonly editComment?: (
+    input: IssueTarget & {
+      readonly commentId: string;
+      readonly body: string;
+      readonly richBody?: IssueRichBody;
+    },
+  ) => Effect.Effect<void, IssueTrackerError>;
+  readonly setParent?: (
+    input: IssueTarget & { readonly parentKey: string | null },
+  ) => Effect.Effect<void, IssueTrackerError>;
+
   readonly kind: IssueTrackerKind;
   readonly capabilities: IssueCapabilities;
 
@@ -101,11 +159,15 @@ export interface IssueTrackerApi {
   readonly getViewer: (input: {
     readonly cwd: string;
     readonly host: string;
+    readonly scope?: string;
   }) => Effect.Effect<string, IssueTrackerError>;
 
   readonly listIssues: (
     input: IssueScopeTarget & {
       readonly state: IssueListState;
+      readonly stateCategories?: ReadonlyArray<IssueWorkflowCategory>;
+      readonly sort?: IssueListSort;
+      readonly order?: IssueListOrder;
       readonly involvement: IssueInvolvement;
       readonly viewer: string;
       readonly limit: number;
@@ -119,9 +181,8 @@ export interface IssueTrackerApi {
   /** The issue with its first page of conversation, in one read where the tracker allows. */
   readonly getIssue: (input: IssueTarget) => Effect.Effect<TrackerIssueDetail, IssueTrackerError>;
 
-  /** One page of older comments past a cursor `getIssue` or a previous page handed over. */
   readonly getComments: (
-    input: IssueTarget & { readonly cursor: string },
+    input: IssueTarget & { readonly cursor?: string; readonly order?: IssueListOrder },
   ) => Effect.Effect<IssueCommentsPage, IssueTrackerError>;
 
   /**
@@ -139,6 +200,10 @@ export interface IssueTrackerApi {
       readonly body: string;
       readonly labels: ReadonlyArray<string>;
       readonly assignees: ReadonlyArray<string>;
+      readonly fieldValues?: IssueFieldValues;
+      readonly issueType?: string;
+      readonly parentKey?: string;
+      readonly templateKey?: string;
     },
   ) => Effect.Effect<IssueCreateResult, IssueTrackerError>;
 
@@ -155,23 +220,21 @@ export interface IssueTrackerApi {
     input: IssueTarget & {
       readonly title?: string | undefined;
       readonly body?: string | undefined;
+      readonly richBody?: IssueRichBody | undefined;
       readonly labels?: ReadonlyArray<string> | undefined;
       readonly assignees?: ReadonlyArray<string> | undefined;
     },
   ) => Effect.Effect<void, IssueTrackerError>;
 
-  /** Only called with a state name from `capabilities.states`. */
   readonly setState?: (
     input: IssueTarget & {
       readonly state: string;
+      readonly transitionId?: string;
+      readonly fieldValues?: IssueFieldValues;
       readonly closeReason?: string | undefined;
     },
   ) => Effect.Effect<void, IssueTrackerError>;
 
-  /**
-   * Adds a reaction or takes it back. `subjectId` is a comment id as the detail carried it;
-   * absent means the issue itself. Only called when `capabilities.reactions` is true.
-   */
   readonly setReaction?: (
     input: IssueTarget & {
       readonly subjectId?: string | undefined;
@@ -182,12 +245,18 @@ export interface IssueTrackerApi {
 
   /** Only called when `capabilities.templates` is true. */
   readonly listTemplates?: (
-    input: IssueScopeTarget,
+    input: IssueScopeTarget & {
+      readonly metadataOnly?: boolean | undefined;
+      readonly templateKey?: string | undefined;
+    },
   ) => Effect.Effect<IssueTemplateList, IssueTrackerError>;
 
   /** Only called when `capabilities.labels` or `capabilities.assignees` is true. */
   readonly listCandidates?: (
-    input: IssueScopeTarget,
+    input: IssueScopeTarget & {
+      readonly key?: string | undefined;
+      readonly issueType?: string | undefined;
+    },
   ) => Effect.Effect<IssueCandidates, IssueTrackerError>;
 }
 
@@ -203,12 +272,25 @@ export interface StandaloneIssueTrackerApi extends IssueTrackerApi {
    * Who a credential signs in as and which scopes it reaches, asked of the tracker itself. Run on
    * a credential before it is stored, and on the stored one to report connection status.
    */
-  readonly probeCredential: (
-    token: string,
-  ) => Effect.Effect<
-    { readonly account: string; readonly scopes: ReadonlyArray<IssueTrackerScope> },
+  readonly probeCredential: (token: string) => Effect.Effect<
+    {
+      readonly account: string;
+      readonly scopes: ReadonlyArray<IssueTrackerScope>;
+      readonly host?: string;
+      readonly accountId?: string;
+      readonly scopesTruncated?: boolean;
+      readonly scopesCursor?: string | null | undefined;
+    },
     IssueTrackerError
   >;
+  readonly getScope?: (
+    token: string,
+    scope: string,
+  ) => Effect.Effect<IssueTrackerScope | null, IssueTrackerError>;
+  readonly listScopes?: (
+    token: string,
+    input: IssuePageInput,
+  ) => Effect.Effect<IssueTrackerScopePage, IssueTrackerError>;
 }
 
 export function isStandaloneIssueTracker(api: IssueTrackerApi): api is StandaloneIssueTrackerApi {

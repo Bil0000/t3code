@@ -14,10 +14,12 @@ import {
   RunId,
   ThreadId,
   TurnItemId,
+  IssueTrackerKind,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
 import { applyOrchestrationV2ProjectionEvent } from "./orchestrationV2Projection.ts";
+import { deriveThreadRuntime } from "./threadExecution.ts";
 
 const now = DateTime.makeUnsafe("2026-06-20T00:00:00.000Z");
 const threadId = ThreadId.make("thread-reducer");
@@ -107,6 +109,7 @@ const emptyProjection = {
 
 describe("applyOrchestrationV2ProjectionEvent", () => {
   it("applies a compact PR sync without replacing other links or thread metadata", () => {
+    const syncedAt = DateTime.makeUnsafe("2026-06-20T01:00:00.000Z");
     const link = (number: number): ThreadPullRequestLink => ({
       host: "github.com",
       repository: "pingdotgg/t3code",
@@ -121,18 +124,122 @@ describe("applyOrchestrationV2ProjectionEvent", () => {
     const projection = {
       ...emptyProjection,
       thread: { ...emptyProjection.thread, pullRequests: links },
+      runs: [run],
     };
-    const updated = { ...links[1]!, source: "agent" as const };
+    const updated: ThreadPullRequestLink = {
+      ...links[1]!,
+      snapshot: {
+        state: "merged",
+        title: "Merged PR",
+        headBranch: "fix",
+        baseBranch: "main",
+        isDraft: false,
+        updatedAt: DateTime.formatIso(syncedAt),
+        syncedAt: DateTime.formatIso(syncedAt),
+      },
+      watch: {
+        startedAt: DateTime.formatIso(now),
+        headSha: "abc123",
+        failedChecks: [],
+        passed: true,
+        passedChecks: ["test"],
+        remarksThrough: DateTime.formatIso(syncedAt),
+        remarkIds: ["comment-1"],
+        conflicting: false,
+        wakes: 1,
+      },
+    };
     const next = applyOrchestrationV2ProjectionEvent(projection, {
       id: "compact-sync" as OrchestrationV2DomainEvent["id"],
       type: "thread.pull-request-link-updated",
       threadId,
-      occurredAt: now,
+      occurredAt: syncedAt,
       payload: updated,
     });
     expect(next?.thread).toEqual({ ...projection.thread, pullRequests: [links[0], updated] });
     expect(next?.thread.pullRequests?.[0]).toBe(links[0]);
+    expect(next?.updatedAt).toEqual(now);
+    expect(deriveThreadRuntime(next!)?.updatedAt).toBe(DateTime.formatIso(now));
   });
+
+  it.each(["Original issue", "Changed issue"])(
+    "refreshes the issue summary %s without changing activity time",
+    (title) => {
+      const syncedAt = DateTime.makeUnsafe("2026-06-20T01:00:00.000Z");
+      const issue = {
+        tracker: IssueTrackerKind.make("github"),
+        host: "github.com",
+        scope: "pingdotgg/t3code",
+        key: "123",
+        projectId: emptyProjection.thread.projectId,
+        url: "https://github.com/pingdotgg/t3code/issues/123",
+        source: "manual" as const,
+        linkedAt: DateTime.formatIso(now),
+        snapshot: {
+          displayKey: "#123",
+          title: "Original issue",
+          state: { category: "open" as const, name: "Open" },
+          syncedAt: DateTime.formatIso(now),
+        },
+      };
+      const projection = {
+        ...emptyProjection,
+        thread: { ...emptyProjection.thread, issues: [issue] },
+        runs: [run],
+      };
+      const payload = {
+        ...projection.thread,
+        issues: [
+          {
+            ...issue,
+            snapshot: { ...issue.snapshot, title, syncedAt: DateTime.formatIso(syncedAt) },
+          },
+        ],
+      };
+      const next = applyOrchestrationV2ProjectionEvent(projection, {
+        id: "issue-refresh" as OrchestrationV2DomainEvent["id"],
+        type: "thread.issue-synced",
+        threadId,
+        occurredAt: syncedAt,
+        payload,
+      });
+
+      expect(next?.thread).toBe(payload);
+      expect(next?.updatedAt).toEqual(now);
+      expect(deriveThreadRuntime(next!)?.updatedAt).toBe(DateTime.formatIso(now));
+      const unlinked = applyOrchestrationV2ProjectionEvent(next, {
+        id: "issue-unlink" as OrchestrationV2DomainEvent["id"],
+        type: "thread.issue-synced",
+        threadId,
+        occurredAt: syncedAt,
+        payload: { ...payload, issues: [], updatedAt: syncedAt },
+      });
+
+      expect(unlinked?.thread.issues).toEqual([]);
+      expect(unlinked?.updatedAt).toEqual(syncedAt);
+      expect(deriveThreadRuntime(unlinked!)?.updatedAt).toBe(DateTime.formatIso(syncedAt));
+    },
+  );
+
+  it.each(["thread.issue-synced", "thread.pull-request-synced"] as const)(
+    "%s uses the thread activity time for refreshes and user changes",
+    (type) => {
+      const occurredAt = DateTime.makeUnsafe("2026-06-20T02:00:00.000Z");
+      for (const updatedAt of [now, DateTime.makeUnsafe("2026-06-20T01:00:00.000Z")]) {
+        const payload = { ...emptyProjection.thread, updatedAt };
+        const next = applyOrchestrationV2ProjectionEvent(emptyProjection, {
+          id: "link-update" as OrchestrationV2DomainEvent["id"],
+          type,
+          threadId,
+          occurredAt,
+          payload,
+        });
+
+        expect(next?.thread).toBe(payload);
+        expect(next?.updatedAt).toEqual(updatedAt);
+      }
+    },
+  );
 
   it("keeps live token usage when the terminal provider turn omits it", () => {
     const providerTurnId = ProviderTurnId.make("provider-turn-reducer");
@@ -186,6 +293,21 @@ describe("applyOrchestrationV2ProjectionEvent", () => {
     const next = applyOrchestrationV2ProjectionEvent(emptyProjection, event);
     expect(next?.thread.archivedAt).toEqual(archivedAt);
     expect(next?.updatedAt).toEqual(archivedAt);
+  });
+
+  it("updates activity time when the user changes thread metadata", () => {
+    const updatedAt = DateTime.makeUnsafe("2026-06-20T01:00:00.000Z");
+    const payload = { ...emptyProjection.thread, title: "New title", updatedAt };
+    const next = applyOrchestrationV2ProjectionEvent(emptyProjection, {
+      id: "metadata-update" as OrchestrationV2DomainEvent["id"],
+      type: "thread.metadata-updated",
+      threadId,
+      occurredAt: updatedAt,
+      payload,
+    });
+
+    expect(next?.thread).toBe(payload);
+    expect(next?.updatedAt).toEqual(updatedAt);
   });
 
   it("ignores events for another thread", () => {
@@ -346,8 +468,6 @@ describe("applyOrchestrationV2ProjectionEvent", () => {
       }) as OrchestrationV2DomainEvent;
 
     it("shows a queued run that starts after a newer steer raised the watermark", () => {
-      // Run 2 was queued first, run 3 was steered in and ran first. Its items
-      // sit in run 3's band and already raised the watermark past run 2's band.
       const steerItems = [
         runItem("item-steer-user", steerRunId, 3_000_001),
         runItem("item-steer-reply", steerRunId, 3_000_002),
@@ -357,8 +477,6 @@ describe("applyOrchestrationV2ProjectionEvent", () => {
         steerItems,
       );
       let latestLocalTurnOrdinal = 3_000_002;
-      // Same order the orchestrator commits a queued start: the user message
-      // lands while the run is still queued, then the run starts and replies.
       const queuedUser = runItem("item-queued-user", queuedRunId, 2_000_001);
       const queuedReply = runItem("item-queued-reply", queuedRunId, 2_000_002);
       for (const event of [
@@ -385,8 +503,6 @@ describe("applyOrchestrationV2ProjectionEvent", () => {
     });
 
     it("keeps a running run's item when the window starts after its earlier items", () => {
-      // The bounded window begins inside run 3; run 2 started and kept going,
-      // but none of its rows made it into the window.
       const runningRun = { ...queuedRun, status: "running" } as const;
       const steerItems = [
         runItem("item-steer-user", steerRunId, 3_000_001),

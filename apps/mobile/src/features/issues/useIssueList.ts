@@ -1,15 +1,16 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import {
   continueIssueListPage,
+  issueEntryKey,
   issueScopeKey,
-  refreshIssueListPage,
+  readIssueListSourcePage,
 } from "@t3tools/client-runtime/state/issues";
 import {
   executeAtomQuery,
   runAtomCommand,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import type { EnvironmentId, IssueListInput, IssueListResult } from "@t3tools/contracts";
+import type { IssueListResult } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
@@ -17,6 +18,7 @@ import { use, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState
 
 import { issueEnvironment } from "../../state/issues";
 import {
+  issueListAnswer,
   issueSourceRefreshQueue,
   heldIssueList,
   issueListCanonicalSource,
@@ -26,15 +28,13 @@ import {
   issueListTargetIncludesSource,
   issueWrites,
   ISSUE_LIST_PAGE_SIZE,
+  type IssueListTarget,
   type HeldIssueList as BaseHeldIssueList,
   type IssueListSource,
   type IssueSourceWrite,
 } from "./issueList";
 
-export type IssueListTarget = {
-  readonly environmentId: EnvironmentId;
-  readonly input: IssueListInput;
-};
+export type { IssueListTarget } from "./issueList";
 
 type HeldIssueList = BaseHeldIssueList & {
   readonly restartSources?: ReadonlyArray<IssueSourceWrite["source"]>;
@@ -63,7 +63,7 @@ function deriveHeld(
   }
   const cached = refreshedPages.get(held);
   if (cached?.answer === answer) return cached;
-  const page = { ...refreshIssueListPage(held, answer), answer };
+  const page = refreshWrittenIssueList(held, answer, new Map()).held;
   refreshedPages.set(held, page);
   return page;
 }
@@ -75,7 +75,8 @@ const sourcesFamily = Atom.family((key: string) => {
       const result = get(issueEnvironment.list(target));
       const cached = get(pagesFamily(JSON.stringify(target)));
       const handledWrites = get(handledWritesFamily(JSON.stringify(target)));
-      const answer = Option.getOrNull(AsyncResult.value(result));
+      const rawAnswer = Option.getOrNull(AsyncResult.value(result));
+      const answer = rawAnswer === null ? null : issueListAnswer(target, rawAnswer);
       return {
         target,
         result,
@@ -154,7 +155,13 @@ export function useIssueList(targets: ReadonlyArray<IssueListTarget>) {
       const result = registry.get(issueEnvironment.list(target));
       return result._tag === "Failure" && cached
         ? cached
-        : deriveHeld(cached, Option.getOrNull(AsyncResult.value(result)));
+        : deriveHeld(
+            cached,
+            Option.match(AsyncResult.value(result), {
+              onNone: () => null,
+              onSome: (answer) => issueListAnswer(target, answer),
+            }),
+          );
     },
     [registry],
   );
@@ -207,14 +214,15 @@ export function useIssueList(targets: ReadonlyArray<IssueListTarget>) {
             );
             throw squashAtomCommandFailure(response);
           }
-          const refreshed = refreshWrittenIssueList(currentHeld(target), response.value, pending);
+          const answer = issueListAnswer(target, response.value);
+          const refreshed = refreshWrittenIssueList(currentHeld(target), answer, pending);
           registry.set(pagesFamily(JSON.stringify(target)), refreshed.held);
           registry.update(
             handledWritesFamily(JSON.stringify(target)),
             (previous) => new Map([...previous, ...refreshed.handledWrites]),
           );
-          if (response.value.errors.length)
-            throw new Error(response.value.errors.map((error) => error.message).join("\n"));
+          if (answer.errors.length)
+            throw new Error(answer.errors.map((error) => error.message).join("\n"));
         }),
       );
       if (requests.current.refresh === controller) delete requests.current.refresh;
@@ -296,41 +304,49 @@ export function useIssueList(targets: ReadonlyArray<IssueListTarget>) {
             });
             if (controller.signal.aborted || activeScope.current !== scopeKey) return;
             if (response._tag === "Failure") throw squashAtomCommandFailure(response);
-            const refreshed = refreshWrittenIssueList(currentHeld(target), response.value, writes);
+            const answer = issueListAnswer(target, response.value);
+            const refreshed = refreshWrittenIssueList(currentHeld(target), answer, writes);
             registry.set(pagesFamily(JSON.stringify(target)), refreshed.held);
             registry.update(
               handledWritesFamily(JSON.stringify(target)),
               (previous) => new Map([...previous, ...refreshed.handledWrites]),
             );
-            if (response.value.errors.length)
-              throw new Error(response.value.errors.map((error) => error.message).join("\n"));
+            if (answer.errors.length)
+              throw new Error(answer.errors.map((error) => error.message).join("\n"));
             return;
           }
           const scope = {
+            ...(canonical.connectionId === undefined
+              ? {}
+              : { connectionId: canonical.connectionId }),
             tracker: canonical.tracker,
             projectId: canonical.projectId,
             host: canonical.host,
             scope: canonical.scope,
           };
           const { cursors: _cursors, ...input } = target.input;
-          const response = await runAtomCommand(
-            registry,
-            issueEnvironment.listPage,
-            {
-              environmentId,
-              input: {
-                ...input,
-                projectId: scope.projectId,
-                host: scope.host,
-                limit: ISSUE_LIST_PAGE_SIZE,
+          const read = await readIssueListSourcePage(registry, query, () =>
+            runAtomCommand(
+              registry,
+              issueEnvironment.listPage,
+              {
+                environmentId,
+                input: {
+                  ...input,
+                  projectId: scope.projectId,
+                  host: scope.host,
+                  ...(scope.connectionId === undefined ? {} : { connectionId: scope.connectionId }),
+                  limit: ISSUE_LIST_PAGE_SIZE,
+                },
               },
-            },
-            { reportFailure: false },
+              { reportFailure: false },
+            ),
           );
+          const response = read.result;
           if (controller.signal.aborted || activeScope.current !== scopeKey) return;
           if (response._tag === "Failure") throw squashAtomCommandFailure(response);
           const latest = currentHeld(target);
-          if (!latest || latest.answer !== started.answer) {
+          if (!read.isCurrent() || !latest || latest.answer !== started.answer) {
             void queueSourceRefresh(sourceKey, () =>
               readWrittenSource(
                 sourceKey,
@@ -340,12 +356,13 @@ export function useIssueList(targets: ReadonlyArray<IssueListTarget>) {
             );
             return;
           }
-          const refreshed = refreshWrittenIssueList(latest, response.value, writes, scope);
+          const answer = issueListAnswer(target, response.value);
+          const refreshed = refreshWrittenIssueList(latest, answer, writes, scope);
           registry.set(pagesFamily(JSON.stringify(target)), {
             ...refreshed.held,
             restartSources: latest.restartSources?.filter(
               (pending) =>
-                response.value.errors.length > 0 ||
+                answer.errors.length > 0 ||
                 issueScopeKey(environmentId, { ...pending, host: pending.host ?? "" }) !==
                   sourceKey,
             ),
@@ -354,8 +371,8 @@ export function useIssueList(targets: ReadonlyArray<IssueListTarget>) {
             handledWritesFamily(JSON.stringify(target)),
             (previous) => new Map([...previous, ...refreshed.handledWrites]),
           );
-          if (response.value.errors.length)
-            throw new Error(response.value.errors.map((error) => error.message).join("\n"));
+          if (answer.errors.length)
+            throw new Error(answer.errors.map((error) => error.message).join("\n"));
         }),
       );
       requests.current.sources.delete(controller);
@@ -448,12 +465,8 @@ export function useIssueList(targets: ReadonlyArray<IssueListTarget>) {
           if (response._tag === "Failure") throw squashAtomCommandFailure(response);
           const latest = currentHeld(target);
           if (!latest) return;
-          const next = continueIssueListPage(
-            latest,
-            sentCursors,
-            response.value,
-            held.firstCursors,
-          );
+          const answer = issueListAnswer(target, response.value);
+          const next = continueIssueListPage(latest, sentCursors, answer, held.firstCursors);
           registry.set(pagesFamily(JSON.stringify(target)), next);
           if (next !== latest) {
             await Promise.all(
@@ -474,8 +487,8 @@ export function useIssueList(targets: ReadonlyArray<IssueListTarget>) {
               }),
             );
           }
-          if (next !== latest && response.value.errors.length)
-            throw new Error(response.value.errors.map((error) => error.message).join("\n"));
+          if (next !== latest && answer.errors.length)
+            throw new Error(answer.errors.map((error) => error.message).join("\n"));
         }),
       );
       if (requests.current.page === controller) delete requests.current.page;
@@ -556,6 +569,9 @@ export function useIssueList(targets: ReadonlyArray<IssueListTarget>) {
     loadMore,
     loadingMore: state.page,
     loadMoreError: retryError,
+    continued: sources.some(({ held }) =>
+      held?.entries.some((entry) => !held.firstKeys.has(issueEntryKey(entry))),
+    ),
     hasMore: sources.some(
       ({ result, held }) =>
         result._tag === "Success" &&

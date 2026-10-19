@@ -1,12 +1,14 @@
-import { WS_METHODS } from "@t3tools/contracts";
+import { WS_METHODS, type IssueTrackerScopesInput } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
-import { Atom } from "effect/reactivity";
+import { Atom, AtomRegistry } from "effect/reactivity";
 
 import {
   createAtomCommandScheduler,
   createEnvironmentRpcCommand,
   createEnvironmentRpcQueryAtomFamily,
+  createEnvironmentQueryAtomFamily,
 } from "./runtime.ts";
+import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import * as Persistence from "../platform/persistence.ts";
 
@@ -31,8 +33,25 @@ export function createIssueTrackerEnvironmentAtoms<R, E>(
     mode: "serial" as const,
     key: ({ environmentId }: { readonly environmentId: string }) => environmentId,
   };
+  const readScopes = createEnvironmentRpcCommand(runtime, {
+    label: "environment-data:issue-trackers:read-scopes",
+    tag: WS_METHODS.issueTrackersScopes,
+  });
   return {
     connections,
+    scopes: createEnvironmentQueryAtomFamily(runtime, {
+      label: "environment-data:issue-trackers:scopes",
+      execute: (input: IssueTrackerScopesInput) =>
+        Effect.gen(function* () {
+          const registry = yield* AtomRegistry.AtomRegistry;
+          const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
+          const result = yield* Effect.promise(() =>
+            readScopes.run(registry, { environmentId: supervisor.target.environmentId, input }),
+          );
+          if (result._tag === "Failure") return yield* Effect.failCause(result.cause);
+          return result.value;
+        }),
+    }),
     /** Saves a credential the tracker accepted, or removes the stored one with a null token. */
     connect: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:issue-trackers:connect",

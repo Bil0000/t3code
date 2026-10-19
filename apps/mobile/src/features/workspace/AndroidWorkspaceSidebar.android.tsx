@@ -1,8 +1,8 @@
 import { useMemo, type ReactNode } from "react";
 import { View } from "react-native";
-import { MaterialScreenContent } from "../../components/MaterialScreenContent";
+import { ScreenContent } from "../../components/ui/ScreenContent";
 import { PullRequestsScreen } from "../pull-requests/PullRequestsScreen";
-import { MaterialPullRequestToolbar } from "../pull-requests/MaterialPullRequestToolbar.android";
+import { PullRequestToolbar } from "../pull-requests/PullRequestToolbar.android";
 import { WorkspaceTabsContext, useWorkspaceTabs } from "./WorkspaceTabsContext";
 import { IssuesScreen } from "../issues/IssuesScreen";
 
@@ -19,17 +19,14 @@ export function AndroidWorkspaceSidebar(props: {
   ) : (
     <WorkspaceTabsContext value={context}>
       <View className="flex-1 bg-header">
-        <MaterialPullRequestToolbar
-          tab={workspace.state.selectedTab}
-          onRequestVisibility={props.onRequestVisibility}
-        />
-        <MaterialScreenContent insetHorizontal>
+        <PullRequestToolbar sidebar onRequestVisibility={props.onRequestVisibility} />
+        <ScreenContent insetHorizontal>
           {workspace.state.selectedTab === "pullRequests" ? (
             <PullRequestsScreen sidebar selectedPullRequestKey={props.selectedPullRequestKey} />
           ) : (
             <IssuesScreen sidebar selectedIssueKey={props.selectedIssueKey} />
           )}
-        </MaterialScreenContent>
+        </ScreenContent>
       </View>
     </WorkspaceTabsContext>
   );

@@ -1,10 +1,10 @@
 import { RegistryContext } from "@effect/atom-react";
 import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import { use, useRef, useState } from "react";
+import { use, useLayoutEffect, useRef, useState } from "react";
 import { Linking, Platform } from "react-native";
-import { AppText as Text, AppTextInput as TextInput } from "../../components/AppText";
-import { MaterialButton } from "../../components/MaterialButton";
+import { AppText as Text, AppTextInput as TextInput } from "../../components/ui/AppText";
+import { Button } from "../../components/ui/Button";
 import { issueEnvironment } from "../../state/issues";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -20,17 +20,26 @@ export function IssueComposeSheet({
   const navigation = useNavigation();
   const registry = use(RegistryContext);
   const target = issueTarget(params);
+  const sourceKey = JSON.stringify([target, params.mode]);
+  const currentSource = useRef(sourceKey);
+  useLayoutEffect(() => {
+    currentSource.current = sourceKey;
+  }, [sourceKey, currentSource]);
   const result = useEnvironmentQuery(issueEnvironment.detail(target));
   const issue = result.data;
   const access = useIssueAccess(params, issue);
   const comment = useAtomCommand(issueEnvironment.comment, { reportFailure: false });
   const update = useAtomCommand(issueEnvironment.update, { reportFailure: false });
-  const [draft, setDraft] = useState<{ title?: string; body?: string }>({});
-  const title = draft.title ?? (editing ? (issue?.title ?? "") : "");
-  const body = draft.body ?? (editing ? (issue?.body ?? "") : "");
+  const [draft, setDraft] = useState<{ key: string; title?: string; body?: string }>({
+    key: sourceKey,
+  });
+  const held = draft.key === sourceKey ? draft : null;
+  const title = held?.title ?? (editing ? (issue?.title ?? "") : "");
+  const body = held?.body ?? (editing ? (issue?.body ?? "") : "");
   const pending = useRef(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ key: string; message: string } | null>(null);
+  const writeError = error?.key === sourceKey ? error.message : null;
   const allowed = editing ? access.edit : access.comment;
   const bodyLocked = editing && !access.editBody;
   const changed = editing
@@ -56,11 +65,14 @@ export function IssueComposeSheet({
         : await comment({ ...target, input: { ...target.input, body } });
       if (response._tag === "Failure") throw squashAtomCommandFailure(response);
       markIssueTargetWritten(registry, params);
-      navigation.goBack();
+      if (currentSource.current === sourceKey) navigation.goBack();
     } catch (cause) {
-      setError(
-        cause instanceof Error ? cause.message : "The tracker could not save this. Try again.",
-      );
+      if (currentSource.current === sourceKey)
+        setError({
+          key: sourceKey,
+          message:
+            cause instanceof Error ? cause.message : "The tracker could not save this. Try again.",
+        });
     } finally {
       pending.current = false;
       setBusy(false);
@@ -72,7 +84,7 @@ export function IssueComposeSheet({
       subtitle={`${issue?.displayKey ?? params.displayKey ?? params.key} · ${params.scope}`}
       busy={busy}
       footer={
-        <MaterialButton
+        <Button
           label={busy ? "Saving…" : editing ? "Save" : "Post comment"}
           fullWidth
           tone={Platform.OS === "android" ? "primary" : "contrast"}
@@ -90,7 +102,7 @@ export function IssueComposeSheet({
           editable={!busy && Boolean(issue)}
           value={title}
           maxLength={1024}
-          onChangeText={(next) => setDraft((held) => ({ ...held, title: next }))}
+          onChangeText={(next) => setDraft({ ...held, key: sourceKey, title: next })}
           className="min-h-12 rounded-[20px] bg-grouped-card px-4 text-base text-foreground"
         />
       ) : null}
@@ -102,7 +114,7 @@ export function IssueComposeSheet({
         editable={!busy && Boolean(issue) && !bodyLocked}
         value={body}
         maxLength={65536}
-        onChangeText={(next) => setDraft((held) => ({ ...held, body: next }))}
+        onChangeText={(next) => setDraft({ ...held, key: sourceKey, body: next })}
         className="min-h-36 rounded-[20px] bg-grouped-card p-4 text-base text-foreground"
         style={{ textAlignVertical: "top" }}
       />
@@ -111,7 +123,7 @@ export function IssueComposeSheet({
           <Text className="text-xs text-foreground-muted">
             This description has formatting that can't be edited here.
           </Text>
-          <MaterialButton
+          <Button
             label="Edit description in browser"
             onPress={() => void Linking.openURL(issue.url)}
           />
@@ -124,9 +136,9 @@ export function IssueComposeSheet({
             : `This environment is offline. Reconnect to ${editing ? "edit this issue" : "comment"}.`}
         </Text>
       ) : null}
-      {error || result.error ? (
+      {writeError || result.error ? (
         <Text selectable className="text-sm text-danger-foreground">
-          {error ?? result.error}
+          {writeError ?? result.error}
         </Text>
       ) : null}
     </SheetContent>

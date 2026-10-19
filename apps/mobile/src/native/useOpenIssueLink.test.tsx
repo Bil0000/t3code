@@ -381,3 +381,38 @@ it.each([
   expect(harness.issues).toEqual([]);
   expect(harness.external).toEqual([url]);
 });
+
+it("retains the exact selected account across resolver input and issue navigation", async () => {
+  harness.route = {
+    params: {
+      environmentId: "thread-env",
+      projectId: "source-project",
+      connectionId: "CaseSensitive",
+    },
+  };
+  answer = () => Effect.succeed({ ...resolved, connectionId: "CaseSensitive" });
+  const url = "https://linear.app/acme/issue/ENG-7";
+  expect(await open(url)).toBe(true);
+  expect(calls).toEqual([
+    {
+      environmentId: "thread-env",
+      input: { url, projectId: "source-project", connectionId: "CaseSensitive" },
+    },
+  ]);
+  expect(harness.issues).toMatchObject([
+    { environmentId: "thread-env", projectId: "server-project", connectionId: "CaseSensitive" },
+  ]);
+});
+
+it("does not leak the current issue account into an explicit other-environment link context", async () => {
+  harness.route = {
+    params: { environmentId: "thread-env", projectId: "source-project", connectionId: "AccountA" },
+  };
+  const url = "https://linear.app/acme/issue/ENG-7";
+  expect(
+    await open(url, { context: { environmentId: "panel-env", projectId: "panel-project" } }),
+  ).toBe(true);
+  expect(calls).toEqual([
+    { environmentId: "panel-env", input: { url, projectId: "panel-project" } },
+  ]);
+});

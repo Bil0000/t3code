@@ -1,4 +1,9 @@
-import type { IssueTemplate, IssueTemplateList } from "@t3tools/contracts";
+import type {
+  IssueFieldValues,
+  IssueInputField,
+  IssueTemplate,
+  IssueTemplateList,
+} from "@t3tools/contracts";
 import type { EnvironmentQueryView } from "../../state/query";
 import type { IssueCreateScope } from "./issueList";
 
@@ -61,4 +66,75 @@ export function fillIssueTemplate(
     labels: template.labels,
     assignees: template.assignees,
   };
+}
+
+export function mobileNativeFieldError(
+  fields: readonly IssueInputField[],
+  values: IssueFieldValues,
+) {
+  for (const field of fields) {
+    if (field.kind === "json" || field.kind === "cascading-select") {
+      if (field.required) return `Fill in ${field.label} on the tracker.`;
+      continue;
+    }
+    const value = values[field.id];
+    if (value === undefined || (typeof value === "string" ? !value.trim() : !value.length)) {
+      if (field.required) return `Fill in ${field.label}.`;
+      continue;
+    }
+    if (field.kind === "multiselect") {
+      if (
+        typeof value === "string" ||
+        value.some((entry) => !field.options?.some((option) => option.value === entry))
+      )
+        return `Choose values for ${field.label}.`;
+    } else if (typeof value !== "string") return `Enter a value for ${field.label}.`;
+    else if (field.kind === "select" && !field.options?.some((option) => option.value === value))
+      return `Choose a value for ${field.label}.`;
+    else if (field.kind === "number" && !Number.isFinite(Number(value)))
+      return `Enter a number for ${field.label}.`;
+    else if (
+      field.kind === "date" &&
+      (!/^\d{4}-\d{2}-\d{2}$/.test(value) ||
+        !Number.isFinite(new Date(value).getTime()) ||
+        new Date(value).toISOString().slice(0, 10) !== value)
+    )
+      return `Enter a date for ${field.label}.`;
+    else if (
+      field.kind === "datetime" &&
+      (!/(?:Z|[+-]\d{2}:\d{2})$/.test(value) || !Number.isFinite(new Date(value).getTime()))
+    )
+      return `Enter a date and time with a time zone for ${field.label}.`;
+  }
+  return null;
+}
+
+export function mobileNativeFieldValues(
+  fields: readonly IssueInputField[],
+  values: IssueFieldValues,
+): IssueFieldValues {
+  return Object.fromEntries(
+    fields.flatMap((field) => {
+      const value = values[field.id];
+      if (value === undefined || field.kind === "json" || field.kind === "cascading-select")
+        return [];
+      if (
+        !field.required &&
+        typeof value === "string" &&
+        !value.trim() &&
+        field.kind !== "text" &&
+        field.kind !== "textarea" &&
+        !(field.kind === "select" && field.options?.some((option) => option.value === value))
+      )
+        return [];
+      return [
+        [
+          field.id,
+          field.kind === "datetime" && typeof value === "string" && value.trim()
+            ? new Date(value).toISOString()
+            : value,
+        ],
+      ];
+    }),
+  );
 }

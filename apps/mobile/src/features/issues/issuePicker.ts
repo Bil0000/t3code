@@ -76,12 +76,10 @@ export function heldIssuePicker(
   )
     return null;
   const native = nativeIssuePickerIds(issue, kind);
-  const same = (id: string, other: string) =>
-    kind === "labels" ? id === other : id.toLowerCase() === other.toLowerCase();
   const acknowledged =
     confirmed.base !== issue &&
     native.length === confirmed.ids.length &&
-    native.every((id) => confirmed.ids.some((other) => same(id, other)));
+    native.every((id) => confirmed.ids.includes(id));
   return acknowledged ? null : confirmed;
 }
 
@@ -104,8 +102,6 @@ export function nextIssuePickerIds(
   environmentId: string,
 ): string[] {
   const current = issuePickerIds(issue, kind, confirmed, environmentId);
-  const same = (each: string) =>
-    kind === "labels" ? each === id : each.toLowerCase() === id.toLowerCase();
-  if (current.some(same)) return current.filter((each) => !same(each));
+  if (current.includes(id)) return current.filter((each) => each !== id);
   return kind === "assignees" && issue.capabilities.maxAssignees === 1 ? [id] : [...current, id];
 }

@@ -1,31 +1,99 @@
 import {
   WS_METHODS,
   issueListCursorKey,
+  issueHostKey,
   issueScopeKeyOf,
+  issueTrackerHostKey,
   threadIssueKeyOf,
   type EnvironmentId,
   type IssueCapabilities,
-  type IssueComment,
   type IssueInvolvement,
   type IssueListCursors,
   type IssueListEntry,
+  type IssueListInput,
   type IssueListResult,
   type IssueRef,
+  type IssuePageRef,
+  type IssueHierarchyPage,
   type IssueScopeRef,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
-import { Atom, type AtomRegistry } from "effect/reactivity";
+import * as Option from "effect/Option";
+import { AsyncResult, Atom, type AtomRegistry } from "effect/reactivity";
 
 import {
   createAtomCommandScheduler,
+  executeAtomQuery,
+  type AtomCommandResult,
   createEnvironmentRpcCommand,
   createEnvironmentRpcQueryAtomFamily,
 } from "./runtime.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 
+export function createIssueSourceRefreshQueue() {
+  const lanes = new Map<string, { next: (() => Promise<void>) | null; task: Promise<void> }>();
+  return (key: string, read: () => Promise<void>) => {
+    const previous = lanes.get(key);
+    if (previous) {
+      previous.next = read;
+      return previous.task;
+    }
+    const lane = { next: read as (() => Promise<void>) | null, task: Promise.resolve() };
+    lane.task = Promise.resolve().then(async () => {
+      try {
+        while (lane.next) {
+          const next = lane.next;
+          lane.next = null;
+          await next();
+        }
+      } finally {
+        lanes.delete(key);
+      }
+    });
+    lanes.set(key, lane);
+    return lane.task;
+  };
+}
+
+export async function readIssueListSourcePage<Q, E>(
+  registry: AtomRegistry.AtomRegistry,
+  query: Atom.Atom<AsyncResult.AsyncResult<IssueListResult, Q>>,
+  read: () => Promise<AtomCommandResult<IssueListResult, E>>,
+) {
+  if (registry.get(query).waiting)
+    await executeAtomQuery(registry, query, { reportFailure: false });
+  const answer = Option.getOrNull(AsyncResult.value(registry.get(query)));
+  const result = await read();
+  return {
+    answer,
+    result,
+    isCurrent: () => {
+      const latest = registry.get(query);
+      return !latest.waiting && Option.getOrNull(AsyncResult.value(latest)) === answer;
+    },
+  };
+}
+
+export function issueSourceMatchesList(
+  input: IssueListInput,
+  source: {
+    readonly projectId: string;
+    readonly host?: string | undefined;
+    readonly connectionId?: string | undefined;
+  },
+): boolean {
+  return (
+    (input.projectId === undefined || input.projectId === source.projectId) &&
+    (input.connectionId === undefined || input.connectionId === source.connectionId) &&
+    (input.host === undefined ||
+      issueHostKey(input.host) ===
+        (source.host === undefined ? undefined : issueHostKey(source.host)))
+  );
+}
+
 /** One row's identity across list pages and detail reads; hosts compare case-insensitively. */
 export function issueEntryKey(
-  entry: Pick<IssueListEntry, "projectId" | "host" | "scope" | "key"> & {
+  entry: Pick<IssueListEntry, "projectId" | "host" | "scope" | "key" | "connectionId"> & {
     readonly tracker: string;
   },
 ): string {
@@ -49,6 +117,27 @@ export function mergeIssueListPage(
   return [...byKey.values()].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
 }
 
+export function issueListCursorsOn(
+  cursors: IssueListCursors,
+  host: string,
+  tracker?: string,
+  connectionId?: string,
+): IssueListCursors {
+  const prefix = `${issueHostKey(host)} `;
+  const account = connectionId === undefined ? "" : `@${encodeURIComponent(connectionId)} `;
+  return Object.fromEntries(
+    Object.entries(cursors).filter(([key]) => {
+      if (account === "" ? key.startsWith("@") : !key.startsWith(account)) return false;
+      const [kind = "", cursorHost = ""] = key.slice(account.length).split(" ");
+      if (`${issueHostKey(kind)} ` === prefix) return true;
+      return (
+        (tracker === undefined || kind.toLowerCase() === tracker) &&
+        `${issueHostKey(cursorHost)} ` === prefix
+      );
+    }),
+  );
+}
+
 type IssueListPage = Pick<IssueListResult, "entries" | "nextCursors" | "errors"> & {
   readonly sources?: IssueListResult["sources"];
   readonly viewers?: IssueListResult["viewers"];
@@ -59,12 +148,24 @@ type HeldIssueList = IssueListPage & {
     readonly trackers?: IssueListResult["trackers"];
   };
   readonly scopeViewers?: ReadonlyMap<string, string | null>;
-  readonly restartSources?: ReadonlyArray<IssueScopeRef>;
   readonly firstCursors: IssueListCursors;
   readonly firstKeys: ReadonlySet<string>;
 };
 
+export function holdIssueListAnswer(answer: IssueListResult) {
+  return {
+    answer,
+    entries: answer.entries,
+    nextCursors: answer.nextCursors,
+    firstCursors: answer.nextCursors,
+    firstKeys: new Set(answer.entries.map(issueEntryKey)),
+    errors: answer.errors,
+    sources: answer.sources,
+  };
+}
+
 type IssueListSource = {
+  readonly connectionId?: string | undefined;
   readonly projectId: string;
   readonly tracker: string;
   readonly host: string;
@@ -73,38 +174,51 @@ type IssueListSource = {
 
 const sourceKey = (source: IssueListSource) =>
   issueListCursorKey({
+    ...(source.connectionId === undefined ? {} : { connectionId: source.connectionId }),
     tracker: source.tracker,
     host: source.host,
     scope: issueScopeKeyOf(source),
   });
 
 function cursorKeyOf(key: string, sources: ReadonlyArray<IssueListSource>): string {
-  const [prefix = "", ...parts] = key.split(" ");
+  const tokens = key.split(" ");
+  const account = key.startsWith("@") ? `${tokens.shift()} ` : "";
+  const [prefix = "", ...parts] = tokens;
+  if (prefix === "jira" && parts.length >= 2) {
+    const host = parts.shift()!;
+    return `${account}jira ${issueHostKey(host)} ${parts.join(" ").toLowerCase()}`;
+  }
+  if (prefix.includes("/"))
+    return `${account}${issueHostKey(prefix)} ${parts.join(" ").toLowerCase()}`;
   if (prefix === "forgejo" && parts.length >= 2) {
     const host = parts.shift()!;
-    return `forgejo ${host.toLowerCase()} ${issueScopeKeyOf({ tracker: prefix, scope: parts.join(" ") })}`;
+    return `${account}forgejo ${host.toLowerCase()} ${issueScopeKeyOf({ tracker: prefix, scope: parts.join(" ") })}`;
   }
   const host = prefix.toLowerCase();
   const scope = parts.join(" ");
   const native = sources.some(
     (source) =>
       source.tracker === "forgejo" &&
-      source.host.toLowerCase() === host &&
+      (source.connectionId === undefined ? "" : `@${encodeURIComponent(source.connectionId)} `) ===
+        account &&
+      issueHostKey(source.host) === host &&
       issueScopeKeyOf({ tracker: source.tracker, scope }) === issueScopeKeyOf(source),
   );
-  return native ? `${host} ${issueScopeKeyOf({ tracker: "forgejo", scope })}` : key.toLowerCase();
+  return `${account}${native ? `${host} ${issueScopeKeyOf({ tracker: "forgejo", scope })}` : tokens.join(" ").toLowerCase()}`;
 }
 
 const scopeOf = (source: IssueListSource, cursors: ReadonlySet<string>) => {
   const qualified = sourceKey(source);
-  const legacy = `${source.host.toLowerCase()} ${issueScopeKeyOf(source)}`;
+  if (source.connectionId !== undefined) return qualified;
+  const legacy = `${issueHostKey(source.host)} ${issueScopeKeyOf(source)}`;
   return cursors.has(qualified) || !cursors.has(legacy) ? qualified : legacy;
 };
 
 const heldSources = (held: HeldIssueList) => held.sources ?? held.entries;
 const matchesSource = (error: IssueListPage["errors"][number], source: IssueListSource) =>
   error.projectId === source.projectId &&
-  (error.host === undefined || error.host.toLowerCase() === source.host.toLowerCase()) &&
+  error.connectionId === source.connectionId &&
+  (error.host === undefined || issueHostKey(error.host) === issueHostKey(source.host)) &&
   (error.tracker === undefined || error.tracker === source.tracker);
 
 function failedScopes(
@@ -136,17 +250,28 @@ function issueListViewerChanges(
   const viewerFor = (
     viewers: IssueListResult["viewers"],
     source: IssueListSource,
-    pool: ReadonlyArray<Pick<IssueListSource, "tracker" | "host"> & { readonly scope?: string }>,
+    pool: ReadonlyArray<
+      Pick<IssueListSource, "tracker" | "host" | "connectionId"> & { readonly scope?: string }
+    >,
   ) => {
+    const scoped = viewers[sourceKey(source)] ?? viewers[issueListCursorKey(source)];
+    if (scoped !== undefined) return scoped;
+    if (
+      pool.some(
+        (each) =>
+          each.tracker === source.tracker &&
+          issueHostKey(each.host) === issueHostKey(source.host) &&
+          each.connectionId !== source.connectionId,
+      )
+    )
+      return undefined;
     if (source.tracker === "forgejo") {
-      const scoped = viewers[sourceKey(source)] ?? viewers[issueListCursorKey(source)];
-      if (scoped !== undefined) return scoped;
       const mount = issueScopeKeyOf(source).split("/").slice(0, -2).join("/");
       if (
         pool.some(
           (each) =>
             each.tracker === source.tracker &&
-            each.host.toLowerCase() === source.host.toLowerCase() &&
+            issueHostKey(each.host) === issueHostKey(source.host) &&
             each.scope !== undefined &&
             issueScopeKeyOf({ tracker: each.tracker, scope: each.scope })
               .split("/")
@@ -156,13 +281,13 @@ function issueListViewerChanges(
       )
         return undefined;
     }
-    const qualified = viewers[`${source.tracker} ${source.host.toLowerCase()}`];
+    const qualified = viewers[issueTrackerHostKey(source)];
     if (qualified !== undefined) return qualified;
-    const host = source.host.toLowerCase();
+    const host = issueHostKey(source.host);
     const legacy = viewers[host];
     if (
       legacy !== undefined &&
-      pool.some((each) => each.host.toLowerCase() === host && each.tracker !== source.tracker)
+      pool.some((each) => issueHostKey(each.host) === host && each.tracker !== source.tracker)
     )
       return undefined;
     return legacy ?? null;
@@ -284,52 +409,18 @@ export function refreshIssueListPage<T extends HeldIssueList>(
   held: T,
   fresh: IssueListPage,
   options: {
-    readonly source?: Omit<IssueListSource, "tracker"> & { readonly tracker?: string };
+    readonly source?: IssueListSource;
     readonly removed?: string | ReadonlySet<string>;
   } = {},
 ): T {
-  const sources = [...(fresh.sources ?? fresh.entries), ...heldSources(held)];
-  const requestedSource = options.source;
-  const source = requestedSource && {
-    ...requestedSource,
-    tracker:
-      requestedSource.tracker ??
-      sources.find(
-        (each) =>
-          each.projectId === requestedSource.projectId &&
-          each.host.toLowerCase() === requestedSource.host.toLowerCase() &&
-          issueScopeKeyOf(each) ===
-            issueScopeKeyOf({ tracker: each.tracker, scope: requestedSource.scope }),
-      )?.tracker ??
-      "",
-  };
-  const cursorSources = [...sources, ...(source ? [source] : [])];
-  const keyOf = (key: string) => cursorKeyOf(key, cursorSources);
-  const aliases = new Map<string, string>();
-  const legacyTrackers = new Map<string, string | null>();
-  for (const each of sources) {
-    const legacy = keyOf(`${each.host} ${each.scope}`);
-    const tracker = legacyTrackers.get(legacy);
-    legacyTrackers.set(
-      legacy,
-      tracker === undefined || tracker === each.tracker ? each.tracker : null,
-    );
-  }
-  for (const each of sources) {
-    const qualified = issueListCursorKey(each);
-    const legacy = `${each.host} ${each.scope}`;
-    if (legacyTrackers.get(keyOf(legacy)) === null) continue;
-    if (fresh.nextCursors[qualified] !== undefined) aliases.set(keyOf(legacy), qualified);
-    else if (fresh.nextCursors[legacy] !== undefined) aliases.set(keyOf(qualified), legacy);
-  }
-  const remap = (cursors: IssueListCursors) =>
-    Object.fromEntries(
-      Object.entries(cursors).map(([key, cursor]) => [
-        fresh.nextCursors[key] !== undefined ? key : (aliases.get(keyOf(key)) ?? key),
-        cursor,
-      ]),
-    );
-  held = { ...held, firstCursors: remap(held.firstCursors), nextCursors: remap(held.nextCursors) };
+  const { source } = options;
+  const sources = [
+    ...heldSources(held),
+    ...(fresh.sources ?? []),
+    ...fresh.entries,
+    ...(source ? [source] : []),
+  ];
+  const keyOf = (key: string) => cursorKeyOf(key, sources);
   const cursors = new Set(
     [
       ...Object.keys(held.firstCursors),
@@ -338,11 +429,7 @@ export function refreshIssueListPage<T extends HeldIssueList>(
     ].map(keyOf),
   );
   const failed = failedScopes(
-    [
-      ...(fresh.sources ?? []),
-      ...heldSources(held),
-      ...(held.restartSources ?? []).map((pending) => ({ ...pending, host: pending.host ?? "" })),
-    ],
+    [...(fresh.sources ?? []), ...heldSources(held)],
     fresh.errors,
     cursors,
   );
@@ -399,14 +486,18 @@ export function refreshIssueListPage<T extends HeldIssueList>(
       )
       .map(([key]) => keyOf(key)),
   );
-  const keep = (key: string) =>
-    isBound(key) &&
-    (!covered(key) ||
-      (continuing.has(keyOf(key)) &&
-        (tails.has(keyOf(key)) || exhausted.has(keyOf(key))) &&
-        !shifted.has(keyOf(key)) &&
-        !changedOwners.has(keyOf(key)) &&
-        !changed.has(keyOf(key))));
+  const keep = (key: string) => {
+    const scope = keyOf(key);
+    return (
+      isBound(scope) &&
+      (!covered(scope) ||
+        (continuing.has(scope) &&
+          (tails.has(scope) || exhausted.has(scope)) &&
+          !shifted.has(scope) &&
+          !changedOwners.has(scope) &&
+          !changed.has(scope)))
+    );
+  };
   const pick = (cursors: IssueListCursors, take: (key: string) => boolean) =>
     Object.fromEntries(Object.entries(cursors).filter(([key]) => take(key)));
   const kept = held.entries.filter((entry) => {
@@ -419,18 +510,15 @@ export function refreshIssueListPage<T extends HeldIssueList>(
           !changedOwners.has(scope) &&
           !changed.has(scope) &&
           !held.firstKeys.has(key) &&
-          !(typeof options.removed === "string"
-            ? key === options.removed
-            : options.removed?.has(key))))
+          (typeof options.removed === "string"
+            ? key !== options.removed
+            : !options.removed?.has(key))))
     );
   });
   return {
     ...held,
     entries: mergeIssueListPage(kept, taken),
-    restartSources: (held.restartSources ?? []).filter((pending) => {
-      const key = scopeOf({ ...pending, host: pending.host ?? "" }, cursors);
-      return failed.has(key) || (isBound(key) && !covered(key));
-    }),
+    restartSources: [],
     scopeViewers,
     firstKeys: new Set([
       ...kept.map(issueEntryKey).filter((key) => held.firstKeys.has(key)),
@@ -454,13 +542,19 @@ export function refreshIssueListPage<T extends HeldIssueList>(
 
 export function issueScopeKey(
   environmentId: EnvironmentId,
-  scope: { readonly tracker: string; readonly host: string; readonly scope: string },
+  scope: {
+    readonly tracker: string;
+    readonly host: string;
+    readonly scope: string;
+    readonly connectionId?: string | undefined;
+  },
 ): string {
   return JSON.stringify([
     environmentId,
     scope.tracker,
-    scope.host.toLowerCase(),
+    issueHostKey(scope.host),
     issueScopeKeyOf(scope),
+    ...(scope.connectionId === undefined ? [] : [scope.connectionId]),
   ]);
 }
 
@@ -479,16 +573,6 @@ export function offeredIssueInvolvements(
   return declared ? offered : null;
 }
 
-/** Older comments go in front: the detail carries the newest page and pages walk backwards. */
-export function prependIssueComments(
-  current: ReadonlyArray<IssueComment>,
-  older: ReadonlyArray<IssueComment>,
-): ReadonlyArray<IssueComment> {
-  if (older.length === 0) return current;
-  const seen = new Set(current.map((comment) => comment.id));
-  return [...older.filter((comment) => !seen.has(comment.id)), ...current];
-}
-
 /**
  * Every read goes to a tracker API over the environment, so results are reused for a short while
  * and refreshed explicitly. Mutations run serially per environment: changes to one issue are
@@ -503,22 +587,110 @@ export function createIssueEnvironmentAtoms<R, E>(
     mode: "serial",
     key: ({ environmentId }: { readonly environmentId: string }) => environmentId,
   } as const;
-  const detail = createEnvironmentRpcQueryAtomFamily(runtime, {
+  const detailQuery = createEnvironmentRpcQueryAtomFamily(runtime, {
     label: "environment-data:issues:detail",
     tag: WS_METHODS.issuesDetail,
     staleTimeMs: 30_000,
   });
-  const detailRef = ({ projectId, tracker, host, scope, key }: IssueRef): IssueRef => ({
+  const detailRef = ({
+    projectId,
+    tracker,
+    host,
+    scope,
+    key,
+    connectionId,
+  }: IssueRef): IssueRef => ({
     projectId,
     tracker,
     ...(host === undefined ? {} : { host }),
     scope,
     key,
+    ...(connectionId === undefined ? {} : { connectionId }),
   });
+  const detail = (target: { readonly environmentId: EnvironmentId; readonly input: IssueRef }) =>
+    detailQuery(
+      target.input.connectionId === undefined
+        ? target
+        : { ...target, input: detailRef(target.input) },
+    );
   const refreshDetail = (
     { environmentId, input }: { readonly environmentId: EnvironmentId; readonly input: IssueRef },
     registry: AtomRegistry.AtomRegistry,
   ) => Effect.sync(() => registry.refresh(detail({ environmentId, input: detailRef(input) })));
+  const historyRevision = Atom.family((_key: string) =>
+    Atom.make(0).pipe(Atom.setIdleTTL(5 * 60_000)),
+  );
+  const historyRefresh = ({
+    environmentId,
+    input,
+  }: {
+    readonly environmentId: EnvironmentId;
+    readonly input: IssueRef;
+  }) =>
+    historyRevision(
+      JSON.stringify([
+        environmentId,
+        input.host === undefined ? input.projectId : null,
+        threadIssueKeyOf({ ...input, host: input.host ?? "" }),
+      ]),
+    );
+  const refreshHistory = (
+    target: { readonly environmentId: EnvironmentId; readonly input: IssueRef },
+    registry: AtomRegistry.AtomRegistry,
+  ) => Effect.sync(() => registry.update(historyRefresh(target), (revision) => revision + 1));
+  const refreshDetailAndHistory = (
+    target: { readonly environmentId: EnvironmentId; readonly input: IssueRef },
+    registry: AtomRegistry.AtomRegistry,
+  ) => refreshDetail(target, registry).pipe(Effect.andThen(refreshHistory(target, registry)));
+  const hierarchyRevision = Atom.family((_key: string) => Atom.make(0));
+  const hierarchySignal = (
+    environmentId: EnvironmentId,
+    input: Pick<IssueRef, "tracker" | "host" | "connectionId">,
+  ) =>
+    hierarchyRevision(
+      JSON.stringify([
+        environmentId,
+        input.tracker,
+        input.host === undefined ? undefined : issueHostKey(input.host),
+        ...(input.connectionId === undefined ? [] : [input.connectionId]),
+      ]),
+    );
+  const refreshHierarchy = (
+    {
+      environmentId,
+      input,
+    }: {
+      readonly environmentId: EnvironmentId;
+      readonly input: Pick<IssueRef, "tracker" | "host" | "connectionId">;
+    },
+    registry: AtomRegistry.AtomRegistry,
+  ) =>
+    Effect.sync(() => {
+      const signal = hierarchySignal(environmentId, input);
+      registry.set(signal, registry.get(signal) + 1);
+    });
+  const hierarchyQuery = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "environment-data:issues:hierarchy",
+    tag: WS_METHODS.issuesHierarchy,
+    staleTimeMs: 30_000,
+    refreshTrigger: ({ environmentId, input }) => hierarchySignal(environmentId, input),
+  });
+  const hierarchy = (target: {
+    readonly environmentId: EnvironmentId;
+    readonly input: IssuePageRef;
+  }) =>
+    hierarchyQuery(
+      target.input.connectionId === undefined
+        ? target
+        : {
+            ...target,
+            input: {
+              ...detailRef(target.input),
+              ...(target.input.cursor === undefined ? {} : { cursor: target.input.cursor }),
+              ...(target.input.limit === undefined ? {} : { limit: target.input.limit }),
+            },
+          },
+    );
   return {
     list: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:issues:list",
@@ -534,11 +706,70 @@ export function createIssueEnvironmentAtoms<R, E>(
       tag: WS_METHODS.issuesList,
       scheduler: commandScheduler,
       concurrency: {
-        mode: "singleFlight",
-        key: ({ environmentId, input }) => JSON.stringify([environmentId, input]),
+        mode: "serial",
+        key: ({ environmentId }) => `issues-list-page ${environmentId}`,
       },
     }),
     detail,
+    historyRefresh,
+    history: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:issues:history",
+      tag: WS_METHODS.issuesHistory,
+      staleTimeMs: 30_000,
+      refreshTrigger: (target) =>
+        target.input.cursor === undefined ? historyRefresh(target) : undefined,
+    }),
+    commentPages: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:issues:comment-pages",
+      tag: WS_METHODS.issuesComments,
+      staleTimeMs: 30_000,
+      refreshTrigger: (target) =>
+        target.input.cursor === undefined ? historyRefresh(target) : undefined,
+    }),
+    linkedPullRequests: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:issues:linked-pull-requests",
+      tag: WS_METHODS.issuesLinkedPullRequests,
+      staleTimeMs: 30_000,
+    }),
+    hierarchy,
+    dependencies: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:issues:dependencies",
+      tag: WS_METHODS.issuesDependencies,
+      staleTimeMs: 30_000,
+      refreshTrigger: (target) => historyRefresh(target),
+    }),
+    setDependency: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:issues:set-dependency",
+      tag: WS_METHODS.issuesSetDependency,
+      scheduler: commandScheduler,
+      concurrency: serialPerEnvironment,
+      onSuccess: (target, registry) =>
+        refreshDetailAndHistory(target, registry).pipe(
+          Effect.andThen(
+            refreshHistory(
+              {
+                environmentId: target.environmentId,
+                input: {
+                  ...detailRef(target.input),
+                  scope: target.input.targetScope,
+                  key: target.input.targetKey,
+                },
+              },
+              registry,
+            ),
+          ),
+        ),
+    }),
+    labelCandidates: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:issues:label-candidates",
+      tag: WS_METHODS.issuesLabelCandidates,
+      staleTimeMs: 60_000,
+    }),
+    assigneeCandidates: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:issues:assignee-candidates",
+      tag: WS_METHODS.issuesAssigneeCandidates,
+      staleTimeMs: 60_000,
+    }),
     resolveUrl: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:issues:resolve-url",
       tag: WS_METHODS.issuesResolveUrl,
@@ -548,7 +779,15 @@ export function createIssueEnvironmentAtoms<R, E>(
         key: ({ environmentId, input }) => JSON.stringify([environmentId, input]),
       },
     }),
-    /** Older comments past the cursor the detail handed over; the panel prepends what arrives. */
+    refreshThreadLinks: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:issues:refresh-thread-links",
+      tag: WS_METHODS.issuesRefreshThreadLinks,
+      scheduler: commandScheduler,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) => JSON.stringify([environmentId, input]),
+      },
+    }),
     comments: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:issues:comments",
       tag: WS_METHODS.issuesComments,
@@ -569,33 +808,100 @@ export function createIssueEnvironmentAtoms<R, E>(
       label: "environment-data:issues:candidates",
       tag: WS_METHODS.issuesCandidates,
       staleTimeMs: 60_000,
+      refreshTrigger: ({ environmentId, input }) =>
+        input.key === undefined
+          ? undefined
+          : historyRefresh({ environmentId, input: { ...input, key: input.key } }),
     }),
     create: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:issues:create",
       tag: WS_METHODS.issuesCreate,
       scheduler: commandScheduler,
       concurrency: serialPerEnvironment,
+      onSuccess: (target, registry, result) =>
+        target.input.parentKey === undefined
+          ? Effect.void
+          : refreshHierarchy(target, registry).pipe(
+              Effect.andThen(
+                result.parentLinked === false
+                  ? Effect.void
+                  : refreshHistory(
+                      {
+                        environmentId: target.environmentId,
+                        input: { ...target.input, key: target.input.parentKey },
+                      },
+                      registry,
+                    ),
+              ),
+            ),
     }),
     comment: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:issues:comment",
       tag: WS_METHODS.issuesComment,
       scheduler: commandScheduler,
       concurrency: serialPerEnvironment,
-      onSuccess: refreshDetail,
+      onSuccess: refreshDetailAndHistory,
+    }),
+    editComment: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:issues:edit-comment",
+      tag: WS_METHODS.issuesEditComment,
+      scheduler: commandScheduler,
+      concurrency: serialPerEnvironment,
+      onSuccess: refreshDetailAndHistory,
+    }),
+    setParent: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:issues:set-parent",
+      tag: WS_METHODS.issuesSetParent,
+      scheduler: commandScheduler,
+      concurrency: serialPerEnvironment,
+      onSuccess: (target, registry) =>
+        Effect.gen(function* () {
+          const held = registry
+            .getNodes()
+            .get(hierarchy({ environmentId: target.environmentId, input: detailRef(target.input) }))
+            ?.valueOption() as
+            | Option.Option<AsyncResult.AsyncResult<IssueHierarchyPage, unknown>>
+            | undefined;
+          const oldParent =
+            Option.getOrNull(Option.flatMap(held ?? Option.none(), AsyncResult.value))?.parent ??
+            null;
+          yield* refreshDetailAndHistory(target, registry);
+          yield* refreshHierarchy(target, registry);
+          if (target.input.parentKey !== null)
+            yield* refreshHistory(
+              {
+                environmentId: target.environmentId,
+                input: { ...target.input, key: target.input.parentKey },
+              },
+              registry,
+            );
+          if (
+            oldParent !== null &&
+            (oldParent.scope.toLowerCase() !== target.input.scope.toLowerCase() ||
+              oldParent.key !== target.input.parentKey)
+          )
+            yield* refreshHistory(
+              {
+                environmentId: target.environmentId,
+                input: { ...target.input, scope: oldParent.scope, key: oldParent.key },
+              },
+              registry,
+            );
+        }),
     }),
     update: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:issues:update",
       tag: WS_METHODS.issuesUpdate,
       scheduler: commandScheduler,
       concurrency: serialPerEnvironment,
-      onSuccess: refreshDetail,
+      onSuccess: refreshDetailAndHistory,
     }),
     setState: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:issues:set-state",
       tag: WS_METHODS.issuesSetState,
       scheduler: commandScheduler,
       concurrency: serialPerEnvironment,
-      onSuccess: refreshDetail,
+      onSuccess: refreshDetailAndHistory,
     }),
     react: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:issues:react",

@@ -7,6 +7,10 @@
       "types": "./src/composerThreadItems.ts",
       "default": "./src/composerThreadItems.ts"
     },
+    "./image-attachment-size": {
+      "types": "./src/imageAttachmentSize.ts",
+      "default": "./src/imageAttachmentSize.ts"
+    },
     "./handoff": {
       "types": "./src/handoff.ts",
       "default": "./src/handoff.ts"
@@ -158,6 +162,10 @@
     "./state/git": {
       "types": "./src/state/git.ts",
       "default": "./src/state/git.ts"
+    },
+    "./state/command-output": {
+      "types": "./src/state/commandOutput.ts",
+      "default": "./src/state/commandOutput.ts"
     },
     "./state/item-support": {
       "types": "./src/state/itemSupport.ts",
@@ -355,6 +363,10 @@
       "types": "./src/work-log/scrollAnchor.ts",
       "default": "./src/work-log/scrollAnchor.ts"
     },
+    "./pull-request-link-input": {
+      "types": "./src/pullRequestLinkInput.ts",
+      "default": "./src/pullRequestLinkInput.ts"
+    },
     "./thread-pull-request-compatibility": {
       "types": "./src/threadPullRequestCompatibility.ts",
       "default": "./src/threadPullRequestCompatibility.ts"
@@ -422,6 +434,18 @@
     "./pull-request-markdown": {
       "types": "./src/pullRequestMarkdown.ts",
       "default": "./src/pullRequestMarkdown.ts"
+    },
+    "./pull-request-query": {
+      "types": "./src/pullRequestQuery.ts",
+      "default": "./src/pullRequestQuery.ts"
+    },
+    "./issue-form": {
+      "types": "./src/issue-form.ts",
+      "default": "./src/issue-form.ts"
+    },
+    "./issue-pages": {
+      "types": "./src/issue-pages.ts",
+      "default": "./src/issue-pages.ts"
     }
   },
   "scripts": {
@@ -429,6 +453,7 @@
     "test": "vp test run"
   },
   "dependencies": {
+    "@effect/atom-react": "catalog:",
     "@pierre/diffs": "catalog:",
     "@t3tools/contracts": "workspace:*",
     "@t3tools/shared": "workspace:*",
@@ -440,10 +465,12 @@
     "@t3tools/source-control-github": "workspace:*",
     "@t3tools/source-control-gitlab": "workspace:*",
     "effect": "catalog:",
+    "react": "catalog:",
     "three": "0.180.0"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
+    "@types/react": "catalog:",
     "@types/three": "0.180.0",
     "vite-plus": "catalog:"
   }

@@ -4,9 +4,8 @@ import { offeredIssueInvolvements } from "@t3tools/client-runtime/state/issues";
 import { ProjectId, type EnvironmentId } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { Atom } from "effect/reactivity";
-import { use, useCallback, useMemo, useRef, useState } from "react";
+import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator,
   Platform,
   Pressable,
   RefreshControl,
@@ -17,8 +16,9 @@ import {
 import { ScrollViewMarker } from "react-native-screens";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { AppText as Text } from "../../components/AppText";
-import { EmptyState } from "../../components/EmptyState";
+import { AppText as Text } from "../../components/ui/AppText";
+import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
+import { EmptyState } from "../../components/ui/EmptyState";
 import { NativePrimaryColumnContext } from "../../native/v5-workspace-context";
 import { useWorkspaceState } from "../../state/workspace";
 import { useProjects } from "../../state/entities";
@@ -33,6 +33,7 @@ import {
   issueCreateScopes,
   issueListNotices,
   issueListRows,
+  issueListRowsAreEqual,
   issueListTrackers,
   scopedIssueKey,
   type EnvironmentIssueEntry,
@@ -54,7 +55,7 @@ const creatableFamily = Atom.family((key: string) =>
 function IssueScrollView(props: ScrollViewProps) {
   const insets = useSafeAreaInsets();
   return (
-    <ScrollViewMarker>
+    <ScrollViewMarker style={{ flex: 1 }}>
       <ScrollView
         {...props}
         automaticallyAdjustContentInsets={false}
@@ -75,8 +76,16 @@ export function IssuesScreen(
   const configs = useAtomValue(environmentServerConfigsAtom);
   const insets = useSafeAreaInsets();
   const [initialOffset] = useState(() => workspace.getScrollOffset("issues"));
+  const [initialAnchor] = useState(() => workspace.getScrollAnchor("issues"));
   const listRef = useRef<LegendListRef>(null);
   const tab = workspace.state.tabs.issues;
+  const maintainVisiblePosition = useMemo(
+    () => ({
+      data: tab.searchMode === "resting",
+      shouldRestorePosition: () => workspace.getScrollOffset("issues") > 0,
+    }),
+    [tab.searchMode, workspace],
+  );
   const debouncedQuery = useDebouncedValue(tab.query.trim(), 300);
   const query = tab.searchMode === "resting" ? "" : debouncedQuery.slice(0, 200);
   const { controls, setControls } = useIssueListControls();
@@ -93,17 +102,24 @@ export function IssuesScreen(
             configs.get(environment.environmentId)?.environment.capabilities.issues === true &&
             (controls.environmentId === null ||
               environment.environmentId === controls.environmentId) &&
+            (!controls.accountEnvironmentId ||
+              environment.environmentId === controls.accountEnvironmentId) &&
             (!controls.projectEnvironmentId ||
               environment.environmentId === controls.projectEnvironmentId),
         )
         .sort((left, right) => left.environmentId.localeCompare(right.environmentId))
         .map((environment) => ({
           environmentId: environment.environmentId,
+          ...(controls.accountEnvironmentId !== undefined && controls.connectionId === undefined
+            ? { defaultAccount: true as const }
+            : {}),
           input: {
             state: controls.state,
             involvement: controls.involvement,
             limit: ISSUE_LIST_PAGE_SIZE,
             ...(controls.host ? { host: controls.host } : {}),
+            ...(controls.tracker ? { tracker: controls.tracker } : {}),
+            ...(controls.connectionId ? { connectionId: controls.connectionId } : {}),
             ...(controls.projectId ? { projectId: ProjectId.make(controls.projectId) } : {}),
             ...(query ? { query } : {}),
           },
@@ -127,6 +143,7 @@ export function IssuesScreen(
   );
   const projects = allProjects.filter(
     (project) =>
+      !project.isScratch &&
       capable.some((environment) => environment.environmentId === project.environmentId) &&
       (controls.environmentId === null || project.environmentId === controls.environmentId),
   );
@@ -157,6 +174,7 @@ export function IssuesScreen(
         scope: item.scope,
         key: item.key,
         displayKey: item.displayKey,
+        ...(item.connectionId === undefined ? {} : { connectionId: item.connectionId }),
       }),
     [openIssue],
   );
@@ -173,6 +191,19 @@ export function IssuesScreen(
     ),
     [selectIssue, selectedKey, sidebar],
   );
+  const previousSearchMode = useRef(tab.searchMode);
+  useEffect(() => {
+    const restoring = previousSearchMode.current !== "resting" && tab.searchMode === "resting";
+    previousSearchMode.current = tab.searchMode;
+    if (restoring)
+      void listRef.current?.scrollToOffset({
+        offset: tab.scrollOffset - (Platform.OS === "ios" ? insets.top : 0),
+        animated: false,
+      });
+  }, [tab.searchMode, tab.scrollOffset, insets.top]);
+  const initialIndex = initialAnchor
+    ? entries.findIndex((entry) => scopedIssueKey(entry) === initialAnchor.key)
+    : -1;
   const environmentLabel = (environmentId: string) =>
     environments.find((environment) => environment.environmentId === environmentId)
       ?.environmentLabel ?? "Environment";
@@ -192,6 +223,10 @@ export function IssuesScreen(
         data={entries}
         extraData={selectedKey}
         keyExtractor={scopedIssueKey}
+        itemsAreEqual={issueListRowsAreEqual}
+        maintainVisibleContentPosition={result.continued ? maintainVisiblePosition : false}
+        onEndReached={() => void result.loadMore()}
+        onEndReachedThreshold={0.5}
         estimatedItemSize={88}
         drawDistance={1_000}
         refreshControl={
@@ -207,21 +242,35 @@ export function IssuesScreen(
         contentInsetAdjustmentBehavior="never"
         contentInset={Platform.OS === "ios" ? { top: insets.top } : undefined}
         initialScrollOffset={
-          initialOffset > 0 ? initialOffset - (Platform.OS === "ios" ? insets.top : 0) : undefined
+          !initialAnchor && initialOffset > 0
+            ? initialOffset - (Platform.OS === "ios" ? insets.top : 0)
+            : undefined
+        }
+        initialScrollIndex={
+          initialIndex >= 0 && initialAnchor
+            ? { index: initialIndex, viewOffset: initialAnchor.viewOffset, viewPosition: 0 }
+            : undefined
         }
         contentInsetStartAdjustment={Platform.OS === "ios" ? insets.top : 0}
         contentContainerStyle={{
           paddingBottom: Math.max(insets.bottom, workspace.bottomClearance),
         }}
-        onScroll={(event) =>
+        onScroll={(event) => {
           workspace.recordScrollOffset(
             "issues",
             Math.max(
               0,
               event.nativeEvent.contentOffset.y + (Platform.OS === "ios" ? insets.top : 0),
             ),
-          )
-        }
+          );
+          const list = listRef.current?.getState();
+          const item = list ? entries[list.start] : undefined;
+          if (list && item)
+            workspace.recordScrollAnchor("issues", {
+              key: scopedIssueKey(item),
+              viewOffset: list.positionAtIndex(list.start) - event.nativeEvent.contentOffset.y,
+            });
+        }}
         keyboardDismissMode="on-drag"
         keyboardShouldPersistTaps="handled"
         renderItem={renderIssue}
@@ -241,7 +290,9 @@ export function IssuesScreen(
                 });
               }}
               involvements={involvements}
-              trackers={trackers}
+              accounts={result.lists.flatMap(({ environmentId, held }) =>
+                held.answer.trackers.map((tracker) => ({ ...tracker, environmentId })),
+              )}
               projects={projects}
               onCreate={
                 createScopes.length
@@ -263,7 +314,7 @@ export function IssuesScreen(
         ListFooterComponent={
           result.loadingMore ? (
             <View className="items-center py-5">
-              <ActivityIndicator
+              <AppActivityIndicator
                 colorClassName="accent-icon"
                 accessibilityLabel="Loading more issues"
               />
@@ -278,21 +329,12 @@ export function IssuesScreen(
               <Text className="text-xs text-foreground-muted">{result.loadMoreError}</Text>
               <Text className="text-sm font-t3-medium text-primary-text">Try again</Text>
             </Pressable>
-          ) : result.hasMore && connectedTargets.length ? (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Load more issues"
-              onPress={() => void result.loadMore()}
-              className="items-center px-8 py-4"
-            >
-              <Text className="text-sm font-t3-medium text-primary-text">Load more</Text>
-            </Pressable>
           ) : undefined
         }
         ListEmptyComponent={
           result.isPending && connectedTargets.length > 0 ? (
             <View className="items-center py-12">
-              <ActivityIndicator colorClassName="accent-icon" />
+              <AppActivityIndicator colorClassName="accent-icon" />
             </View>
           ) : (
             <View className="px-8 py-12">
@@ -318,7 +360,7 @@ export function IssuesScreen(
                       : targets.length && connectedTargets.length === 0
                         ? "Reconnect to load issues."
                         : result.lists.length && trackers.length === 0
-                          ? "Add a project on a supported tracker, or connect Linear or Jira in Settings > Source control on desktop or web."
+                          ? "Add a project on a supported tracker, or connect Linear or Jira in Settings > Integrations on desktop or web."
                           : "Issues from the selected environments' projects appear here."
                 }
                 variant="plain"

@@ -1,4 +1,4 @@
-import { issueEntryKey, prependIssueComments } from "@t3tools/client-runtime/state/issues";
+import { issueEntryKey } from "@t3tools/client-runtime/state/issues";
 import type {
   EnvironmentId,
   IssueComment,
@@ -7,67 +7,10 @@ import type {
   IssueReactionContent,
 } from "@t3tools/contracts";
 
-export type IssueOlderComments = {
-  readonly issue: string;
-  readonly viewer: string | null;
-  readonly seed: string | null;
-  readonly firstPage: ReadonlyArray<IssueComment>;
-  readonly firstIds: ReadonlyArray<string>;
-  readonly comments: ReadonlyArray<IssueComment>;
-  readonly cursor: string | null;
-};
-
-export function issueCommentsView(detail: IssueDetail, older: IssueOlderComments | null) {
-  const held =
-    older?.issue === issueEntryKey(detail) &&
-    older.viewer === detail.viewer &&
-    (detail.viewer !== null || older.firstPage === detail.comments) &&
-    older.seed === detail.commentsCursor &&
-    older.firstIds.length === detail.comments.length &&
-    older.firstIds.every((id, index) => id === detail.comments[index]?.id)
-      ? older
-      : null;
-  return {
-    comments: prependIssueComments(detail.comments, held?.comments ?? []),
-    cursor: held ? held.cursor : detail.commentsCursor,
-    held,
-  };
-}
-
-export function appendOlderIssueComments(
-  detail: IssueDetail,
-  older: IssueOlderComments | null,
-  page: { readonly comments: ReadonlyArray<IssueComment>; readonly nextCursor: string | null },
-): IssueOlderComments {
-  return {
-    issue: issueEntryKey(detail),
-    viewer: detail.viewer,
-    seed: detail.commentsCursor,
-    firstPage: detail.comments,
-    firstIds: detail.comments.map((comment) => comment.id),
-    comments: prependIssueComments(
-      issueCommentsView(detail, older).held?.comments ?? [],
-      page.comments,
-    ),
-    cursor: page.nextCursor,
-  };
-}
-
-export function reactOnOlderIssueComment(
-  older: IssueOlderComments,
-  commentId: string,
-  content: IssueReactionContent,
-  reacted: boolean,
-): IssueOlderComments {
-  return {
-    ...older,
-    comments: older.comments.map((comment) =>
-      comment.id === commentId && comment.reactions
-        ? { ...comment, reactions: applyIssueReaction(comment.reactions, content, reacted) }
-        : comment,
-    ),
-  };
-}
+export const mergeIssueComments = (
+  current: ReadonlyArray<IssueComment>,
+  previous: ReadonlyArray<IssueComment>,
+) => [...new Map([...previous, ...current].map((comment) => [comment.id, comment])).values()];
 
 function applyIssueReaction(
   reactions: ReadonlyArray<IssueReaction>,

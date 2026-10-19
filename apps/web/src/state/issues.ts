@@ -1,68 +1,123 @@
 import { createIssueEnvironmentAtoms } from "@t3tools/client-runtime/state/issues";
-import type { EnvironmentId, IssueListInput, IssueListResult } from "@t3tools/contracts";
-import { useAtomValue } from "@effect/atom-react";
-import * as Option from "effect/Option";
-import { AsyncResult, Atom } from "effect/reactivity";
-import { useCallback } from "react";
+import { createIssuePagedQuery } from "@t3tools/client-runtime/issue-pages";
+import { issueScopeKeyOf } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  IssueListInput,
+  IssueDependenciesInput,
+  IssuePageRef,
+  IssueLinkedPullRequest,
+} from "@t3tools/contracts";
+import {
+  changeRequestRepositoryUrl,
+  parseChangeRequestUrl,
+} from "@t3tools/shared/changeRequestUrl";
 
+import { useIssueViewRefresh } from "../hooks/useIssueViewRefresh";
 import { connectionAtomRuntime } from "../connection/runtime";
 import { appAtomRegistry } from "../rpc/atomRegistry";
+import {
+  createMergedEnvironmentQuery,
+  type EnvironmentQueryTarget,
+} from "./mergedEnvironmentQuery";
 import { formatEnvironmentQueryError } from "./query";
+export type { IssuePagedView } from "@t3tools/client-runtime/issue-pages";
+
+const pageOptions = {
+  useRegistry: () => appAtomRegistry,
+  formatError: formatEnvironmentQueryError,
+  useRefresh: useIssueViewRefresh,
+};
 
 export const issueEnvironment = createIssueEnvironmentAtoms(connectionAtomRuntime);
 
-export interface IssueListTarget {
-  readonly environmentId: EnvironmentId;
-  readonly input: IssueListInput;
-}
+export type IssueListTarget = EnvironmentQueryTarget<IssueListInput>;
 
-export interface MergedIssueListView {
-  /** One answer per environment that has one, in target order. */
-  readonly answers: ReadonlyArray<readonly [EnvironmentId, IssueListResult]>;
-  /** The first environment that failed outright; the others may still have answered. */
-  readonly error: string | null;
-  readonly isPending: boolean;
-  readonly refresh: () => void;
-}
-
-/**
- * The same listing read across every connected environment at once, as the pull-request page
- * does: React cannot subscribe to a list of atoms whose length changes, so the fan-out lives in
- * one derived atom keyed by the targets. An environment that fails contributes nothing rather
- * than blanking the page.
- */
-const mergedIssueListFamily = Atom.family((key: string) =>
-  Atom.make((get) => {
-    const targets = JSON.parse(key) as ReadonlyArray<IssueListTarget>;
-    const answers: Array<readonly [EnvironmentId, IssueListResult]> = [];
-    let error: string | null = null;
-    let isPending = false;
-    for (const target of targets) {
-      const result = get(issueEnvironment.list(target));
-      isPending ||= result.waiting;
-      if (result._tag === "Failure" && error === null) {
-        error = formatEnvironmentQueryError(result.cause);
-      }
-      const value = Option.getOrNull(AsyncResult.value(result));
-      if (value !== null) answers.push([target.environmentId, value]);
-    }
-    return { answers, error, isPending };
-  }).pipe(Atom.withLabel(`web-issues:list:${key}`)),
+export const useIssueList = createMergedEnvironmentQuery(
+  "web-issues:list",
+  (target: IssueListTarget) => issueEnvironment.list(target),
 );
 
-const EMPTY_ISSUE_LIST = Atom.make({
-  answers: [] as ReadonlyArray<readonly [EnvironmentId, IssueListResult]>,
-  error: null as string | null,
-  isPending: false,
-}).pipe(Atom.withLabel("web-issues:list:empty"));
+const pageOf = <P>(value: P) => value;
 
-export function useIssueList(targets: ReadonlyArray<IssueListTarget>): MergedIssueListView {
-  const key = JSON.stringify(targets);
-  const view = useAtomValue(targets.length === 0 ? EMPTY_ISSUE_LIST : mergedIssueListFamily(key));
-  const refresh = useCallback(() => {
-    for (const target of JSON.parse(key) as ReadonlyArray<IssueListTarget>) {
-      appAtomRegistry.refresh(issueEnvironment.list(target));
-    }
-  }, [key]);
-  return { ...view, refresh };
+export const useIssueHistory = createIssuePagedQuery(
+  pageOptions,
+  "web-issues:history",
+  issueEnvironment.history,
+  pageOf,
+);
+export const useIssueComments = createIssuePagedQuery(
+  pageOptions,
+  "web-issues:comments",
+  issueEnvironment.commentPages,
+  (value) => ({ items: value.comments, nextCursor: value.nextCursor }),
+);
+const useLinkedPullRequestPages = createIssuePagedQuery(
+  pageOptions,
+  "web-issues:linked-pull-requests",
+  issueEnvironment.linkedPullRequests,
+  pageOf,
+);
+export function useIssueLinkedPullRequests(
+  environmentId: EnvironmentId | null,
+  input: IssuePageRef | null,
+) {
+  const page = useLinkedPullRequestPages(environmentId, input);
+  const links = new Map<string, IssueLinkedPullRequest>();
+  for (const link of page.items) {
+    const parsed = parseChangeRequestUrl(link.url);
+    const provider = link.provider ?? input?.tracker;
+    const repositoryUrl = provider === "forgejo" ? changeRequestRepositoryUrl(link.url) : null;
+    const repository =
+      repositoryUrl === null
+        ? (parsed?.repository ?? link.repository)
+        : new URL(repositoryUrl).pathname.slice(1);
+    let host = link.host?.toLowerCase() ?? link.url;
+    try {
+      host = new URL(link.url).host.toLowerCase() || host;
+    } catch {}
+    const key = JSON.stringify([
+      provider,
+      host,
+      issueScopeKeyOf({ tracker: provider ?? "", scope: repository }),
+      link.number,
+    ]);
+    links.set(key, {
+      ...link,
+      closesIssue: link.closesIssue || links.get(key)?.closesIssue === true,
+    });
+  }
+  return { ...page, items: [...links.values()] };
+}
+export const useIssueHierarchy = createIssuePagedQuery(
+  pageOptions,
+  "web-issues:hierarchy",
+  issueEnvironment.hierarchy,
+  (value) => value.children,
+  (first) => first?.parent ?? null,
+);
+export const useIssueLabelCandidates = createIssuePagedQuery(
+  pageOptions,
+  "web-issues:label-candidates",
+  issueEnvironment.labelCandidates,
+  pageOf,
+);
+export const useIssueAssigneeCandidates = createIssuePagedQuery(
+  pageOptions,
+  "web-issues:assignee-candidates",
+  issueEnvironment.assigneeCandidates,
+  pageOf,
+);
+
+const useDependencyPages = createIssuePagedQuery(
+  pageOptions,
+  "web-issues:dependencies",
+  issueEnvironment.dependencies,
+  pageOf,
+);
+export function useIssueDependencies(environmentId: EnvironmentId, input: IssueDependenciesInput) {
+  const page = useDependencyPages(environmentId, input);
+  const items = new Map<string, (typeof page.items)[number]>();
+  for (const item of page.items) items.set(JSON.stringify([item.kind, item.scope, item.key]), item);
+  return { ...page, items: [...items.values()] };
 }

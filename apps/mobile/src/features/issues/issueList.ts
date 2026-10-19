@@ -1,4 +1,7 @@
 import {
+  createIssueSourceRefreshQueue,
+  holdIssueListAnswer,
+  issueSourceMatchesList,
   issueEntryKey,
   issueScopeKey,
   refreshIssueListPage,
@@ -7,8 +10,9 @@ import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import {
   pullRequestHostOf,
   issueScopeKeyOf,
+  issueHostKey,
   type EnvironmentId,
-  type IssueListEntry,
+  IssueListEntry,
   type IssueListInput,
   type IssueListResult,
   type IssueScopeRef,
@@ -16,10 +20,41 @@ import {
   type SourceControlProviderKind,
 } from "@t3tools/contracts";
 import { sourceControlRepositorySelector } from "@t3tools/shared/sourceControl";
+import * as Schema from "effect/Schema";
 import { Atom, type AtomRegistry } from "effect/reactivity";
 import type { IssueListFilters } from "../../persistence/mobile-preferences";
 
 export const ISSUE_LIST_PAGE_SIZE = 50;
+
+export type IssueListTarget = {
+  readonly environmentId: EnvironmentId;
+  readonly input: IssueListInput;
+  readonly defaultAccount?: true;
+};
+
+const defaultAccountAnswers = new WeakMap<IssueListResult, IssueListResult>();
+export function issueListAnswer(target: IssueListTarget, answer: IssueListResult): IssueListResult {
+  if (!target.defaultAccount) return answer;
+  const cached = defaultAccountAnswers.get(answer);
+  if (cached) return cached;
+  const defaultAccount = (source: { readonly connectionId?: string | undefined }) =>
+    source.connectionId === undefined;
+  const result = {
+    ...answer,
+    entries: answer.entries.filter(defaultAccount),
+    ...(answer.sources === undefined ? {} : { sources: answer.sources.filter(defaultAccount) }),
+    errors: answer.errors.filter(defaultAccount),
+    trackers: answer.trackers.filter(defaultAccount),
+    nextCursors: Object.fromEntries(
+      Object.entries(answer.nextCursors).filter(([key]) => !key.startsWith("@")),
+    ),
+    viewers: Object.fromEntries(
+      Object.entries(answer.viewers).filter(([key]) => !key.startsWith("@")),
+    ),
+  };
+  defaultAccountAnswers.set(answer, result);
+  return result;
+}
 
 export type IssueSourceWrite = {
   readonly revision: number;
@@ -61,56 +96,48 @@ export function markIssueWritten(
 export function issueListControlsFor(
   saved: IssueListFilters | undefined,
   environmentIds: ReadonlyArray<string>,
-  projects: ReadonlyArray<Pick<EnvironmentProject, "environmentId" | "id">>,
+  projects: ReadonlyArray<Pick<EnvironmentProject, "environmentId" | "id" | "isScratch">>,
 ): IssueListFilters {
   const controls = saved ?? { environmentId: null, state: "open", involvement: "all" };
   const environmentId =
     controls.environmentId !== null && environmentIds.includes(controls.environmentId)
       ? controls.environmentId
       : null;
-  const { projectId, projectEnvironmentId, ...rest } = controls;
+  const { projectId, projectEnvironmentId, connectionId, accountEnvironmentId, ...rest } = controls;
+  const accountValid =
+    accountEnvironmentId !== undefined &&
+    environmentIds.includes(accountEnvironmentId) &&
+    (environmentId === null || environmentId === accountEnvironmentId);
   const projectValid =
     projectId !== undefined &&
     projectEnvironmentId !== undefined &&
     environmentIds.includes(projectEnvironmentId) &&
     (controls.environmentId === null || controls.environmentId === projectEnvironmentId) &&
+    (!accountValid || accountEnvironmentId === projectEnvironmentId) &&
     projects.some(
-      (project) => project.environmentId === projectEnvironmentId && project.id === projectId,
+      (project) =>
+        !project.isScratch &&
+        project.environmentId === projectEnvironmentId &&
+        project.id === projectId,
     );
-  return { ...rest, environmentId, ...(projectValid ? { projectId, projectEnvironmentId } : {}) };
-}
-
-export function createIssueSourceRefreshQueue() {
-  const lanes = new Map<string, { next: (() => Promise<void>) | null; task: Promise<void> }>();
-  return (key: string, read: () => Promise<void>) => {
-    const previous = lanes.get(key);
-    if (previous) {
-      previous.next = read;
-      return previous.task;
-    }
-    const lane = { next: read as (() => Promise<void>) | null, task: Promise.resolve() };
-    lane.task = Promise.resolve().then(async () => {
-      try {
-        while (lane.next) {
-          const next = lane.next;
-          lane.next = null;
-          await next();
-        }
-      } finally {
-        lanes.delete(key);
-      }
-    });
-    lanes.set(key, lane);
-    return lane.task;
+  return {
+    ...rest,
+    environmentId,
+    ...(accountValid
+      ? { accountEnvironmentId, ...(connectionId === undefined ? {} : { connectionId }) }
+      : {}),
+    ...(projectValid ? { projectId, projectEnvironmentId } : {}),
   };
 }
+
+export { createIssueSourceRefreshQueue };
 
 export const issueSourceRefreshQueue = Atom.family((_listKey: string) =>
   Atom.make(createIssueSourceRefreshQueue).pipe(Atom.setIdleTTL(5 * 60_000)),
 );
 
 export function issueListTargetIncludesSource(
-  target: { readonly environmentId: EnvironmentId; readonly input: IssueListInput },
+  target: IssueListTarget,
   environmentId: EnvironmentId,
   source: IssueScopeRef,
   held: HeldIssueList | null = null,
@@ -118,13 +145,24 @@ export function issueListTargetIncludesSource(
   const canonical = issueListCanonicalSource(held, source);
   return (
     target.environmentId === environmentId &&
-    (target.input.projectId === undefined || target.input.projectId === canonical.projectId) &&
-    (target.input.host === undefined ||
-      target.input.host.toLowerCase() === source.host?.toLowerCase())
+    (!target.defaultAccount || canonical.connectionId === undefined) &&
+    (target.input.tracker === undefined || target.input.tracker === canonical.tracker) &&
+    issueSourceMatchesList(target.input, canonical)
   );
 }
 
 export type EnvironmentIssueEntry = IssueListEntry & { readonly environmentId: EnvironmentId };
+
+const sameIssueEntry = Schema.toEquivalence(IssueListEntry);
+export function issueListRowsAreEqual(
+  previous: EnvironmentIssueEntry,
+  next: EnvironmentIssueEntry,
+) {
+  return (
+    previous === next ||
+    (previous.environmentId === next.environmentId && sameIssueEntry(previous, next))
+  );
+}
 
 export interface HeldIssueList {
   readonly answer: IssueListResult;
@@ -135,19 +173,11 @@ export interface HeldIssueList {
   readonly errors: IssueListResult["errors"];
   readonly sources?: IssueListResult["sources"];
   readonly pendingWrites: ReadonlyMap<string, IssueSourceWrite>;
+  readonly restartSources?: ReadonlyArray<IssueScopeRef>;
 }
 
 export function heldIssueList(answer: IssueListResult): HeldIssueList {
-  return {
-    answer,
-    entries: answer.entries,
-    nextCursors: answer.nextCursors,
-    firstCursors: answer.nextCursors,
-    firstKeys: new Set(answer.entries.map(issueEntryKey)),
-    errors: answer.errors,
-    sources: answer.sources,
-    pendingWrites: new Map(),
-  };
+  return { ...holdIssueListAnswer(answer), pendingWrites: new Map() };
 }
 
 export function issueListCanonicalSource(
@@ -155,15 +185,17 @@ export function issueListCanonicalSource(
   source: IssueScopeRef,
 ): IssueScopeRef {
   const matches = (candidate: IssueScopeRef) =>
+    candidate.connectionId === source.connectionId &&
     candidate.tracker === source.tracker &&
-    candidate.host?.toLowerCase() === source.host?.toLowerCase() &&
+    (candidate.host === undefined ? undefined : issueHostKey(candidate.host)) ===
+      (source.host === undefined ? undefined : issueHostKey(source.host)) &&
     issueScopeKeyOf(candidate) === issueScopeKeyOf(source);
   const representative = held?.entries.find(matches) ?? held?.sources?.find(matches);
   return representative ? { ...source, projectId: representative.projectId } : source;
 }
 
 export function issueListPendingWrites(
-  target: { readonly environmentId: EnvironmentId; readonly input: IssueListInput },
+  target: IssueListTarget,
   held: HeldIssueList | null,
   written: ReadonlyMap<string, IssueSourceWrite> | undefined,
   handled: ReadonlyMap<string, number>,
@@ -207,6 +239,7 @@ export function refreshWrittenIssueList(
   answer: IssueListResult,
   writes: ReadonlyMap<string, IssueSourceWrite>,
   source?: {
+    readonly connectionId?: string | undefined;
     readonly projectId: string;
     readonly tracker: string;
     readonly host: string;
@@ -223,9 +256,12 @@ export function refreshWrittenIssueList(
     if (
       !answer.errors.some(
         (error) =>
+          error.connectionId === canonical.connectionId &&
           error.projectId === canonical.projectId &&
           (error.tracker === undefined || error.tracker === canonical.tracker) &&
-          (error.host === undefined || error.host.toLowerCase() === canonical.host?.toLowerCase()),
+          (error.host === undefined ||
+            issueHostKey(error.host) ===
+              (canonical.host === undefined ? undefined : issueHostKey(canonical.host))),
       )
     )
       handledWrites.set(key, write.revision);
@@ -244,7 +280,28 @@ export function refreshWrittenIssueList(
     } else if ((pendingWrites.get(key)?.revision ?? 0) <= write.revision)
       pendingWrites.set(key, { ...write, failed: true });
   }
-  return { held: { ...page, pendingWrites }, handledWrites };
+  const restartSources = held?.restartSources?.filter(
+    (pending) =>
+      (source !== undefined &&
+        (pending.tracker !== source.tracker ||
+          pending.connectionId !== source.connectionId ||
+          (pending.host === undefined ? undefined : issueHostKey(pending.host)) !==
+            issueHostKey(source.host) ||
+          issueScopeKeyOf(pending) !== issueScopeKeyOf(source))) ||
+      answer.errors.some(
+        (error) =>
+          error.connectionId === pending.connectionId &&
+          error.projectId === pending.projectId &&
+          (error.tracker === undefined || error.tracker === pending.tracker) &&
+          (error.host === undefined ||
+            issueHostKey(error.host) ===
+              (pending.host === undefined ? undefined : issueHostKey(pending.host))),
+      ),
+  );
+  return {
+    held: { ...page, pendingWrites, ...(restartSources === undefined ? {} : { restartSources }) },
+    handledWrites,
+  };
 }
 
 export type IssueListSource = {
@@ -255,14 +312,14 @@ export type IssueListSource = {
 export function scopedIssueKey(
   entry: { readonly environmentId: EnvironmentId } & Pick<
     IssueListEntry,
-    "projectId" | "host" | "scope" | "key" | "tracker"
+    "projectId" | "host" | "scope" | "key" | "tracker" | "connectionId"
   >,
 ): string {
   return `${entry.environmentId}:${issueEntryKey(entry)}`;
 }
 
-const trackerKey = (tracker: Pick<IssueTrackerSummary, "tracker" | "host">) =>
-  `${tracker.tracker} ${tracker.host.toLowerCase()}`;
+const trackerKey = (tracker: Pick<IssueTrackerSummary, "tracker" | "host" | "connectionId">) =>
+  JSON.stringify([tracker.tracker, issueHostKey(tracker.host), tracker.connectionId ?? null]);
 
 export function issueListRows(
   lists: ReadonlyArray<IssueListSource>,
@@ -299,8 +356,9 @@ export function issueListNotices(lists: ReadonlyArray<IssueListSource>): Readonl
         environmentId,
         "error",
         error.projectId,
+        error.connectionId ?? null,
         error.tracker ?? null,
-        error.host?.toLowerCase() ?? null,
+        error.host === undefined ? null : issueHostKey(error.host),
         error.projectTitle,
         error.message,
       ]),
@@ -336,6 +394,8 @@ export type IssueCreateScope = {
   readonly environmentId: EnvironmentId;
   readonly projectTitle: string;
   readonly templates: boolean;
+  readonly connectionId?: string;
+  readonly createFields?: boolean;
   readonly createIssueTypes?: boolean;
   readonly scope: IssueScopeRef & { readonly host: string };
 };
@@ -392,10 +452,15 @@ export function issueCreateScopes(
           environmentId,
           projectTitle: source.projectTitle,
           templates: source.capabilities.templates,
+          ...(source.connectionId === undefined ? {} : { connectionId: source.connectionId }),
+          ...(source.capabilities.createFields === undefined
+            ? {}
+            : { createFields: source.capabilities.createFields }),
           ...(source.capabilities.createIssueTypes === undefined
             ? {}
             : { createIssueTypes: source.capabilities.createIssueTypes }),
           scope: {
+            ...(source.connectionId === undefined ? {} : { connectionId: source.connectionId }),
             projectId: source.projectId,
             tracker: source.tracker,
             host: source.host,
@@ -422,17 +487,27 @@ export function issueCreateScopes(
       if (scope === null) continue;
       const tracker = held.answer.trackers.find(
         (tracker) =>
-          String(tracker.tracker) === kind && tracker.host.toLowerCase() === host.toLowerCase(),
+          String(tracker.tracker) === kind && issueHostKey(tracker.host) === issueHostKey(host),
       );
       if (!tracker?.configured || tracker.capabilities?.create !== true) continue;
       addScope({
         environmentId,
         projectTitle: candidate.title,
         templates: tracker.capabilities.templates,
+        ...(tracker.connectionId === undefined ? {} : { connectionId: tracker.connectionId }),
+        ...(tracker.capabilities.createFields === undefined
+          ? {}
+          : { createFields: tracker.capabilities.createFields }),
         ...(tracker.capabilities.createIssueTypes === undefined
           ? {}
           : { createIssueTypes: tracker.capabilities.createIssueTypes }),
-        scope: { projectId: candidate.id, tracker: tracker.tracker, host, scope },
+        scope: {
+          ...(tracker.connectionId === undefined ? {} : { connectionId: tracker.connectionId }),
+          projectId: candidate.id,
+          tracker: tracker.tracker,
+          host,
+          scope,
+        },
       });
     }
     for (const entry of held.entries) {
@@ -450,10 +525,15 @@ export function issueCreateScopes(
         environmentId,
         projectTitle: candidate.title,
         templates: tracker.capabilities.templates,
+        ...(tracker.connectionId === undefined ? {} : { connectionId: tracker.connectionId }),
+        ...(tracker.capabilities.createFields === undefined
+          ? {}
+          : { createFields: tracker.capabilities.createFields }),
         ...(tracker.capabilities.createIssueTypes === undefined
           ? {}
           : { createIssueTypes: tracker.capabilities.createIssueTypes }),
         scope: {
+          ...(entry.connectionId === undefined ? {} : { connectionId: entry.connectionId }),
           projectId: candidate.id,
           tracker: entry.tracker,
           host: entry.host,

@@ -83,3 +83,11 @@ it("keeps the issue selection when an original URL is carried for fallback", () 
   expect(issueParamsKey(linked)).toBe(issueParamsKey(params));
   expect(selection([home, { ...issue, params: linked }])).toBe(selection([home, issue]));
 });
+
+it("separates the same issue across selected accounts and rejects mistyped account params", () => {
+  const first = { ...params, connectionId: "AccountA" };
+  expect(selection([home, { ...issue, params: first }])).toBe(issueParamsKey(first));
+  expect(issueParamsKey(first)).not.toBe(issueParamsKey({ ...first, connectionId: "accounta" }));
+  expect(issueParamsKey(first)).not.toBe(issueParamsKey(params));
+  expect(selection([home, { ...issue, params: { ...params, connectionId: 7 } }])).toBeNull();
+});

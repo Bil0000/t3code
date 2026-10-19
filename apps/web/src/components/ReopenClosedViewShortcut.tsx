@@ -18,6 +18,7 @@ import { isPreviewFocused } from "../lib/previewFocus";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { isModelPickerOpen } from "../modelPickerVisibility";
 import {
+  issuesSearchForRestore,
   planNextReopen,
   pullRequestsSearchForRestore,
   reopenClosedView,
@@ -45,7 +46,6 @@ import {
 import { toastManager } from "./ui/toast";
 import { readIssueListPreferences } from "./issue/issueListPreferences";
 
-/** Layout commands a focused desktop browser page hands back to the app. */
 const PREVIEW_FORWARDED_LAYOUT_COMMANDS = [
   "sidebar.toggle",
   "rightPanel.toggle",
@@ -131,7 +131,14 @@ export function ReopenClosedViewShortcut() {
         search: (previous) => pullRequestsSearchForRestore(previous, selected),
       });
     } else if (globalIssues) {
-      await navigate({ to: "/issues", search: readIssueListPreferences() });
+      const selected = selectSelectedRightPanelSurface(
+        useRightPanelStore.getState().byThreadKey,
+        ref,
+      );
+      await navigate({
+        to: "/issues",
+        search: issuesSearchForRestore(readIssueListPreferences(), selected),
+      });
     } else {
       const draftId = thread === null ? drafts.getDraftIdByRef(ref) : null;
       if (draftId !== null)

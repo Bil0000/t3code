@@ -1,6 +1,14 @@
 import * as Schema from "effect/Schema";
 
-import { IssueInvolvement, IssueListState } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  IssueInvolvement,
+  IssueListState,
+  IssueListSort,
+  IssueListOrder,
+  IssueRef,
+  ProjectId,
+} from "@t3tools/contracts";
 
 /**
  * What the issues page remembers between visits; the selection in the URL is not part of it.
@@ -11,7 +19,12 @@ import { IssueInvolvement, IssueListState } from "@t3tools/contracts";
 export interface IssueListPreferences {
   readonly who: IssueInvolvement;
   readonly status: IssueListState;
+  readonly issueSort?: IssueListSort | undefined;
+  readonly issueOrder?: IssueListOrder | undefined;
+  readonly environmentId?: EnvironmentId;
+  readonly projectId?: ProjectId;
   readonly host?: string;
+  readonly connectionId?: string;
   readonly q?: string | undefined;
 }
 
@@ -26,7 +39,12 @@ const BoundedPreference = Schema.String.check(Schema.isMaxLength(200));
 const IssueListPreferencesSchema = Schema.Struct({
   who: IssueInvolvement,
   status: IssueListState,
+  issueSort: Schema.optional(IssueListSort),
+  issueOrder: Schema.optional(IssueListOrder),
+  environmentId: Schema.optional(EnvironmentId),
+  projectId: Schema.optional(ProjectId),
   host: Schema.optional(BoundedPreference),
+  connectionId: IssueRef.fields.connectionId,
   q: Schema.optional(BoundedPreference),
 });
 const decodePreferences = Schema.decodeUnknownOption(IssueListPreferencesSchema);
@@ -41,13 +59,23 @@ function storage(): PreferenceStorage | undefined {
 export function issueListPreferences(search: {
   readonly who: IssueInvolvement;
   readonly status: IssueListState;
+  readonly issueSort?: IssueListSort | undefined;
+  readonly issueOrder?: IssueListOrder | undefined;
+  readonly environmentId?: EnvironmentId | undefined;
+  readonly projectId?: ProjectId | undefined;
   readonly host?: string | undefined;
+  readonly connectionId?: string | undefined;
   readonly q?: string | undefined;
 }): IssueListPreferences {
   return {
     who: search.who,
     status: search.status,
+    ...(search.issueSort ? { issueSort: search.issueSort } : {}),
+    ...(search.issueOrder ? { issueOrder: search.issueOrder } : {}),
+    ...(search.environmentId ? { environmentId: search.environmentId } : {}),
+    ...(search.projectId ? { projectId: search.projectId } : {}),
     ...(search.host ? { host: search.host } : {}),
+    ...(search.connectionId === undefined ? {} : { connectionId: search.connectionId }),
     ...(search.q ? { q: search.q } : {}),
   };
 }

@@ -13,6 +13,7 @@ const harness = vi.hoisted(() => {
     issue: null as unknown,
     updates: [] as unknown[],
     answers: [] as Array<"fail" | "ok">,
+    wait: null as Promise<void> | null,
     back: 0,
     opened: [] as string[],
     connected: true,
@@ -35,11 +36,11 @@ vi.mock("react-native", () => ({
   Linking: { openURL: (url: string) => harness.opened.push(url) },
   Platform: { OS: "ios" },
 }));
-vi.mock("../../components/AppText", () => ({
+vi.mock("../../components/ui/AppText", () => ({
   AppText: ({ children }: Props) => children,
   AppTextInput: harness.capture("accessibilityLabel"),
 }));
-vi.mock("../../components/MaterialButton", () => ({ MaterialButton: harness.capture("label") }));
+vi.mock("../../components/ui/Button", () => ({ Button: harness.capture("label") }));
 vi.mock("../pull-requests/PullRequestSheetContent", () => ({
   PullRequestSheetContent: ({ children, footer }: Props & { footer: ReactNode }) => (
     <>
@@ -55,6 +56,7 @@ vi.mock("../../state/query", () => ({
 vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: () => async (input: unknown) => {
     harness.updates.push(input);
+    if (harness.wait !== null) await harness.wait;
     return harness.answers.shift() === "fail"
       ? { _tag: "Failure", cause: new Error("Jira refused the update") }
       : { _tag: "Success", value: undefined };
@@ -133,7 +135,7 @@ const control = (key: string) => harness.controls.get(key);
 const type = (key: string, text: string) =>
   act(() => (control(key)!.onChangeText as (text: string) => void)(text));
 const save = () => act(async () => (control("Save")!.onPress as () => void)());
-const render = () =>
+const render = (connectionId?: string) =>
   act(() =>
     root.render(
       <IssueComposeSheet
@@ -146,6 +148,7 @@ const render = () =>
             scope: "ENG",
             key: "ENG-1",
             mode: "edit",
+            ...(connectionId === undefined ? {} : { connectionId }),
           },
         }}
       />,
@@ -165,9 +168,53 @@ beforeEach(() => {
   harness.back = 0;
   harness.opened.length = 0;
   harness.connected = true;
+  harness.wait = null;
 });
 
 afterEach(() => act(async () => root.unmount()));
+
+it("clears a prior account's draft before editing and saving the next account", async () => {
+  harness.issue = detail(true);
+  await render("A");
+  await type("Title", "Account A draft");
+  await type("Description", "Account A body");
+  harness.issue = { ...detail(true), title: "Account B title", body: "Account B body" };
+  await render("B");
+  expect(control("Title")!.value).toBe("Account B title");
+  expect(control("Description")!.value).toBe("Account B body");
+  expect(control("Save")!.disabled).toBe(true);
+  await type("Title", "Account B edit");
+  await save();
+  expect(harness.updates).toEqual([
+    {
+      environmentId: "environment",
+      input: expect.objectContaining({ connectionId: "B", title: "Account B edit" }),
+    },
+  ]);
+  expect(sent()).toEqual([{ title: "Account B edit", body: undefined }]);
+});
+
+it("does not close the next account's sheet when a prior account write completes", async () => {
+  let release!: () => void;
+  harness.wait = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  harness.issue = detail(true);
+  await render("A");
+  await type("Title", "Account A edit");
+  await save();
+  harness.issue = { ...detail(true), title: "Account B title" };
+  await render("B");
+  await act(() => release());
+  expect(harness.back).toBe(0);
+  expect(control("Title")!.value).toBe("Account B title");
+  expect(harness.updates).toEqual([
+    {
+      environmentId: "environment",
+      input: expect.objectContaining({ connectionId: "A", title: "Account A edit" }),
+    },
+  ]);
+});
 
 it("saves only the title when the description cannot round-trip, and keeps the draft on failure", async () => {
   harness.issue = detail(false);

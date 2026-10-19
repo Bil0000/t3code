@@ -13,7 +13,7 @@ export interface IssueLink {
   readonly workspace?: string;
 }
 
-function azureDevOpsIssueScope(organization: string, project: string): string | null {
+export function azureDevOpsIssueScope(organization: string, project: string): string | null {
   try {
     const parts = [organization, project].map(decodeURIComponent);
     return parts.every(
@@ -39,6 +39,7 @@ function isHostOf(hostname: string, apex: string, label?: string): boolean {
  * alone uses, guarded by a hostname it could plausibly be served from. GitLab's `/-/` marker is
  * trusted on any hostname; `/issues/` is generic enough that it is only believed from a GitHub-ish
  * or Forgejo-ish host, since Forgejo and Gitea write it on any domain.
+ *
  */
 export function parseIssueUrl(
   targetUrl: string,
@@ -51,13 +52,44 @@ export function parseIssueUrl(
     return null;
   }
   if (url.protocol !== "https:" && url.protocol !== "http:") return null;
-  const host = url.hostname.toLowerCase();
+  const hostname = url.hostname.toLowerCase();
+  const host = url.host.toLowerCase();
   const configuredTracker =
-    configuredHost?.host.trim().toLowerCase() === url.host.toLowerCase()
-      ? configuredHost.tracker
-      : undefined;
+    configuredHost?.host.trim().toLowerCase() === host ? configuredHost.tracker : undefined;
 
-  if (host === "linear.app") {
+  if (configuredHost?.tracker === "jira") {
+    try {
+      const instance = new URL(`https://${configuredHost.host.trim()}`);
+      const prefix = instance.pathname.replace(/\/$/u, "");
+      const path = url.pathname.startsWith(`${prefix}/browse/`)
+        ? url.pathname.slice(prefix.length)
+        : "";
+      const match = /^\/browse\/(([A-Za-z][A-Za-z0-9_]*)-[1-9]\d*)\/?$/u.exec(path);
+      if (
+        url.protocol === "https:" &&
+        url.origin === instance.origin &&
+        !url.username &&
+        !url.password &&
+        !instance.username &&
+        !instance.password &&
+        !instance.search &&
+        !instance.hash &&
+        match?.[1] &&
+        match[2]
+      ) {
+        return {
+          tracker: "jira",
+          host: instance.host.toLowerCase() + prefix,
+          scope: match[2].toLowerCase(),
+          key: match[1].toUpperCase(),
+        };
+      }
+    } catch {
+      return null;
+    }
+  }
+
+  if (hostname === "linear.app") {
     if (url.protocol !== "https:" || url.port !== "") return null;
     const match = /^\/([^/]+)\/issue\/(([A-Za-z][A-Za-z0-9]*)-[1-9]\d*)(?:\/[^/]+)?\/?$/u.exec(
       url.pathname,
@@ -75,7 +107,7 @@ export function parseIssueUrl(
         }
       : null;
   }
-  if (host.endsWith(".atlassian.net")) {
+  if (hostname.endsWith(".atlassian.net")) {
     if (url.protocol !== "https:" || url.port !== "") return null;
     const match = /^\/browse\/(([A-Za-z][A-Za-z0-9_]*)-[1-9]\d*)\/?$/u.exec(url.pathname);
     const key = match?.[1];
@@ -85,19 +117,32 @@ export function parseIssueUrl(
       : null;
   }
 
+  if (url.pathname.startsWith("/groups/")) {
+    const group =
+      /^\/groups\/([A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*)\/-\/(?:epics|work_items)\/([1-9]\d*)\/?$/u.exec(
+        url.pathname,
+      );
+    const link = claim("gitlab", host, group);
+    return link && !url.username && !url.password
+      ? { ...link, scope: `group:${link.scope}` }
+      : null;
+  }
+
   // GitLab, self-hosted included: /{group}/[{subgroup}/...]{repo}/-/issues/{n}
-  const gitlab = /^\/([^/]+(?:\/[^/]+)+)\/-\/issues\/(\d+)(?:\/|$)/u.exec(url.pathname);
+  const gitlab = /^\/([^/]+(?:\/[^/]+)+)\/-\/(?:issues|work_items)\/(\d+)(?:\/|$)/u.exec(
+    url.pathname,
+  );
   if (gitlab) return claim("gitlab", host, gitlab);
   // Azure DevOps work items: /{org}/{project}/_workitems/edit/{n}. The scope is the repository
   // path the project binding writes, which a work item URL does not carry, so the organisation
   // and project stand in for it; the service matches by host and prefix.
-  if (isHostOf(host, "dev.azure.com") || host.endsWith(".visualstudio.com")) {
-    const legacy = host.endsWith(".visualstudio.com");
+  if (isHostOf(hostname, "dev.azure.com") || hostname.endsWith(".visualstudio.com")) {
+    const legacy = hostname.endsWith(".visualstudio.com");
     const match = legacy
       ? /^\/(?:DefaultCollection\/)?([^/]+)\/_workitems\/edit\/(\d+)(?:\/|$)/iu.exec(url.pathname)
       : /^\/([^/]+\/[^/]+)\/_workitems\/edit\/(\d+)(?:\/|$)/u.exec(url.pathname);
     const [organization, project] = legacy
-      ? [host.slice(0, -".visualstudio.com".length), match?.[1]]
+      ? [hostname.slice(0, -".visualstudio.com".length), match?.[1]]
       : (match?.[1]?.split("/") ?? []);
     const scope = organization && project ? azureDevOpsIssueScope(organization, project) : null;
     const issue = claim("azure-devops", host, match);
@@ -105,10 +150,15 @@ export function parseIssueUrl(
   }
   // GitHub, and any Enterprise install: /{owner}/{repo}/issues/{n}
   const twoSegments = /^\/([^/]+\/[^/]+)\/issues\/(\d+)(?:\/|$)/u.exec(url.pathname);
+  if (hostname === "git.cafe" || hostname === "staging.git.cafe") {
+    return url.protocol === "https:" && !url.port && !url.username && !url.password
+      ? claim("gitcafe", host, twoSegments)
+      : null;
+  }
   if (
     twoSegments &&
     (configuredTracker === "github" ||
-      (configuredTracker === undefined && isHostOf(host, "github.com", "github")))
+      (configuredTracker === undefined && isHostOf(hostname, "github.com", "github")))
   ) {
     return claim("github", host, twoSegments);
   }
@@ -119,9 +169,9 @@ export function parseIssueUrl(
     forgejo &&
     (configuredTracker === "forgejo" ||
       (configuredTracker === undefined &&
-        (isHostOf(host, "codeberg.org") ||
-          isHostOf(host, "forgejo.org", "forgejo") ||
-          isHostOf(host, "gitea.com", "gitea"))))
+        (isHostOf(hostname, "codeberg.org") ||
+          isHostOf(hostname, "forgejo.org", "forgejo") ||
+          isHostOf(hostname, "gitea.com", "gitea"))))
   ) {
     return claim("forgejo", host, forgejo);
   }

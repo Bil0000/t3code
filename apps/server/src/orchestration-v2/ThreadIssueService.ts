@@ -12,8 +12,10 @@
  */
 import {
   CommandId,
+  IssueOperationError,
   threadIssueKeysEqual,
   threadIssueRefOf,
+  type IssueDetail,
   type IssueRef,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ThreadShell,
@@ -24,6 +26,7 @@ import {
   type ThreadIssueSnapshot,
 } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
+import { parseIssueUrl } from "@t3tools/shared/issueUrl";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -46,6 +49,7 @@ export interface LinkThreadIssueInput {
   readonly ref: IssueRef & { readonly host: string };
   readonly url: string;
   readonly source: ThreadIssueLinkSource;
+  readonly detail?: IssueDetail;
 }
 
 export interface UnlinkThreadIssueInput {
@@ -80,12 +84,44 @@ function sameSnapshot(left: ThreadIssueSnapshot | null, right: ThreadIssueSnapsh
     left.title === right.title &&
     left.state.category === right.state.category &&
     left.state.name === right.state.name &&
-    left.state.closeReason === right.state.closeReason
+    left.state.closeReason === right.state.closeReason &&
+    left.syncedAt === right.syncedAt
   );
 }
 
 function isStale(link: ThreadIssueLink, nowMs: number): boolean {
   return link.snapshot === null || nowMs - Date.parse(link.snapshot.syncedAt) > STALE_AFTER_MS;
+}
+
+function sameLinearIssueUrl(leftUrl: string, rightUrl: string, key: ThreadIssueKey): boolean {
+  const left = parseIssueUrl(leftUrl);
+  const right = parseIssueUrl(rightUrl);
+  const legacyScope = !key.scope.includes("/");
+  return (
+    left !== null &&
+    right !== null &&
+    left.tracker === "linear" &&
+    right.tracker === "linear" &&
+    threadIssueKeysEqual(
+      {
+        ...left,
+        tracker: key.tracker,
+        ...(key.connectionId === undefined ? {} : { connectionId: key.connectionId }),
+        scope: legacyScope ? left.scope.slice(left.scope.lastIndexOf("/") + 1) : left.scope,
+      },
+      key,
+    ) &&
+    threadIssueKeysEqual(
+      {
+        ...right,
+        tracker: key.tracker,
+        ...(key.connectionId === undefined ? {} : { connectionId: key.connectionId }),
+        scope: legacyScope ? right.scope.slice(right.scope.lastIndexOf("/") + 1) : right.scope,
+      },
+      key,
+    ) &&
+    left.workspace === right.workspace
+  );
 }
 
 const make = Effect.gen(function* () {
@@ -107,6 +143,13 @@ const make = Effect.gen(function* () {
     link: ThreadIssueLink,
   ) {
     const detail = yield* issues.detail(threadIssueRefOf(link));
+    if (link.tracker === "linear" && !sameLinearIssueUrl(link.url, detail.url, link)) {
+      return yield* new IssueOperationError({
+        operation: "detail",
+        reason: "not-found",
+        detail: "The saved Linear URL does not match the issue returned by the configured tracker.",
+      });
+    }
     const now = yield* DateTime.now;
     const snapshot: ThreadIssueSnapshot = {
       displayKey: detail.displayKey,
@@ -120,10 +163,13 @@ const make = Effect.gen(function* () {
       commandId: yield* commandId("sync", threadId),
       threadId,
       tracker: link.tracker,
+      ...(link.connectionId === undefined ? {} : { connectionId: link.connectionId }),
       host: link.host,
       scope: link.scope,
       key: link.key,
       snapshot,
+      linkedAt: link.linkedAt,
+      linkId: link.linkId ?? null,
     });
   });
 
@@ -160,22 +206,56 @@ const make = Effect.gen(function* () {
   const link: ThreadIssueService["Service"]["link"] = (input) =>
     Effect.gen(function* () {
       const thread = yield* shellOf(input.threadId);
-      if (thread?.issues?.some((existing) => threadIssueKeysEqual(existing, input.ref))) {
+      const existing = thread?.issues?.find((issue) => threadIssueKeysEqual(issue, input.ref));
+      if (existing !== undefined) {
+        if (
+          input.ref.tracker === "linear" &&
+          !sameLinearIssueUrl(existing.url, input.url, input.ref)
+        ) {
+          return yield* new Orchestrator.OrchestratorCommandRejectedError({
+            commandId: yield* commandId("link", input.threadId),
+            commandType: "thread.issue.link",
+            cause: new Error("Unlink the existing Linear issue before linking a different issue."),
+          });
+        }
         return { alreadyLinked: true };
       }
+      if (
+        input.detail !== undefined &&
+        input.ref.tracker === "linear" &&
+        !sameLinearIssueUrl(input.url, input.detail.url, input.ref)
+      ) {
+        return yield* new Orchestrator.OrchestratorCommandRejectedError({
+          commandId: yield* commandId("link", input.threadId),
+          commandType: "thread.issue.link",
+          cause: new Error(
+            "The Linear URL does not match the issue returned by the configured tracker.",
+          ),
+        });
+      }
+      const snapshot =
+        input.detail === undefined
+          ? undefined
+          : {
+              displayKey: input.detail.displayKey,
+              title: input.detail.title,
+              state: input.detail.state,
+              syncedAt: DateTime.formatIso(yield* DateTime.now),
+            };
       yield* orchestrator.dispatch({
         type: "thread.issue.link",
         commandId: yield* commandId("link", input.threadId),
         threadId: input.threadId,
         tracker: input.ref.tracker,
+        ...(input.ref.connectionId === undefined ? {} : { connectionId: input.ref.connectionId }),
         host: input.ref.host,
         scope: input.ref.scope,
         key: input.ref.key,
         projectId: input.ref.projectId,
         url: input.url,
         source: input.source,
+        ...(snapshot === undefined ? {} : { snapshot }),
       });
-      yield* worker.enqueue({ threadId: input.threadId, staleOnly: true });
       return { alreadyLinked: false };
     });
 
@@ -190,6 +270,7 @@ const make = Effect.gen(function* () {
         commandId: yield* commandId("unlink", input.threadId),
         threadId: input.threadId,
         tracker: input.key.tracker,
+        ...(input.key.connectionId === undefined ? {} : { connectionId: input.key.connectionId }),
         host: input.key.host,
         scope: input.key.scope,
         key: input.key.key,
@@ -204,7 +285,8 @@ const make = Effect.gen(function* () {
     switch (event.type) {
       // A link made from a client (web dispatches the command directly) has no snapshot yet.
       case "thread.issue-synced":
-        return (event.payload.issues ?? []).some((link) => link.snapshot === null)
+        return event.issueOperation === "link" &&
+          (event.payload.issues ?? []).some((link) => link.snapshot === null)
           ? worker.enqueue({ threadId: event.threadId, staleOnly: true })
           : Effect.void;
       case "thread.visited":

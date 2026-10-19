@@ -1,4 +1,4 @@
-import { RegistryContext } from "@effect/atom-react";
+import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import { useFocusEffect, useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import {
@@ -8,8 +8,10 @@ import {
   type IssueEvent,
   type IssueLinkedPullRequest,
   type IssueReactionContent,
+  type IssueListOrder,
+  type IssueState,
 } from "@t3tools/contracts";
-import { use, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { use, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -21,18 +23,24 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { AppText as Text } from "../../components/AppText";
-import { AndroidScreenHeader } from "../../components/AndroidScreenHeader";
-import { SymbolView } from "../../components/AppSymbol";
-import { ControlPillMenu } from "../../components/ControlPillMenu";
-import { EmptyState } from "../../components/EmptyState";
-import { MaterialButton } from "../../components/MaterialButton";
+import { AppText as Text } from "../../components/ui/AppText";
+import { AndroidScreenHeader } from "../../components/ui/AndroidScreenHeader";
+import { SymbolView } from "../../components/ui/AppSymbol";
+import { Menu } from "../../components/ui/Menu";
+import { EmptyState } from "../../components/ui/EmptyState";
+import { Button } from "../../components/ui/Button";
 import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
 import { relativeTime } from "../../lib/time";
-import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
+import { NativeStackScreenOptions } from "../../native/StackHeader";
+import { Toolbar } from "../../components/ui/Toolbar";
 import { useOpenPullRequest } from "../../native/useOpenPullRequest";
 import { useProject, useProjects, useServerConfigs } from "../../state/entities";
-import { issueEnvironment } from "../../state/issues";
+import {
+  issueEnvironment,
+  useIssueComments,
+  useIssueHistory,
+  useIssueLinkedPullRequests,
+} from "../../state/issues";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { usePullToRefresh } from "../../state/use-pull-to-refresh";
@@ -43,15 +51,14 @@ import { PullRequestMarkdown } from "../pull-requests/PullRequestMarkdown";
 import { PullRequestMediaContext } from "../pull-requests/PullRequestMedia";
 import { PullRequestAvatar } from "../pull-requests/PullRequestPresentation";
 import { pullRequestStatus } from "../pull-requests/pullRequestStatus";
+import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
 import { useAndroidWorkspaceBack } from "../workspace/useAndroidWorkspaceNavigation";
 import { issueReactionAllowed, issueTimeline, linkedPullRequestContext } from "./issueDetail";
 import {
-  appendOlderIssueComments,
-  issueCommentsView,
+  mergeIssueComments,
   confirmIssueReaction,
   issueReactionsView,
   type IssueConfirmedReactions,
-  type IssueOlderComments,
 } from "./issueComments";
 import { IssueReactions } from "./IssueReactions";
 import { issueParamsKey, type IssueParams } from "./issueSelection";
@@ -60,8 +67,8 @@ import { issueTarget, markIssueTargetWritten, useIssueAccess } from "./useIssueA
 
 function linkedPullRequestStatus(link: IssueLinkedPullRequest) {
   return link.state === null
-    ? ({ label: "Unknown", icon: "arrow.triangle.pull", tint: "accent-icon-muted" } as const)
-    : pullRequestStatus({ state: link.state, isDraft: link.isDraft });
+    ? ({ label: "Unknown", icon: PullRequestGlyph.pullRequest, tint: "accent-icon-muted" } as const)
+    : pullRequestStatus({ state: link.state, isDraft: link.isDraft === true });
 }
 
 function LinkedPullRequestRow(props: {
@@ -106,15 +113,28 @@ function IssueEventRow({ event }: { readonly event: IssueEvent }) {
     renamed: "renamed this to",
     referenced: "referenced this in",
     "state-changed": "moved this to",
+    changed: "changed this",
+    updated: "updated this",
   };
   return (
     <View className="flex-row items-center gap-2 px-1">
       <SymbolView name="circle" size={8} tintColorClassName="accent-icon-muted" />
-      <Text className="min-w-0 flex-1 text-xs text-foreground-muted" numberOfLines={2}>
-        <Text className="font-t3-medium text-foreground">{event.actor?.login ?? "Someone"}</Text>{" "}
-        {verb[event.kind]}
-        {event.detail ? ` ${event.detail}` : ""}
-      </Text>
+      <Pressable
+        accessibilityRole={event.url || event.reference ? "link" : undefined}
+        onPress={() => {
+          const url = event.url ?? event.reference?.url;
+          if (url) void tryOpenExternalUrl(url, "markdown-link");
+        }}
+        className="min-w-0 flex-1"
+      >
+        <Text className="text-xs text-foreground-muted" numberOfLines={2}>
+          <Text className="font-t3-medium text-foreground">{event.actor?.login ?? "Someone"}</Text>{" "}
+          {verb[event.kind]}
+          {(event.reference?.identifier ?? event.reference?.title ?? event.detail)
+            ? ` ${event.reference?.identifier ?? event.reference?.title ?? event.detail}`
+            : ""}
+        </Text>
+      </Pressable>
       <Text className="text-2xs text-foreground-tertiary">{relativeTime(event.createdAt)}</Text>
     </View>
   );
@@ -149,7 +169,15 @@ function IssueCommentCard(props: {
   );
 }
 
-function IssueBody(props: { readonly params: IssueParams; readonly issue: IssueDetail }) {
+type IssueActivityControls = { readonly refresh: () => void; readonly loadMore: () => void };
+
+function IssueBody(props: {
+  readonly params: IssueParams;
+  readonly issue: IssueDetail;
+  readonly registerActivity: (controls: IssueActivityControls | null) => void;
+  readonly chosenOrder: IssueListOrder;
+  readonly setOrder: (order: IssueListOrder) => void;
+}) {
   const { issue, params } = props;
   const navigation = useNavigation();
   const registry = use(RegistryContext);
@@ -157,11 +185,81 @@ function IssueBody(props: { readonly params: IssueParams; readonly issue: IssueD
   const access = useIssueAccess(params, issue);
   const setState = useAtomCommand(issueEnvironment.setState, { reportFailure: false });
   const react = useAtomCommand(issueEnvironment.react, { reportFailure: false });
-  const loadComments = useAtomCommand(issueEnvironment.comments, { reportFailure: false });
   const pending = useRef(false);
   const [busy, setBusy] = useState(false);
-  const [older, setOlder] = useState<IssueOlderComments | null>(null);
-  const { comments, cursor } = issueCommentsView(issue, older);
+  const commentOrders = issue.capabilities.commentOrders ?? ["desc", "asc"];
+  const historyOrders = issue.capabilities.historyOrders ?? ["desc", "asc"];
+  const commonOrders = commentOrders.filter((order) => historyOrders.includes(order));
+  const availableOrders = commonOrders.length ? commonOrders : commentOrders;
+  const { chosenOrder, setOrder } = props;
+  const order = availableOrders.includes(chosenOrder)
+    ? chosenOrder
+    : (availableOrders[0] ?? "desc");
+  const seeded = order === (commentOrders.includes("desc") ? "desc" : "asc");
+  const commentPages = useIssueComments(
+    target.environmentId,
+    !seeded || issue.commentsCursor !== null
+      ? {
+          ...target.input,
+          order,
+          ...(seeded && issue.commentsCursor !== null ? { cursor: issue.commentsCursor } : {}),
+          ...(issue.viewer === null ? {} : { viewer: issue.viewer }),
+        }
+      : null,
+  );
+  const comments = seeded
+    ? mergeIssueComments(
+        issue.comments,
+        issue.viewer === null && commentPages.isPending ? [] : commentPages.items,
+      )
+    : commentPages.items;
+  const history = useIssueHistory(
+    target.environmentId,
+    issue.capabilities.events
+      ? {
+          ...target.input,
+          ...(historyOrders.length
+            ? { order: historyOrders.includes(order) ? order : historyOrders[0] }
+            : {}),
+        }
+      : null,
+  );
+  const linked = useIssueLinkedPullRequests(
+    target.environmentId,
+    issue.capabilities.linkedPullRequests ? target.input : null,
+  );
+  const [expandedLinks, setExpandedLinks] = useState(false);
+  const links = [
+    ...new Map(
+      [...issue.linkedPullRequests, ...linked.items].map((link) => [link.url, link]),
+    ).values(),
+  ];
+  const {
+    hasMore: hasMoreLinks,
+    isPending: linksPending,
+    error: linksError,
+    loadMore: loadMoreLinks,
+  } = linked;
+  useEffect(() => {
+    if (hasMoreLinks && !linksPending && linksError === null) loadMoreLinks();
+  }, [hasMoreLinks, linksPending, linksError, loadMoreLinks]);
+  useLayoutEffect(() => {
+    props.registerActivity({
+      refresh: () => {
+        commentPages.refresh();
+        history.refresh();
+        linked.refresh();
+      },
+      loadMore: () => {
+        if (commentPages.hasMore && !commentPages.isPending && commentPages.error === null)
+          commentPages.loadMore();
+        if (history.hasMore && !history.isPending && history.error === null) history.loadMore();
+      },
+    });
+    return () => {
+      props.registerActivity(null);
+    };
+  });
   const [confirmed, setConfirmed] = useState<IssueConfirmedReactions | null>(null);
   const reactionView = issueReactionsView(target.environmentId, issue, comments, confirmed);
   if (confirmed !== reactionView.held) setConfirmed(reactionView.held);
@@ -182,15 +280,32 @@ function IssueBody(props: { readonly params: IssueParams; readonly issue: IssueD
       setBusy(false);
     }
   };
-  const changeState = (state: string, closeReason?: string) =>
-    run(async () => {
+  const changeState = (state: IssueState, closeReason?: string) => {
+    if (state.fields?.some((field) => field.required)) {
+      Alert.alert(
+        "Complete this transition on the tracker",
+        "This transition needs native fields.",
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Open tracker", onPress: () => void Linking.openURL(issue.url) },
+        ],
+      );
+      return;
+    }
+    return run(async () => {
       const response = await setState({
         ...target,
-        input: { ...target.input, state, ...(closeReason ? { closeReason } : {}) },
+        input: {
+          ...target.input,
+          state: state.id ?? state.name,
+          ...(state.transitionId === undefined ? {} : { transitionId: state.transitionId }),
+          ...(closeReason ? { closeReason } : {}),
+        },
       });
       if (response._tag === "Failure") throw squashAtomCommandFailure(response);
       markIssueTargetWritten(registry, params);
     }, "Couldn't change this issue's state");
+  };
   const toggleReaction =
     (subjectId?: string) => (content: IssueReactionContent, reacted: boolean) => {
       const current = reactionTarget.current;
@@ -217,28 +332,14 @@ function IssueBody(props: { readonly params: IssueParams; readonly issue: IssueD
         );
       }, "Couldn't update this reaction");
     };
-  const loadOlder = () =>
-    run(async () => {
-      if (!cursor) return;
-      const response = await loadComments({
-        ...target,
-        input: {
-          ...target.input,
-          cursor,
-          ...(issue.viewer === null ? {} : { viewer: issue.viewer }),
-        },
-      });
-      if (response._tag === "Failure") throw squashAtomCommandFailure(response);
-      setOlder((current) => appendOlderIssueComments(issue, current, response.value));
-    }, "Couldn't load older comments");
   const status = issueStatus(issue.state);
-  const stateActions = access.states.map((state) => ({
-    id: JSON.stringify([state.name, ""]),
+  const stateActions = access.states.map((state, index) => ({
+    id: JSON.stringify([index, ""]),
     title: state.name,
     ...(state.category === "closed" && access.closeReasons.length
       ? {
           subactions: access.closeReasons.map((reason) => ({
-            id: JSON.stringify([state.name, reason]),
+            id: JSON.stringify([index, reason]),
             title: reason,
           })),
         }
@@ -261,13 +362,17 @@ function IssueBody(props: { readonly params: IssueParams; readonly issue: IssueD
       ) : null}
     </Pressable>
   );
-  const timeline = issueTimeline(reactionView.comments, issue.events);
+  const events = [
+    ...new Map([...issue.events, ...history.items].map((event) => [event.id, event])).values(),
+  ];
+  const separateHistory = commonOrders.length === 0 && historyOrders.length > 0;
+  const timeline = issueTimeline(reactionView.comments, separateHistory ? [] : events, order);
   return (
     <View className="gap-5">
       <View className="gap-3">
         <View className="flex-row flex-wrap items-center gap-2">
           {stateActions.length ? (
-            <ControlPillMenu
+            <Menu
               title="Issue state"
               actions={stateActions}
               onPressAction={({ nativeEvent }) => {
@@ -277,14 +382,19 @@ function IssueBody(props: { readonly params: IssueParams; readonly issue: IssueD
                 } catch {
                   return;
                 }
-                if (!Array.isArray(selection) || typeof selection[0] !== "string") return;
-                const [state, reason] = selection as [string, string];
-                if (!access.states.some((each) => each.name === state)) return;
+                if (!Array.isArray(selection) || typeof selection[0] !== "number") return;
+                const state = access.states[selection[0]];
+                const reason = selection[1];
+                if (
+                  !state ||
+                  (reason && (typeof reason !== "string" || !access.closeReasons.includes(reason)))
+                )
+                  return;
                 void changeState(state, reason || undefined);
               }}
             >
               {trigger}
-            </ControlPillMenu>
+            </Menu>
           ) : (
             trigger
           )}
@@ -322,7 +432,7 @@ function IssueBody(props: { readonly params: IssueParams; readonly issue: IssueD
           title="Labels"
           icon="ticket"
           compact
-          last={!issue.linkedPullRequests.length}
+          last={!links.length}
           value={
             issue.labels.length
               ? `${issue.labels.map((label) => label.name).join(", ")}${issue.labelsTruncated ? "…" : ""}`
@@ -334,14 +444,46 @@ function IssueBody(props: { readonly params: IssueParams; readonly issue: IssueD
               : undefined
           }
         />
-        {issue.linkedPullRequests.map((link, index) => (
+        {(expandedLinks ? links : links.slice(0, 3)).map((link, index, shown) => (
           <LinkedPullRequestRow
             key={link.url}
             link={link}
             environmentId={params.environmentId}
-            last={index === issue.linkedPullRequests.length - 1}
+            last={index === shown.length - 1}
           />
         ))}
+        {links.length > 3 &&
+        !linked.hasMore &&
+        !linked.isPending &&
+        linked.error === null &&
+        !linked.truncated ? (
+          <Button
+            label={expandedLinks ? "Show less" : `Show ${links.length - 3} more`}
+            tone="text"
+            onPress={() => setExpandedLinks(!expandedLinks)}
+          />
+        ) : null}
+        {links.length > 3 && (linked.truncated || linked.error !== null) ? (
+          <Button
+            label={expandedLinks ? "Show less" : "Show known pull requests"}
+            tone="text"
+            onPress={() => setExpandedLinks(!expandedLinks)}
+          />
+        ) : null}
+        {linked.truncated ? (
+          <Pressable accessibilityRole="link" onPress={() => void Linking.openURL(issue.url)}>
+            <Text className="text-2xs text-foreground-muted">
+              More linked pull requests may be on the tracker.
+            </Text>
+          </Pressable>
+        ) : null}
+        {linked.isPending ? <ActivityIndicator /> : null}
+        {linked.error ? (
+          <Button
+            label="Retry linked pull requests"
+            onPress={linked.hasMore ? linked.loadMore : linked.refresh}
+          />
+        ) : null}
       </PullRequestCardGroup>
       {issue.body.trim() ? (
         <PullRequestMarkdown markdown={issue.body} />
@@ -355,18 +497,56 @@ function IssueBody(props: { readonly params: IssueParams; readonly issue: IssueD
         onToggle={access.react ? toggleReaction() : undefined}
       />
       <View className="gap-4">
-        {cursor ? (
-          <MaterialButton
-            label="Load older comments"
-            tone="text"
-            loading={busy}
-            disabled={busy}
-            onPress={() => void loadOlder()}
+        <Menu
+          title="Activity order"
+          actions={availableOrders.map((value) => ({
+            id: value,
+            title: value === "desc" ? "Newest first" : "Oldest first",
+            state: value === order ? ("on" as const) : ("off" as const),
+          }))}
+          onPressAction={({ nativeEvent }) => {
+            if (availableOrders.includes(nativeEvent.event as IssueListOrder))
+              setOrder(nativeEvent.event as IssueListOrder);
+          }}
+        >
+          <Pressable accessibilityRole="button" accessibilityLabel="Activity order">
+            <Text className="text-xs text-foreground-muted">
+              {order === "desc" ? "Newest first" : "Oldest first"}
+            </Text>
+          </Pressable>
+        </Menu>
+        {issue.historyTruncated || history.truncated || historyOrders.length === 0 ? (
+          <Pressable accessibilityRole="link" onPress={() => void Linking.openURL(issue.url)}>
+            <Text className="text-2xs text-foreground-muted">
+              {historyOrders.length === 0
+                ? "Activity history is incomplete. Its global order is unavailable."
+                : "More history is on the tracker."}
+            </Text>
+          </Pressable>
+        ) : null}
+        {commonOrders.length === 0 && historyOrders.length > 0 ? (
+          <Text className="text-2xs text-foreground-muted">
+            Comments and history use different native orders.
+          </Text>
+        ) : null}
+        {commentOrders.length === 1 ? (
+          <Text className="text-2xs text-foreground-muted">
+            The tracker supports {order === "asc" ? "oldest" : "newest"}-first comments only.
+          </Text>
+        ) : null}
+        {commentPages.error ? (
+          <Button
+            label="Retry comments"
+            onPress={commentPages.hasMore ? commentPages.loadMore : commentPages.refresh}
           />
         ) : null}
-        {issue.historyTruncated ? (
-          <Text className="text-2xs text-foreground-muted">Older history is on the tracker.</Text>
+        {history.error ? (
+          <Button
+            label="Retry history"
+            onPress={history.hasMore ? history.loadMore : history.refresh}
+          />
         ) : null}
+        {commentPages.isPending || history.isPending ? <ActivityIndicator /> : null}
         {timeline.map((item) =>
           item.kind === "comment" ? (
             <IssueCommentCard
@@ -384,6 +564,18 @@ function IssueBody(props: { readonly params: IssueParams; readonly issue: IssueD
             <IssueEventRow key={`event:${item.event.id}`} event={item.event} />
           ),
         )}
+        {separateHistory ? (
+          <View className="gap-4">
+            <Text className="text-xs text-foreground-muted">
+              History · {historyOrders[0] === "asc" ? "Oldest first" : "Newest first"}
+            </Text>
+            {issueTimeline([], events, historyOrders[0]).map((item) =>
+              item.kind === "event" ? (
+                <IssueEventRow key={item.event.id} event={item.event} />
+              ) : null,
+            )}
+          </View>
+        ) : null}
       </View>
     </View>
   );
@@ -419,11 +611,38 @@ function IssueRouteContent({
   const insets = useSafeAreaInsets();
   const target = issueTarget(params);
   const detailAtom = issueEnvironment.detail(target);
+  const detailResult = useAtomValue(detailAtom);
   const result = useEnvironmentQuery(detailAtom);
   const pullRefresh = usePullToRefresh(detailAtom);
   const { refresh } = result;
-  useFocusEffect(useCallback(() => refresh(), [refresh]));
   const issue = result.data;
+  const [chosenOrder, setOrder] = useState<IssueListOrder>("desc");
+  const [viewportHeight, setViewportHeight] = useState(0);
+  const activity = useRef<IssueActivityControls | null>(null);
+  const registerActivity = useCallback((controls: IssueActivityControls | null) => {
+    activity.current = controls;
+  }, []);
+  const targetKey = JSON.stringify(target);
+  const completedRead =
+    detailResult._tag === "Success" && !detailResult.waiting ? detailResult : null;
+  const lastRead = useRef({ targetKey, result: completedRead });
+  useLayoutEffect(() => {
+    const previous = lastRead.current;
+    if (completedRead !== null) {
+      if (
+        previous.targetKey === targetKey &&
+        previous.result !== null &&
+        previous.result !== completedRead
+      )
+        activity.current?.refresh();
+      lastRead.current = { targetKey, result: completedRead };
+    } else if (previous.targetKey !== targetKey) lastRead.current = { targetKey, result: null };
+  }, [completedRead, targetKey]);
+  useFocusEffect(useCallback(() => refresh(), [refresh]));
+  const [unknownSeed, setUnknownSeed] = useState({ comments: issue?.comments, version: 0 });
+  if (issue?.viewer === null && unknownSeed.comments !== issue.comments) {
+    setUnknownSeed({ comments: issue.comments, version: unknownSeed.version + 1 });
+  }
   const access = useIssueAccess(params, issue);
   const cwd = useProject({
     environmentId: target.environmentId,
@@ -478,35 +697,47 @@ function IssueRouteContent({
           ]}
         />
       ) : null}
-      <NativeHeaderToolbar placement="right">
-        <NativeHeaderToolbar.Menu title="Issue" accessibilityLabel="Issue actions" icon="ellipsis">
+      <Toolbar placement="right">
+        <Toolbar.Menu title="Issue" accessibilityLabel="Issue actions" icon="ellipsis">
           {access.comment ? (
-            <NativeHeaderToolbar.MenuAction
+            <Toolbar.MenuAction
               icon="plus.bubble"
               onPress={() => navigation.navigate("IssueCompose", { ...params, mode: "comment" })}
             >
-              <NativeHeaderToolbar.Label>Add comment</NativeHeaderToolbar.Label>
-            </NativeHeaderToolbar.MenuAction>
+              <Toolbar.Label>Add comment</Toolbar.Label>
+            </Toolbar.MenuAction>
           ) : null}
           {access.edit ? (
-            <NativeHeaderToolbar.MenuAction
+            <Toolbar.MenuAction
               icon="pencil"
               onPress={() => navigation.navigate("IssueCompose", { ...params, mode: "edit" })}
             >
-              <NativeHeaderToolbar.Label>Edit issue</NativeHeaderToolbar.Label>
-            </NativeHeaderToolbar.MenuAction>
+              <Toolbar.Label>Edit issue</Toolbar.Label>
+            </Toolbar.MenuAction>
           ) : null}
           {issue ? (
-            <NativeHeaderToolbar.MenuAction
+            <Toolbar.MenuAction
               icon="arrow.up.right"
               onPress={() => void Linking.openURL(issue.url)}
             >
-              <NativeHeaderToolbar.Label>Open in browser</NativeHeaderToolbar.Label>
-            </NativeHeaderToolbar.MenuAction>
+              <Toolbar.Label>Open in browser</Toolbar.Label>
+            </Toolbar.MenuAction>
           ) : null}
-        </NativeHeaderToolbar.Menu>
-      </NativeHeaderToolbar>
+        </Toolbar.Menu>
+      </Toolbar>
       <ScrollView
+        onLayout={({ nativeEvent }) => setViewportHeight(nativeEvent.layout.height)}
+        onContentSizeChange={(_width, height) => {
+          if (viewportHeight > 0 && height <= viewportHeight + 240) activity.current?.loadMore();
+        }}
+        scrollEventThrottle={100}
+        onScroll={({ nativeEvent }) => {
+          if (
+            nativeEvent.contentOffset.y + nativeEvent.layoutMeasurement.height >=
+            nativeEvent.contentSize.height - 240
+          )
+            activity.current?.loadMore();
+        }}
         className={
           Platform.OS === "android"
             ? "flex-1 overflow-hidden rounded-t-[28px] bg-sheet-solid"
@@ -523,12 +754,25 @@ function IssueRouteContent({
             <Text selectable className="text-sm text-danger-foreground">
               Couldn't refresh this issue: {result.error}
             </Text>
-            <MaterialButton label="Retry" loading={result.isPending} onPress={refresh} />
+            <Button label="Retry" loading={result.isPending} onPress={refresh} />
           </View>
         ) : null}
         {issue ? (
           <PullRequestMediaContext value={media}>
-            <IssueBody key={JSON.stringify(target)} params={params} issue={issue} />
+            <IssueBody
+              key={JSON.stringify([
+                target,
+                issue.viewer,
+                issue.commentsCursor,
+                issue.comments.map((comment) => comment.id),
+                unknownSeed.version,
+              ])}
+              params={params}
+              issue={issue}
+              registerActivity={registerActivity}
+              chosenOrder={chosenOrder}
+              setOrder={setOrder}
+            />
           </PullRequestMediaContext>
         ) : result.isPending ? (
           <ActivityIndicator className="my-12" />
@@ -542,8 +786,8 @@ function IssueRouteContent({
             action={
               params.originalURL && /^https?:\/\//i.test(params.originalURL) ? (
                 <View className="items-center gap-2">
-                  <MaterialButton label="Retry" tone="primary" onPress={refresh} />
-                  <MaterialButton
+                  <Button label="Retry" tone="primary" onPress={refresh} />
+                  <Button
                     label="Open in browser"
                     tone="text"
                     onPress={() => void tryOpenExternalUrl(params.originalURL!, "markdown-link")}

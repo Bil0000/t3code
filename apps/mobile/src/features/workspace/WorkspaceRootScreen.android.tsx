@@ -2,15 +2,15 @@ import { useMemo } from "react";
 import { View } from "react-native";
 import { SafeAreaInsetsContext, useSafeAreaInsets } from "react-native-safe-area-context";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
-import { AndroidScreenHeader } from "../../components/AndroidScreenHeader";
-import { EmptyState } from "../../components/EmptyState";
-import { MaterialScreenContent } from "../../components/MaterialScreenContent";
-import { useAndroidControlSizing } from "../../components/useAndroidControlSizing";
+import { AndroidScreenHeader } from "../../components/ui/AndroidScreenHeader";
+import { EmptyState } from "../../components/ui/EmptyState";
+import { ScreenContent } from "../../components/ui/ScreenContent";
+import { useAndroidControlSizing } from "../../components/ui/useAndroidControlSizing";
 import { HomeRouteScreen } from "../home/HomeRouteScreen";
 import { PullRequestsScreen } from "../pull-requests/PullRequestsScreen";
-import { MaterialPullRequestToolbar } from "../pull-requests/MaterialPullRequestToolbar.android";
 import { IssuesScreen } from "../issues/IssuesScreen";
 import { WORKSPACE_TAB_PRESENTATION } from "./workspace-tabs-state";
+import { PullRequestToolbar } from "../pull-requests/PullRequestToolbar.android";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { AndroidWorkspaceNavigation } from "./AndroidWorkspaceNavigation";
 import { WorkspaceTabsContext, useWorkspaceTabs } from "./WorkspaceTabsContext";
@@ -28,7 +28,6 @@ export function WorkspaceRootScreen() {
     [workspace, fabClearance],
   );
 
-  // Split lists live beside the navigator; Home remains an empty detail pane.
   if (layout.usesSplitView) {
     return workspace.state.selectedTab === "threads" ? (
       <HomeRouteScreen />
@@ -65,14 +64,14 @@ export function WorkspaceRootScreen() {
               <HomeRouteScreen />
             ) : (
               <>
-                <MaterialPullRequestToolbar tab={workspace.state.selectedTab} />
-                <MaterialScreenContent>
+                <PullRequestToolbar />
+                <ScreenContent>
                   {workspace.state.selectedTab === "pullRequests" ? (
                     <PullRequestsScreen />
                   ) : (
                     <IssuesScreen />
                   )}
-                </MaterialScreenContent>
+                </ScreenContent>
               </>
             )}
           </View>

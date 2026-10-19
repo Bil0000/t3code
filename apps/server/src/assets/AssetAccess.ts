@@ -2,6 +2,7 @@ import type { AssetResource } from "@t3tools/contracts";
 import {
   AssetAttachmentNotFoundError,
   AssetGitHubMediaUrlValidationError,
+  AssetLinearMediaValidationError,
   AssetPreviewTypeValidationError,
   AssetProjectFaviconInspectionError,
   AssetProjectFaviconNotFoundError,
@@ -16,6 +17,7 @@ import {
   ThreadId,
   ToolActivityNativeAppReference,
   TurnItemId,
+  IssueRef,
 } from "@t3tools/contracts";
 import {
   audioMimeTypeFromExtension,
@@ -65,18 +67,19 @@ import * as NativeAppIconResolver from "./NativeAppIconResolver.ts";
 import { extractIcnsPng } from "./icns.ts";
 import { openMediaFile, readMediaFileHeader, type OpenMediaFile } from "./MediaFile.ts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { linearMediaFetchUrl, linearMediaSourceAvailable } from "./LinearMediaFetch.ts";
 
 export const ASSET_ROUTE_PREFIX = "/api/assets";
 
 const SIGNING_SECRET_NAME = "asset-access-signing-key";
 const ASSET_TOKEN_TTL_MS = 60 * 60 * 1000;
 const PROJECT_FAVICON_TOKEN_BUCKET_MS = 30 * 60 * 1000;
+const HTML_ATTACHMENT_TOKEN_BUCKET_MS = 30 * 60 * 1000;
 const PROJECT_FAVICON_VERSION_PREFIX = "v";
-// Clients draw project icons from a 96px thumbnail at most.
 const PROJECT_FAVICON_ICNS_MIN_SIZE = 96;
 const INLINE_VIDEO_MIME_TYPE_PATTERN = /^video\/[\w!#$&^.+-]+$/i;
-// Extensions a document viewer or audio player may request inline. The extension comes from
-// the attachment id the server assigned, never from the client's mime type.
+// The extension comes from the attachment id the server assigned, never from
+// the client's mime type.
 const INLINE_PREVIEW_MIME_TYPES: Record<string, string> = {
   pdf: "application/pdf",
   html: "text/html",
@@ -97,6 +100,13 @@ const PREVIEW_ASSET_EXTENSIONS = new Set([
 ]);
 
 const AssetClaimsSchema = Schema.Union([
+  Schema.Struct({
+    version: Schema.Literal(1),
+    kind: Schema.Literal("linear-media"),
+    issue: IssueRef,
+    url: Schema.String,
+    expiresAt: Schema.Number,
+  }),
   Schema.Struct({
     version: Schema.Literal(1),
     kind: Schema.Literal("workspace-file"),
@@ -123,11 +133,7 @@ const AssetClaimsSchema = Schema.Union([
     version: Schema.Literal(1),
     kind: Schema.Literal("attachment"),
     attachmentId: Schema.String,
-    /** Decided at mint time. Absent tokens (from before this field) serve
-        inline, which is only ever the image case. */
     download: Schema.optionalKey(Schema.Boolean),
-    /** Display name and mime the caller supplied at mint time; drive the
-        download filename and Content-Type. */
     fileName: Schema.optionalKey(Schema.String),
     mimeType: Schema.optionalKey(Schema.String),
     renderIntent: Schema.optionalKey(Schema.Literal("mcp-app")),
@@ -177,6 +183,12 @@ const encodeAssetClaims = Schema.encodeSync(AssetClaimsJson);
 
 export type ResolvedAsset =
   | {
+      readonly kind: "linear-media";
+      readonly issue: IssueRef;
+      readonly url: string;
+      readonly expiresAt: number;
+    }
+  | {
       readonly kind: "file";
       readonly path: string;
       readonly download?: boolean;
@@ -194,8 +206,6 @@ export type ResolvedAsset =
       readonly kind: "github-media";
       readonly url: string;
       readonly cwd: string;
-      /** When the signed URL that granted this stops working, which bounds how long a client
-          may keep the bytes it fetched with it. */
       readonly expiresAt: number;
     };
 
@@ -226,7 +236,6 @@ const optionOnNotFound = <A, R>(
     }),
   );
 
-/** Reads a stored MCP HTML snapshot; null means it exceeds the preview limit. */
 export const readMcpAppHtml = Effect.fn("AssetAccess.readMcpAppHtml")(function* (filePath: string) {
   const fileSystem = yield* FileSystem.FileSystem;
   // Stored snapshots also contain a bounded CSP meta tag (up to 32 domains
@@ -244,10 +253,6 @@ export const readMcpAppHtml = Effect.fn("AssetAccess.readMcpAppHtml")(function* 
   return bytes;
 });
 
-/**
- * Decodes one image a tool returned inline; null when the stored item has no
- * such image, or it is larger than a provider turn accepts.
- */
 const readToolOutputImage = Effect.fn("AssetAccess.readToolOutputImage")(function* (input: {
   readonly threadId: ThreadId;
   readonly itemId: TurnItemId;
@@ -335,12 +340,6 @@ const resolveCanonicalWorkspaceFileForRequest = (input: {
     Effect.orElseSucceed(() => null),
   );
 
-/**
- * Reads pixel dimensions from an image's header so clients can reserve the
- * exact box before the bytes arrive. Best effort: an unreadable or unsupported
- * file just leaves the field out, and the client measures after decode. Only
- * formats the parser understands are opened; SVG and the rest are skipped.
- */
 const HEADER_IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
 
 /** From the identity-checked, non-blocking handle the caller already holds. */
@@ -504,7 +503,6 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
   readonly resource: AssetResource;
   readonly workspaceRoot?: string;
   readonly projectFaviconPath?: string;
-  /** The project's clone has not landed, so its icon is reported missing without a lookup. */
   readonly projectCheckoutPending?: boolean;
 }) {
   const fileSystem = yield* FileSystem.FileSystem;
@@ -517,6 +515,21 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
   let imageDimensions: ImageDimensions | null = null;
 
   switch (input.resource._tag) {
+    case "linear-media": {
+      const fetchUrl = linearMediaFetchUrl(input.resource.url);
+      if (fetchUrl === null || !(yield* linearMediaSourceAvailable(input.resource.issue))) {
+        return yield* new AssetLinearMediaValidationError({});
+      }
+      claims = {
+        version: 1,
+        kind: "linear-media",
+        issue: input.resource.issue,
+        url: fetchUrl,
+        expiresAt,
+      };
+      fileName = "linear-media";
+      break;
+    }
     case "media-file": {
       let requestedPath = expandHomePath(input.resource.path, yield* HostProcess.HomeDirectory);
       if (!path.isAbsolute(requestedPath)) {
@@ -570,11 +583,8 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
       break;
     }
     case "draft-workspace-file": {
-      // The draft names its workspace root in the resource itself; an explicit
-      // root only overrides it.
       const draftWorkspaceRoot = input.workspaceRoot ?? input.resource.cwd;
       if (path.isAbsolute(input.resource.path)) {
-        // An absolute draft path serves exactly like an absolute media path.
         const finalized = yield* finalizeAbsoluteMediaFileAsset({
           requestedPath: input.resource.path,
           resource: input.resource,
@@ -616,10 +626,6 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
           resource: input.resource,
         });
       }
-      // Generic files carry their extension inside the attachment id (that
-      // shape resolves the on-disk path); images do not. Videos and images
-      // render inline. Other generic files download unless a viewer requests
-      // a supported document or audio format inline.
       const extension = parseAttachmentFileExtension(input.resource.attachmentId);
       const isGenericFile = extension !== null;
       const videoMimeType = input.resource.mimeType?.split(";", 1)[0]?.trim() ?? "";
@@ -776,7 +782,6 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
         index: input.resource.index,
         expiresAt,
       };
-      // The allowed types are all `image/<extension>`.
       fileName = `image-${input.resource.index + 1}.${image.mimeType.slice("image/".length)}`;
       imageDimensions = readImageDimensions(image.bytes);
       break;
@@ -825,6 +830,14 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
       PROJECT_FAVICON_TOKEN_BUCKET_MS;
     claims = { ...claims, expiresAt };
   }
+  if (claims.kind === "attachment" && claims.mimeType === "text/html") {
+    // HTML pages never change, so mints in the same window sign the same URL and a reload
+    // can answer it from the browser cache. Images keep a new URL per mint, since their
+    // load-error retries rely on one.
+    expiresAt =
+      Math.ceil(expiresAt / HTML_ATTACHMENT_TOKEN_BUCKET_MS) * HTML_ATTACHMENT_TOKEN_BUCKET_MS;
+    claims = { ...claims, expiresAt };
+  }
   const encodedPayload = base64UrlEncode(encodeAssetClaims(claims));
   const token = `${encodedPayload}.${signPayload(encodedPayload, signingSecret)}`;
   return {
@@ -852,6 +865,15 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
 
   const claims = decodeClaims(encodedPayload);
   if (!claims || claims.expiresAt <= (yield* Clock.currentTimeMillis)) return null;
+
+  if (claims.kind === "linear-media") {
+    return {
+      kind: "linear-media",
+      issue: claims.issue,
+      url: claims.url,
+      expiresAt: claims.expiresAt,
+    } satisfies ResolvedAsset;
+  }
 
   if (claims.kind === "attachment") {
     const config = yield* ServerConfig.ServerConfig;

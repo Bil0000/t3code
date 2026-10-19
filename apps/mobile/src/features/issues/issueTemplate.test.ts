@@ -24,6 +24,8 @@ import {
 import type { IssueCreateScope } from "./issueList";
 import {
   fillIssueTemplate,
+  mobileNativeFieldError,
+  mobileNativeFieldValues,
   issueTemplateBodyRead,
   issueTemplateCatalogRead,
   selectedIssueTemplate,
@@ -215,5 +217,54 @@ describe("lazy issue templates", () => {
         body: "mine",
       }),
     ).toMatchObject({ title: "bug title", body: "mine" });
+  });
+});
+
+describe("native create fields", () => {
+  it("validates supplied native choices, dates and finite numbers before creation", () => {
+    const field = { id: "field", label: "Field", required: true };
+    expect(mobileNativeFieldError([{ ...field, kind: "date" }], { field: "2026-02-30" })).toBe(
+      "Enter a date for Field.",
+    );
+    expect(
+      mobileNativeFieldError([{ ...field, kind: "datetime" }], { field: "2026-10-19T14:30" }),
+    ).toContain("time zone");
+    expect(mobileNativeFieldError([{ ...field, kind: "number" }], { field: "Infinity" })).toContain(
+      "number",
+    );
+    expect(
+      mobileNativeFieldError(
+        [{ ...field, kind: "select", options: [{ value: "allowed", label: "Allowed" }] }],
+        { field: "other" },
+      ),
+    ).toContain("Choose");
+    expect(
+      mobileNativeFieldError(
+        [{ ...field, kind: "multiselect", options: [{ value: "allowed", label: "Allowed" }] }],
+        { field: ["allowed", "other"] },
+      ),
+    ).toContain("Choose");
+    expect(mobileNativeFieldError([{ ...field, kind: "json" }], {})).toContain("on the tracker");
+  });
+  it("preserves native option IDs and text while converting explicit timestamp offsets", () => {
+    const fields = [
+      { id: "text", label: "Text", kind: "text" as const, required: false },
+      { id: "time", label: "Time", kind: "datetime" as const, required: true },
+      {
+        id: "choice",
+        label: "Choice",
+        kind: "select" as const,
+        required: false,
+        options: [{ value: "", label: "Empty" }],
+      },
+      { id: "optional", label: "Optional", kind: "number" as const, required: false },
+    ];
+    const values = { text: "", time: "2026-10-19T14:30:00+02:00", choice: "", optional: "" };
+    expect(mobileNativeFieldError(fields, values)).toBeNull();
+    expect(mobileNativeFieldValues(fields, values)).toEqual({
+      text: "",
+      time: "2026-10-19T12:30:00.000Z",
+      choice: "",
+    });
   });
 });

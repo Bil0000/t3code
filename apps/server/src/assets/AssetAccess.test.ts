@@ -5,6 +5,8 @@ import * as NodeFSP from "node:fs/promises";
 import {
   AssetAccessError,
   AssetPreviewTypeValidationError,
+  IssueTrackerKind,
+  ProjectId,
   ThreadId,
   TurnItemId,
 } from "@t3tools/contracts";
@@ -38,6 +40,7 @@ import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 import * as GitHubCredentials from "@t3tools/source-control-github/server/GitHubCredentials";
 import { githubMediaResponse } from "./GitHubMediaFetch.ts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as IssueService from "../issue/IssueService.ts";
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof NodeFSP>();
@@ -47,7 +50,6 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 const layerConfig = ServerConfig.ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-asset-access-test-",
 });
-// A PNG header is enough for the dimension read: signature, then IHDR width and height.
 const screenshotPng = new Uint8Array(24);
 screenshotPng.set([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52,
@@ -100,6 +102,7 @@ const oversizedScreenshotItem = {
 };
 
 const layerTest = Layer.mergeAll(
+  Layer.mock(IssueService.IssueService)({ sources: () => Effect.succeed([]) }),
   NodeHttpPlatform.layer,
   Layer.mock(Orchestrator.OrchestratorV2)({
     getTurnItem: ({ itemId }) =>
@@ -122,6 +125,87 @@ const layerTest = Layer.mergeAll(
 ).pipe(Layer.provideMerge(NodeServices.layer));
 
 describe("AssetAccess", () => {
+  it.effect(
+    "signs Linear media for the exact source, keeps its original URL, and renews expired URLs",
+    () =>
+      Effect.gen(function* () {
+        const issue = {
+          projectId: ProjectId.make("linear-project"),
+          tracker: IssueTrackerKind.make("linear"),
+          host: "linear.app",
+          scope: "workspace/ENG",
+          key: "ENG-12",
+          connectionId: "account-b",
+        };
+        const url = "https://uploads.linear.app/workspace/file/screenshot.png";
+        const resource = { _tag: "linear-media" as const, issue, url };
+        const service = IssueService.IssueService.of({
+          ...(yield* IssueService.IssueService),
+          sources: (projectId) =>
+            Effect.succeed(
+              projectId === issue.projectId
+                ? [
+                    {
+                      tracker: issue.tracker,
+                      host: issue.host,
+                      scope: issue.scope,
+                      connectionId: issue.connectionId,
+                    },
+                  ]
+                : [],
+            ),
+        });
+        const sign = () =>
+          issueAssetUrl({ resource }).pipe(
+            Effect.provideService(IssueService.IssueService, service),
+          );
+        const resolve = (relativeUrl: string) => {
+          const suffix = relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+          const separator = suffix.indexOf("/");
+          return resolveAsset(suffix.slice(0, separator), suffix.slice(separator + 1));
+        };
+        const signed = yield* sign();
+        expect(yield* resolve(signed.relativeUrl)).toEqual({
+          kind: "linear-media",
+          issue,
+          url,
+          expiresAt: signed.expiresAt,
+        });
+        expect(resource).toEqual({ _tag: "linear-media", issue, url });
+        const secrets = yield* ServerSecretStore.ServerSecretStore;
+        const signingKey = yield* secrets.getOrCreateRandom("asset-access-signing-key", 32);
+        const foreignKey = Uint8Array.from(signingKey, (byte) => byte ^ 255);
+        expect(
+          yield* resolve(signed.relativeUrl).pipe(
+            Effect.provideService(ServerSecretStore.ServerSecretStore, {
+              ...secrets,
+              getOrCreateRandom: () => Effect.succeed(foreignKey),
+            }),
+          ),
+        ).toBeNull();
+        yield* TestClock.adjust("1 hour");
+        expect(yield* resolve(signed.relativeUrl)).toBeNull();
+        const renewed = yield* sign();
+        expect(renewed.expiresAt).toBeGreaterThan(signed.expiresAt);
+        expect(yield* resolve(renewed.relativeUrl)).toEqual({
+          kind: "linear-media",
+          issue,
+          url,
+          expiresAt: renewed.expiresAt,
+        });
+        for (const invalid of [
+          { ...resource, issue: { ...issue, connectionId: "account-a" } },
+          { ...resource, issue: { ...issue, connectionId: undefined } },
+          { ...resource, url: "https://foreign.invalid/image.png" },
+        ]) {
+          const failure = yield* issueAssetUrl({ resource: invalid }).pipe(
+            Effect.provideService(IssueService.IssueService, service),
+            Effect.flip,
+          );
+          expect(failure._tag).toBe("AssetLinearMediaValidationError");
+        }
+      }).pipe(Effect.provide(layerTest)),
+  );
   describe("readMcpAppHtml", () => {
     it.effect("accepts snapshots at the stored HTML byte limit", () =>
       Effect.gen(function* () {
@@ -192,7 +276,6 @@ describe("AssetAccess", () => {
       expect((yield* githubMediaResponse(asset, {})).status).toBe(404);
       expect((yield* githubMediaResponse(asset, {})).status).toBe(200);
       expect((yield* githubMediaResponse(asset, {})).status).toBe(200);
-      // Caching the token is GitHubCredentials' job; this asks it every time.
       expect(lookups).toBe(3);
       expect(authorizations).toEqual([undefined, "Bearer signed-in", "Bearer signed-in"]);
     }).pipe(
@@ -249,7 +332,6 @@ describe("AssetAccess", () => {
         Effect.flip,
       );
       expect(missing._tag).toBe("AssetWorkspaceAssetNotFoundError");
-      // Larger than a provider turn accepts, so it is never decoded.
       const oversized = yield* issueAssetUrl({
         resource: { ...resource, itemId: oversizedScreenshotItem.id },
       }).pipe(Effect.flip);
@@ -593,8 +675,6 @@ describe("AssetAccess", () => {
         );
         const savedDirectory = path.join(root, "saved");
         const realpathSpy = vi.mocked(NodeFSP.realpath).mockImplementationOnce(async () => {
-          // A pathname-only guard can see the original parents during realpath,
-          // but the private file during both lstat calls and open.
           await native.unlink(publicDirectory);
           await native.rename(savedDirectory, publicDirectory);
           const canonical = await native.realpath(canonicalPath);
@@ -993,7 +1073,6 @@ describe("AssetAccess", () => {
           expect("renderIntent" in asset ? asset.renderIntent : undefined).toBe(
             extension === "html" && disposition === "inline" ? "mcp-app" : undefined,
           );
-          // Changing signed claims cannot opt an ordinary download into rendering.
           const token = suffix.slice(0, separator);
           const [payload, signature] = token.split(".");
           const claims = JSON.parse(Buffer.from(payload!, "base64url").toString("utf8"));
@@ -1026,6 +1105,34 @@ describe("AssetAccess", () => {
         kind: "file",
         path: attachmentPath,
       });
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("signs the same HTML page URL within an expiry window", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const attachmentId = "thread-1-00000000-0000-4000-8000-000000000001-html";
+      yield* fileSystem.makeDirectory(config.attachmentsDir, { recursive: true });
+      yield* fileSystem.writeFileString(
+        path.join(config.attachmentsDir, `${attachmentId}.html`),
+        "<p>render</p>",
+      );
+      const bucketMs = 30 * 60 * 1000;
+      const issue = issueAssetUrl({
+        resource: { _tag: "attachment", attachmentId, disposition: "inline" },
+      });
+      yield* TestClock.setTime(bucketMs + 1);
+      const first = yield* issue;
+      yield* TestClock.adjust("20 minutes");
+      const second = yield* issue;
+      yield* TestClock.adjust("10 minutes");
+      const next = yield* issue;
+
+      expect(second.relativeUrl).toBe(first.relativeUrl);
+      expect(first.expiresAt).toBe(4 * bucketMs);
+      expect(next.expiresAt).toBe(5 * bucketMs);
     }).pipe(Effect.provide(layerTest)),
   );
 
@@ -1455,18 +1562,14 @@ describe("AssetAccess", () => {
         kind: "github-media",
         url: "https://github.com/user-attachments/assets/1a1842fb-6383-492f-873c-57aa0033fa6c",
         cwd: "/repo",
-        // The signed URL's own expiry, which is how long a client may keep the bytes.
         expiresAt: attachment.expiresAt,
       });
 
-      // A `blob` link addresses the page; only the raw host answers a credential with bytes.
       const committed = yield* issue("https://github.com/owner/repo/blob/main/docs/shot.png");
       expect(yield* resolve(committed.relativeUrl)).toMatchObject({
         url: "https://raw.githubusercontent.com/owner/repo/main/docs/shot.png",
       });
 
-      // The pre-`user-attachments` form, Git LFS bytes, and a name no `decodeURIComponent`
-      // accepts all arrive from real bodies.
       const legacy = yield* issue("https://github.com/owner/repo/assets/45952064/1a1842fb");
       expect(yield* resolve(legacy.relativeUrl)).toMatchObject({
         url: "https://github.com/owner/repo/assets/45952064/1a1842fb",

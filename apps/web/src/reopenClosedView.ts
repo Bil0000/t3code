@@ -2,6 +2,7 @@ import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 
 import type { OpenPreviewMutation } from "./browser/openFileInPreview";
 import type { ClosedView, ClosedViewEntry } from "./closedViewStore";
+import type { IssueListPreferences } from "./components/issue/issueListPreferences";
 import type { PullRequestListPreferences } from "./components/pullRequest/pullRequestListPreferences";
 import { openPreviewSession } from "./components/preview/openPreviewSession";
 import {
@@ -11,21 +12,13 @@ import {
 } from "./rightPanelStore";
 
 export interface ReopenOwnerState {
-  /** False when the entry's environment is not in the catalog. */
   environmentKnown: boolean;
   catalogReady: boolean;
-  /** Whether the owning thread or draft still exists locally. */
   ownerExists: boolean;
-  /** A live shell that lacks the thread means it was deleted; a cached one may just be stale. */
   shellLive: boolean;
   panel: ThreadRightPanelState;
 }
 
-/**
- * Picks the history entry the next reopen press restores, newest first. Entries whose
- * environment is gone or whose tab is already open are dropped. A thread missing from a
- * live shell is skipped but kept; anything not yet knowable stops the scan with no restore.
- */
 export function planNextReopen(
   entries: readonly ClosedViewEntry[],
   ownerState: (entry: ClosedViewEntry) => ReopenOwnerState,
@@ -65,7 +58,6 @@ type PullRequestsSearchLike = Partial<PullRequestListPreferences> & {
   selectedEnvironmentId?: EnvironmentId;
 };
 
-/** Selects the restored pull request on the Pull Requests page, keeping the list filters. */
 export function pullRequestsSearchForRestore<S extends PullRequestsSearchLike>(
   previous: S,
   selected: RightPanelSurface | null,
@@ -94,6 +86,30 @@ export function pullRequestsSearchForRestore<S extends PullRequestsSearchLike>(
         }
       : {}),
   } as S & PullRequestListPreferences;
+}
+
+export function issuesSearchForRestore(
+  preferences: IssueListPreferences,
+  selected: RightPanelSurface | null,
+) {
+  return {
+    ...preferences,
+    ...(selected?.kind === "issue"
+      ? {
+          ...(selected.environmentId === undefined
+            ? {}
+            : { selectedEnvironmentId: selected.environmentId as EnvironmentId }),
+          selectedProjectId: selected.projectId as ProjectId,
+          ...(selected.host === undefined ? {} : { selectedHost: selected.host }),
+          ...(selected.connectionId === undefined
+            ? {}
+            : { selectedConnectionId: selected.connectionId }),
+          tracker: selected.tracker,
+          scope: selected.scope,
+          key: selected.key,
+        }
+      : {}),
+  };
 }
 
 export async function reopenClosedView(

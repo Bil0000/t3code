@@ -1,3 +1,4 @@
+import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { Spinner } from "~/components/ui/spinner";
 import type {
   EnvironmentId,
@@ -11,6 +12,7 @@ import {
   CircleCheckIcon,
   CircleDashedIcon,
   CircleSlashIcon,
+  ChevronDownIcon,
   CircleXIcon,
   EyeOffIcon,
   FolderGit2Icon,
@@ -20,8 +22,9 @@ import {
   TagIcon,
   UserRoundIcon,
 } from "lucide-react";
-import { type ElementType, useState } from "react";
+import { type ElementType, type ReactNode, useState } from "react";
 
+import { cn } from "~/lib/utils";
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
 import { ProjectFavicon, type ProjectFaviconProject } from "../ProjectFavicon";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "../ui/input-group";
@@ -54,14 +57,12 @@ import { PullRequestGlyph } from "./pullRequestIcons";
 export interface PullRequestFilterOption<Value extends string> {
   readonly value: Value;
   readonly label: string;
-  /** Uses the option's native icon tone. */
   readonly Icon: ElementType<{ className?: string }>;
   readonly project?: ProjectFaviconProject;
-  /** Why it cannot be chosen, carried onto the item as its title. */
   readonly unavailable?: string | undefined;
 }
 
-export function PullRequestFilterOptionIcon<Value extends string>({
+function PullRequestFilterOptionIcon<Value extends string>({
   option,
 }: {
   option: PullRequestFilterOption<Value>;
@@ -78,12 +79,6 @@ export interface PullRequestExpectedHost {
   readonly kind: SourceControlProviderKind;
 }
 
-/**
- * What to call a host in the row. The provider's own name reads best — "GitHub" over
- * "github.com" — but it stops naming anything once a workspace has two hosts of one kind, so
- * those wear the host itself instead. Only the ambiguous ones: a lone GitLab beside two GitHub
- * installs is still "GitLab".
- */
 export function pullRequestHostLabel(
   entries: ReadonlyArray<{ readonly host: string; readonly kind: SourceControlProviderKind }>,
   entry: { readonly host: string; readonly kind: SourceControlProviderKind },
@@ -98,11 +93,14 @@ export function PullRequestSearchInput({
   value,
   busy,
   onChange,
+  placeholder = "Search pull requests, or label:bug",
+  "aria-label": ariaLabel = "Search pull requests",
 }: {
   value: string;
-  /** A search is on its way to the hosts, said where the typing is rather than over the list. */
   busy?: boolean;
   onChange: (value: string) => void;
+  placeholder?: string;
+  "aria-label"?: string;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
   return (
@@ -119,23 +117,128 @@ export function PullRequestSearchInput({
           setDraft(event.currentTarget.value);
           onChange(event.currentTarget.value);
         }}
-        placeholder="Search pull requests, or label:bug"
-        aria-label="Search pull requests"
+        placeholder={placeholder}
+        aria-label={ariaLabel}
       />
     </InputGroup>
   );
 }
 
-/**
- * List narrowings live behind one filter control, separate from sorting. The trigger carries a
- * count whenever any filter is off its default, so a narrowed list is never a mystery.
- */
+export function CompactFilterMenu<Value extends string>({
+  label,
+  triggerIcon,
+  triggerLabel,
+  outlined = false,
+  iconOnly = false,
+  value,
+  options,
+  onChange,
+  className,
+}: {
+  label: string;
+  triggerIcon?: ReactNode;
+  triggerLabel?: string;
+  outlined?: boolean;
+  iconOnly?: boolean;
+  value: Value;
+  options: ReadonlyArray<PullRequestFilterOption<Value>>;
+  onChange: (value: Value) => void;
+  className?: string;
+}) {
+  const current = options.find((option) => option.value === value) ?? options[0];
+  if (!current) return null;
+  return (
+    <Menu>
+      <MenuTrigger
+        aria-label={triggerLabel || iconOnly || outlined ? `${label}: ${current.label}` : label}
+        title={iconOnly ? `${label}: ${current.label}` : undefined}
+        render={
+          outlined ? (
+            <Button variant="outline" size={iconOnly ? "icon" : "default"} />
+          ) : (
+            <Button variant="ghost-muted" size="sm" />
+          )
+        }
+        className={cn("min-w-0", className)}
+      >
+        {iconOnly ? (
+          <current.Icon aria-hidden className="size-4" />
+        ) : triggerLabel ? (
+          <>
+            {triggerIcon}
+            <span>{triggerLabel}</span>
+          </>
+        ) : outlined ? (
+          <>
+            <PullRequestFilterOptionIcon option={current} />
+            <span className="truncate">{current.label}</span>
+          </>
+        ) : (
+          <>
+            <span className="truncate">{current.label}</span>
+            <ChevronDownIcon aria-hidden className="size-3 shrink-0 text-muted-foreground/70" />
+          </>
+        )}
+      </MenuTrigger>
+      <MenuPopup align="start" side="bottom">
+        <MenuRadioGroup value={value} onValueChange={(next) => onChange(next as Value)}>
+          {options.map((option) => {
+            const item = (
+              <MenuRadioItem
+                key={option.value}
+                value={option.value}
+                disabled={option.unavailable !== undefined}
+                className="data-disabled:pointer-events-auto"
+              >
+                <span className="flex min-w-0 items-center gap-2">
+                  <PullRequestFilterOptionIcon option={option} />
+                  {option.label}
+                </span>
+              </MenuRadioItem>
+            );
+            return option.unavailable === undefined ? (
+              item
+            ) : (
+              <Tooltip key={option.value}>
+                <TooltipTrigger render={item} />
+                <TooltipPopup side="right">{option.unavailable}</TooltipPopup>
+              </Tooltip>
+            );
+          })}
+        </MenuRadioGroup>
+      </MenuPopup>
+    </Menu>
+  );
+}
+
+export function PullRequestRefreshControl({
+  compact = false,
+  refreshing,
+  onRefresh,
+  "aria-label": ariaLabel = "Refresh pull requests",
+}: {
+  compact?: boolean;
+  refreshing: boolean;
+  onRefresh: () => void;
+  "aria-label"?: string;
+}) {
+  return (
+    <Button
+      size={compact ? "icon-sm" : "icon"}
+      variant={compact ? "ghost" : "outline"}
+      aria-label={ariaLabel}
+      onClick={onRefresh}
+      disabled={refreshing}
+    >
+      <RefreshIcon size="md" refreshing={refreshing} />
+    </Button>
+  );
+}
+
 const ALL_PROJECTS_VALUE = "all";
 /** MenuRadioGroup wants a string, so "every host" wears the one value no host can be. */
 const ALL_HOSTS_VALUE = "";
-/** The same trick for the servers, which are named by an id no empty string can collide with. */
 const ALL_SERVERS_VALUE = "";
-/** The unset value of each narrowing group, which no filter of theirs is named after. */
 const UNFILTERED_VALUE = "all";
 /**
  * A project's own radio value, carrying the server along with the id: the id alone is only
@@ -166,7 +269,7 @@ const CHECKS_OPTIONS = [
   { value: "failing", label: "Failing", Icon: CircleXIcon },
 ] as const satisfies ReadonlyArray<PullRequestFilterOption<string>>;
 
-function PullRequestFilterRadioGroup<Value extends string>({
+export function PullRequestFilterRadioGroup<Value extends string>({
   label,
   value,
   options,
@@ -186,8 +289,6 @@ function PullRequestFilterRadioGroup<Value extends string>({
     >
       <MenuGroupLabel>{label}</MenuGroupLabel>
       {options.map((option) => {
-        // A host the server has already said it cannot read is not a choice here: offering
-        // it would answer the press by replacing a working list with that failure.
         const item = (
           <MenuRadioItem
             key={option.value}
@@ -422,40 +523,20 @@ export function PullRequestFiltersMenu({
   involvement: PullRequestInvolvement;
   involvementOptions: ReadonlyArray<PullRequestFilterOption<PullRequestInvolvement>>;
   onInvolvement: (involvement: PullRequestInvolvement) => void;
-  /** The narrowings beyond state and involvement; an absent field is that group unfiltered. */
   filters: PullRequestListFilters;
   onFilters: (filters: PullRequestListFilters) => void;
   authorOptions?: ReadonlyArray<PullRequestAuthorFacet>;
   labelOptions?: ReadonlyArray<PullRequestLabelFacet>;
   host: string | undefined;
-  /**
-   * Includes the "all hosts" entry, whose value is the empty string. With fewer than two real
-   * hosts there is nothing to switch between, so the whole group stays out of the menu.
-   */
   hostOptions: ReadonlyArray<PullRequestFilterOption<string>>;
   onHost: (host: string | undefined) => void;
   server: EnvironmentId | undefined;
-  /**
-   * Includes the "all servers" entry, whose value is the empty string. With one server there is
-   * nothing to switch between, so the whole group stays out of the menu.
-   */
   serverOptions: ReadonlyArray<PullRequestFilterOption<string>>;
   onServer: (server: EnvironmentId | undefined) => void;
-  /** The projects of every connected environment, each carrying the one its favicon is read from. */
   projects: ReadonlyArray<ProjectFaviconProject & { readonly id: ProjectId }>;
   projectId: ProjectId | undefined;
-  /**
-   * The server the selected project belongs to. A project id is only unique within its own
-   * server, so without this two rows sharing an id would both read as checked here.
-   */
   projectEnvironmentId: EnvironmentId | undefined;
-  /**
-   * Projects whose repository could not be read this time round. They are named here, where
-   * the reader is already choosing between projects, rather than as a count above the list
-   * that says something is missing without saying which.
-   */
   unavailable: ReadonlyMap<string, string>;
-  /** The environment comes with the project id, since picking a row picks a specific server's copy of it. */
   onProject: (projectId: ProjectId | undefined, environmentId: EnvironmentId | undefined) => void;
 }) {
   const selectedLabels = (filters.labels ?? []).flatMap((group) => group);

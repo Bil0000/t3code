@@ -8,6 +8,7 @@ import {
   issueAssigneeId,
   issueCreateBlocked,
   issueTimeline,
+  issueTarget,
   linkedPullRequestContext,
   resolveIssueType,
 } from "./issueDetail";
@@ -66,6 +67,55 @@ function detail(): IssueDetail {
 }
 
 const grants = { connected: true, comment: true, update: true, setState: true, react: true };
+
+it("keeps the selected account on every issue target without adding navigation fields", () => {
+  const target = issueTarget({
+    environmentId: "env",
+    projectId: "project",
+    tracker: "jira",
+    host: "jira.example",
+    scope: "ENG",
+    key: "ENG-1",
+    connectionId: "Account-A",
+    displayKey: "ENG-1",
+    originalURL: "https://jira.example/ENG-1",
+  });
+  expect(target).toEqual({
+    environmentId: "env",
+    input: {
+      projectId: "project",
+      tracker: "jira",
+      host: "jira.example",
+      scope: "ENG",
+      key: "ENG-1",
+      connectionId: "Account-A",
+    },
+  });
+  expect(
+    issueTarget({
+      environmentId: "env",
+      projectId: "project",
+      tracker: "jira",
+      host: "jira.example",
+      scope: "ENG",
+      key: "ENG-1",
+    }).input,
+  ).not.toHaveProperty("connectionId");
+});
+
+it("keeps distinct native transition IDs even when their destination has the current name", () => {
+  const issue = detail();
+  const states = [
+    { id: "1", transitionId: "11", name: "In progress", category: "open" as const },
+    { id: "1", transitionId: "12", name: "In progress", category: "open" as const },
+  ];
+  expect(
+    issueAccess(
+      { ...issue, state: { id: "1", name: "In progress", category: "open" }, states },
+      grants,
+    ).states,
+  ).toEqual(states);
+});
 const denied = {
   comment: false,
   react: false,
@@ -388,7 +438,7 @@ describe("issue assignee identity", () => {
 });
 
 describe("issue timeline", () => {
-  it("orders oldest first and keeps equal-time items in input order", () => {
+  it("defaults to newest first, supports oldest first and keeps equal-time items in input order", () => {
     const comments = [
       { id: "late", author: null, body: "Late", createdAt: "2026-10-03T00:00:00Z", url: null },
       { id: "same", author: null, body: "Same", createdAt: "2026-10-02T00:00:00Z", url: null },
@@ -411,6 +461,11 @@ describe("issue timeline", () => {
     ];
     expect(
       issueTimeline(comments, events).map((item) =>
+        item.kind === "comment" ? item.comment.id : item.event.id,
+      ),
+    ).toEqual(["late", "same", "same-event", "early"]);
+    expect(
+      issueTimeline(comments, events, "asc").map((item) =>
         item.kind === "comment" ? item.comment.id : item.event.id,
       ),
     ).toEqual(["early", "same", "same-event", "late"]);

@@ -1,4 +1,5 @@
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
+import { EnvironmentId } from "@t3tools/contracts";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { parseChangeRequestUrl } from "@t3tools/shared/changeRequestUrl";
 import type {
@@ -9,7 +10,21 @@ import type {
   IssueEvent,
   IssueReactionContent,
   IssueState,
+  IssueRef,
 } from "@t3tools/contracts";
+import type { IssueParams } from "./issueSelection";
+
+export function issueTarget(params: IssueParams) {
+  const input: IssueRef = {
+    ...(params.connectionId === undefined ? {} : { connectionId: params.connectionId }),
+    projectId: params.projectId as IssueRef["projectId"],
+    tracker: params.tracker as IssueRef["tracker"],
+    host: params.host,
+    scope: params.scope,
+    key: params.key,
+  };
+  return { environmentId: EnvironmentId.make(params.environmentId), input };
+}
 
 export const ISSUE_REACTIONS: ReadonlyArray<{
   content: IssueReactionContent;
@@ -57,7 +72,12 @@ export function issueAccess(
         (reason) => detail.state.category !== "closed" || reason !== detail.state.closeReason,
       )
     : [];
-  const categoryOnly = states.every((state) => state.name.toLowerCase() === state.category);
+  const categoryOnly = states.every(
+    (state) =>
+      state.id === undefined &&
+      state.transitionId === undefined &&
+      state.name.toLowerCase() === state.category,
+  );
   const edit =
     writable && grants.update && detail.capabilities.edit && detail.viewerPermissions.edit;
   return {
@@ -84,7 +104,10 @@ export function issueAccess(
           categoryOnly
             ? state.category !== detail.state.category ||
               (state.category === "closed" && closeReasons.length > 0)
-            : state.name.toLowerCase() !== detail.state.name.toLowerCase(),
+            : state.transitionId !== undefined ||
+              (state.id !== undefined && detail.state.id !== undefined
+                ? state.id !== detail.state.id
+                : state.name.toLowerCase() !== detail.state.name.toLowerCase()),
         )
       : [],
     closeReasons,
@@ -191,6 +214,7 @@ type IssueTimelineItem =
 export function issueTimeline(
   comments: ReadonlyArray<IssueComment>,
   events: ReadonlyArray<IssueEvent>,
+  order: "asc" | "desc" = "desc",
 ): IssueTimelineItem[] {
   const items: IssueTimelineItem[] = [
     ...comments.map((comment) => ({ kind: "comment" as const, comment })),
@@ -198,5 +222,7 @@ export function issueTimeline(
   ];
   const createdAt = (item: IssueTimelineItem) =>
     item.kind === "comment" ? item.comment.createdAt : item.event.createdAt;
-  return items.sort((a, b) => Date.parse(createdAt(a)) - Date.parse(createdAt(b)));
+  return items.sort(
+    (a, b) => (Date.parse(createdAt(a)) - Date.parse(createdAt(b))) * (order === "asc" ? 1 : -1),
+  );
 }

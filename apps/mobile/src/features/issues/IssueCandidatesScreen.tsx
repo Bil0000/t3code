@@ -3,13 +3,18 @@ import { useNavigation, type StaticScreenProps } from "@react-navigation/native"
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { use, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, FlatList, Platform, Pressable, View } from "react-native";
-import { AppText as Text, AppTextInput as TextInput } from "../../components/AppText";
-import { AndroidScreenHeader } from "../../components/AndroidScreenHeader";
-import { EmptyState } from "../../components/EmptyState";
-import { MaterialButton } from "../../components/MaterialButton";
-import { SymbolView } from "../../components/AppSymbol";
-import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
-import { issueEnvironment } from "../../state/issues";
+import { AppText as Text, AppTextInput as TextInput } from "../../components/ui/AppText";
+import { AndroidScreenHeader } from "../../components/ui/AndroidScreenHeader";
+import { EmptyState } from "../../components/ui/EmptyState";
+import { Button } from "../../components/ui/Button";
+import { SymbolView } from "../../components/ui/AppSymbol";
+import { NativeStackScreenOptions } from "../../native/StackHeader";
+import { NativeHeaderToolbar } from "../../native/NativeHeaderToolbar";
+import {
+  issueEnvironment,
+  useIssueLabelCandidates,
+  useIssueAssigneeCandidates,
+} from "../../state/issues";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { PullRequestAvatar } from "../pull-requests/PullRequestPresentation";
@@ -52,23 +57,27 @@ export function IssueCandidatesScreen({
   const access = useIssueAccess(params, issue);
   const allowed = labels ? access.labels : access.assignees;
   const scope = {
-    environmentId: target.environmentId,
-    input: {
-      projectId: target.input.projectId,
-      tracker: target.input.tracker,
-      host: params.host,
-      scope: params.scope,
-    },
+    projectId: target.input.projectId,
+    tracker: target.input.tracker,
+    host: target.input.host,
+    scope: target.input.scope,
+    ...(target.input.connectionId === undefined ? {} : { connectionId: target.input.connectionId }),
+    limit: 100,
   };
-  const result = useEnvironmentQuery(issueEnvironment.candidates(scope));
+  const labelPages = useIssueLabelCandidates(target.environmentId, labels ? scope : null);
+  const assigneePages = useIssueAssigneeCandidates(target.environmentId, labels ? null : scope);
+  const result = labels ? labelPages : assigneePages;
   const update = useAtomCommand(issueEnvironment.update, { reportFailure: false });
-  const [query, setQuery] = useState("");
-  const [error, setError] = useState<string | null>(null);
   const pickerKey = issuePickerKey(
     target.environmentId,
     { ...target.input, host: params.host },
     params.kind,
   );
+  const [search, setSearch] = useState({ key: pickerKey, value: "" });
+  const query = search.key === pickerKey ? search.value : "";
+  const setQuery = (value: string) => setSearch({ key: pickerKey, value });
+  const [failure, setFailure] = useState<{ key: string; message: string } | null>(null);
+  const error = failure?.key === pickerKey ? failure.message : null;
   const confirmed = useAtomValue(issuePickerConfirmed(pickerKey));
   const pending = useAtomValue(issuePickerPending(pickerKey));
   const held = issue ? heldIssuePicker(issue, params.kind, confirmed, target.environmentId) : null;
@@ -84,11 +93,17 @@ export function IssueCandidatesScreen({
     const matches = (...fields: ReadonlyArray<string | null | undefined>) =>
       fields.some((field) => (field ?? "").toLowerCase().includes(needle));
     if (labels) {
-      const fetched = result.data?.labels ?? [];
+      const fetched = [
+        ...new Map(labelPages.items.map((label) => [issueLabelId(label), label])).values(),
+      ];
       const applied = new Set(issuePickerIds(issue, "labels", held, target.environmentId));
       return [
         ...fetched,
-        ...[...issue.labels, ...(held?.base.labels ?? [])]
+        ...[
+          ...issue.labels,
+          ...(held?.base.labels ?? []),
+          ...[...applied].map((id) => ({ id, name: id, color: null })),
+        ]
           .filter(
             (label, index, all) =>
               !fetched.some((candidate) => issueLabelId(candidate) === issueLabelId(label)) &&
@@ -100,41 +115,46 @@ export function IssueCandidatesScreen({
         .map((label) => ({
           id: issueLabelId(label),
           title: label.name,
-          detail: label.description,
+          detail: label.description ?? null,
           selected: applied.has(issueLabelId(label)),
           color: pullRequestLabelColor(label.color),
           actor: null,
         }));
     }
-    const fetched = result.data?.assignees ?? [];
+    const fetched = [
+      ...new Map(
+        assigneePages.items.map((actor) => [
+          issueAssigneeId(actor),
+          { ...actor, id: issueAssigneeId(actor) },
+        ]),
+      ).values(),
+    ];
     const ids = issuePickerIds(issue, "assignees", held, target.environmentId);
-    const current = [...issue.assignees, ...(held?.base.assignees ?? [])]
+    const current = [
+      ...issue.assignees,
+      ...(held?.base.assignees ?? []),
+      ...ids.map((id) => ({ id, login: id, name: null, avatarUrl: null })),
+    ]
       .map((actor) => ({ ...actor, id: issueAssigneeId(actor) }))
-      .filter(
-        (actor, index, all) =>
-          all.findIndex((each) => each.id.toLowerCase() === actor.id.toLowerCase()) === index,
-      );
-    const assigned = (id: string) => ids.some((each) => each.toLowerCase() === id.toLowerCase());
+      .filter((actor, index, all) => all.findIndex((each) => each.id === actor.id) === index);
+    const assigned = (id: string) => ids.includes(id);
     return [
       ...fetched,
-      ...current.filter(
-        (actor) =>
-          !fetched.some((candidate) => candidate.id.toLowerCase() === actor.id.toLowerCase()),
-      ),
+      ...current.filter((actor) => !fetched.some((candidate) => candidate.id === actor.id)),
     ]
       .filter((candidate) => matches(candidate.login, candidate.name, candidate.id))
       .map((candidate) => ({
         id: candidate.id,
-        title: candidate.name || candidate.login,
+        title: candidate.name || candidate.login || candidate.id,
         detail: candidate.name ? candidate.login : null,
         selected: assigned(candidate.id),
         color: null,
         actor: candidate,
       }));
-  }, [issue, labels, query, result.data, held, target.environmentId]);
+  }, [issue, labels, query, labelPages.items, assigneePages.items, held, target.environmentId]);
   const toggle = async (row: Row) => {
     if (!allowed || !issue) return;
-    setError(null);
+    setFailure(null);
     try {
       await writeIssuePicker(registry, pickerKey, row.id, async () => {
         const latest = registry.get(issuePickerConfirmed(pickerKey));
@@ -148,7 +168,10 @@ export function IssueCandidatesScreen({
         return { base: issue, ids, environmentId: target.environmentId, kind: params.kind };
       });
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : `Couldn't update ${title.toLowerCase()}.`);
+      setFailure({
+        key: pickerKey,
+        message: cause instanceof Error ? cause.message : `Couldn't update ${title.toLowerCase()}.`,
+      });
     }
   };
   return (
@@ -181,6 +204,10 @@ export function IssueCandidatesScreen({
       ) : null}
       <FlatList
         data={rows}
+        onEndReached={() => {
+          if (result.hasMore && !result.isPending && result.error === null) result.loadMore();
+        }}
+        onEndReachedThreshold={0.4}
         keyExtractor={(row) => row.id}
         contentInsetAdjustmentBehavior="automatic"
         automaticallyAdjustKeyboardInsets
@@ -221,7 +248,7 @@ export function IssueCandidatesScreen({
                 <Text selectable className="text-sm text-danger-foreground">
                   {result.error}
                 </Text>
-                <MaterialButton label="Retry" onPress={result.refresh} />
+                <Button label="Retry" onPress={result.hasMore ? result.loadMore : result.refresh} />
               </View>
             ) : null}
           </View>
@@ -268,7 +295,7 @@ export function IssueCandidatesScreen({
           </Pressable>
         )}
         ListEmptyComponent={
-          (result.isPending && !result.data) || (detail.isPending && !issue) ? (
+          (result.isPending && result.items.length === 0) || (detail.isPending && !issue) ? (
             <ActivityIndicator className="my-8" />
           ) : (
             <View className="px-4 py-6">
@@ -287,7 +314,9 @@ export function IssueCandidatesScreen({
           )
         }
         ListFooterComponent={
-          result.data?.truncated ? (
+          result.isPending && result.items.length > 0 ? (
+            <ActivityIndicator className="my-4" />
+          ) : result.truncated && !result.hasMore ? (
             <Text className="px-4 py-4 text-xs text-foreground-muted">
               The tracker has more than it returned. More choices are on the tracker.
             </Text>

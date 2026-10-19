@@ -1,6 +1,13 @@
 import type { IssueState, IssueTrackerKind } from "@t3tools/contracts";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
-import { CircleCheckIcon, CircleDotIcon, CircleSlashIcon, TicketIcon } from "lucide-react";
+import {
+  CircleCheckIcon,
+  CircleDashedIcon,
+  CircleDotDashedIcon,
+  CircleDotIcon,
+  CircleSlashIcon,
+  TicketIcon,
+} from "lucide-react";
 
 import { cn } from "~/lib/utils";
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
@@ -15,8 +22,25 @@ export function issueTrackerPresentation(tracker: IssueTrackerKind | string) {
   if (sourceControlClients.find(tracker) !== undefined) {
     return getSourceControlPresentationForKind(tracker);
   }
-  return { providerName: tracker, Icon: TicketIcon };
+  return { providerName: tracker.charAt(0).toUpperCase() + tracker.slice(1), Icon: TicketIcon };
 }
+
+const STATE_PRESENTATION = {
+  backlog: { Icon: CircleDashedIcon, toneClassName: "text-muted-foreground/70" },
+  unstarted: {
+    Icon: CircleDotIcon,
+    toneClassName: PULL_REQUEST_STATE_PRESENTATION.open.toneClassName,
+  },
+  started: { Icon: CircleDotDashedIcon, toneClassName: "text-amber-600 dark:text-amber-300/90" },
+  completed: {
+    Icon: CircleCheckIcon,
+    toneClassName: PULL_REQUEST_STATE_PRESENTATION.merged.toneClassName,
+  },
+  canceled: {
+    Icon: CircleSlashIcon,
+    toneClassName: PULL_REQUEST_STATE_PRESENTATION.draft.toneClassName,
+  },
+} as const;
 
 /**
  * Open and completed borrow the ink the pull-request states use for open and merged, so green
@@ -25,6 +49,14 @@ export function issueTrackerPresentation(tracker: IssueTrackerKind | string) {
  * so a workflow tracker's "In Review" reads as itself.
  */
 export function resolveIssueStatePresentation(state: IssueState) {
+  const label =
+    state.name === "closed"
+      ? state.closeReason === "completed" || state.closeReason === "not-planned"
+        ? `Closed as ${state.closeReason.replaceAll("-", " ")}`
+        : "Closed"
+      : state.name;
+  if (state.workflowCategory !== undefined)
+    return { ...STATE_PRESENTATION[state.workflowCategory], label };
   if (state.category === "open") {
     return {
       ...PULL_REQUEST_STATE_PRESENTATION.open,
@@ -41,12 +73,7 @@ export function resolveIssueStatePresentation(state: IssueState) {
   }
   return {
     ...PULL_REQUEST_STATE_PRESENTATION.merged,
-    label:
-      state.name === "closed"
-        ? state.closeReason === "completed"
-          ? "Closed as completed"
-          : "Closed"
-        : state.name,
+    label,
     Icon: CircleCheckIcon,
   };
 }

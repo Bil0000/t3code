@@ -27,9 +27,7 @@ import {
   type IssueDetail,
 } from "@t3tools/contracts";
 import {
-  appendOlderIssueComments,
-  issueCommentsView,
-  reactOnOlderIssueComment,
+  mergeIssueComments,
   confirmIssueReaction,
   issueReactionsView,
   type IssueConfirmedReactions,
@@ -93,130 +91,12 @@ function detail(patch: Partial<IssueDetail> = {}): IssueDetail {
 
 const heart = [{ content: "heart" as const, count: 1, actors: [], viewerHasReacted: false }];
 
-describe("older issue comments across detail re-reads", () => {
-  const first = detail();
-  const loaded = appendOlderIssueComments(first, null, {
-    comments: [comment("c2", heart)],
-    nextCursor: "page-3",
-  });
-
-  it("keeps loaded pages when a new detail has the same first-page IDs and cursor", () => {
-    const refreshed = detail({
-      title: "Renamed",
-      comments: [{ ...comment("c3", heart), body: "Updated" }],
-    });
-    const view = issueCommentsView(refreshed, loaded);
-    expect(view.held).toBe(loaded);
-    expect(view.comments.map((each) => each.id)).toEqual(["c2", "c3"]);
-    expect(view.comments[1]).toEqual(refreshed.comments[0]);
-    expect(view.cursor).toBe("page-3");
-  });
-
-  it("restarts a shifted Jira head with the same offset and eventually includes every boundary comment", () => {
-    const comments = (from: number, to: number) =>
-      Array.from({ length: to - from + 1 }, (_, index) => comment(String(from + index)));
-    const before = detail({
-      tracker: IssueTrackerKind.make("jira"),
-      host: "workspace.atlassian.net",
-      scope: "PROJ",
-      comments: comments(101, 150),
-      commentsCursor: "50",
-      commentCount: 150,
-    });
-    const loaded = appendOlderIssueComments(before, null, {
-      comments: comments(51, 100),
-      nextCursor: "100",
-    });
-    const after = { ...before, comments: comments(102, 151), commentCount: 151 };
-    const shifted = issueCommentsView(after, loaded);
-    expect(shifted.held).toBeNull();
-    expect(shifted.cursor).toBe("50");
-    expect(shifted.comments).toHaveLength(50);
-    const page2 = appendOlderIssueComments(after, shifted.held, {
-      comments: comments(52, 101),
-      nextCursor: "100",
-    });
-    const page3 = appendOlderIssueComments(after, page2, {
-      comments: comments(2, 51),
-      nextCursor: "150",
-    });
-    const page4 = appendOlderIssueComments(after, page3, {
-      comments: comments(1, 1),
-      nextCursor: null,
-    });
-    const complete = issueCommentsView(after, page4);
-    expect(complete.comments.map((each) => each.id)).toEqual(
-      comments(1, 151).map((each) => each.id),
-    );
-    expect(complete.cursor).toBeNull();
-  });
-
-  it("drops them when the first page now ends elsewhere or the issue is another one", () => {
-    const moved = issueCommentsView(detail({ commentsCursor: "page-2b" }), loaded);
-    expect(moved.comments.map((each) => each.id)).toEqual(["c3"]);
-    expect(moved.cursor).toBe("page-2b");
-    const other = issueCommentsView(detail({ key: "2" }), loaded);
-    expect(other.comments.map((each) => each.id)).toEqual(["c3"]);
-  });
-
-  it("drops another viewer's loaded pages so their reactions are not shown as this viewer's", () => {
-    const mine = [{ ...heart[0]!, viewerHasReacted: true }];
-    const asA = detail({ viewer: "a" });
-    const loadedByA = appendOlderIssueComments(asA, null, {
-      comments: [comment("c_old", mine)],
-      nextCursor: null,
-    });
-    expect(issueCommentsView({ ...asA }, loadedByA).held).toBe(loadedByA);
-    const asB = issueCommentsView(detail({ viewer: "b" }), loadedByA);
-    expect(asB.held).toBeNull();
-    expect(asB.comments.map((each) => each.id)).toEqual(["c3"]);
-    expect(asB.cursor).toBe("page-2");
-    const unknown = detail({ viewer: null });
-    const loadedUnknown = appendOlderIssueComments(unknown, null, {
-      comments: [comment("c_old", mine)],
-      nextCursor: null,
-    });
-    expect(issueCommentsView({ ...unknown }, loadedUnknown).held).toBe(loadedUnknown);
-    expect(issueCommentsView(detail({ viewer: "b" }), loadedUnknown).held).toBeNull();
-  });
-
-  it.each(["viewer", null])(
-    "keeps cached older comments and fences a new unknown-owner first page: %s",
-    (viewer) => {
-      const before = detail({ viewer });
-      const loaded = appendOlderIssueComments(before, null, {
-        comments: [comment("c2", [{ ...heart[0]!, viewerHasReacted: true }])],
-        nextCursor: null,
-      });
-      expect(issueCommentsView({ ...before }, loaded).held).toBe(loaded);
-      const after = { ...before, comments: [...before.comments] };
-      const fresh = issueCommentsView(after, loaded);
-      expect(fresh.comments.map((each) => each.id)).toEqual(
-        viewer === null ? ["c3"] : ["c2", "c3"],
-      );
-      expect(fresh.cursor).toBe(viewer === null ? "page-2" : null);
-      if (viewer !== null) return;
-      const reloaded = appendOlderIssueComments(after, fresh.held, {
-        comments: [comment("c2", heart)],
-        nextCursor: null,
-      });
-      expect(issueCommentsView(after, reloaded).comments[0]?.reactions).toEqual(heart);
-      expect(issueCommentsView({ ...after }, reloaded).cursor).toBeNull();
-    },
-  );
-
-  it("shows a confirmed reaction on a held comment so the next tap removes it", () => {
-    const reacted = reactOnOlderIssueComment(loaded, "c2", "heart", true);
-    expect(issueCommentsView(first, reacted).comments[0]?.reactions).toEqual([
-      { content: "heart", count: 2, actors: [], viewerHasReacted: true },
-    ]);
-    const refreshed = detail({ comments: [comment("c3", heart)] });
-    expect(issueCommentsView(refreshed, reacted).held).toBe(reacted);
-    const undone = reactOnOlderIssueComment(reacted, "c2", "heart", false);
-    expect(issueCommentsView(first, undone).comments[0]?.reactions).toEqual(heart);
-    const added = reactOnOlderIssueComment(loaded, "c2", "rocket", true);
-    expect(added.comments[0]?.reactions?.map((each) => each.content)).toEqual(["heart", "rocket"]);
-  });
+it("keeps native first-page edits and rights when retained pages overlap the seed", () => {
+  const current = { ...comment("c3", heart), body: "Edited", canEdit: false };
+  const older = { ...comment("c3", [{ ...heart[0]!, viewerHasReacted: true }]), canEdit: true };
+  const comments = mergeIssueComments([current], [comment("c2"), older]);
+  expect(comments).toEqual([comment("c2"), current]);
+  expect(comments[1]).toBe(current);
 });
 
 const environmentId = EnvironmentId.make("environment");
@@ -343,25 +223,12 @@ describe("confirmed mobile issue reactions", () => {
   });
 
   it("keeps an older comment confirmation when a shifted first page requires loading its page again", () => {
-    const older = appendOlderIssueComments(first, null, {
-      comments: [comment("c2", heart)],
-      nextCursor: null,
-    });
-    const loaded = issueCommentsView(first, older).comments;
+    const loaded = mergeIssueComments(first.comments, [comment("c2", heart)]);
     const held = confirmIssueReaction(environmentId, first, loaded, null, "heart", true, "c2");
     const shifted = { ...first, comments: [comment("c4", heart)] };
-    const reset = issueCommentsView(shifted, older);
-    const missing = issueReactionsView(environmentId, shifted, reset.comments, held);
-    const reloaded = appendOlderIssueComments(shifted, reset.held, {
-      comments: [comment("c2", [...heart])],
-      nextCursor: null,
-    });
-    const shown = issueReactionsView(
-      environmentId,
-      shifted,
-      issueCommentsView(shifted, reloaded).comments,
-      missing.held,
-    );
+    const missing = issueReactionsView(environmentId, shifted, shifted.comments, held);
+    const reloaded = mergeIssueComments(shifted.comments, [comment("c2", [...heart])]);
+    const shown = issueReactionsView(environmentId, shifted, reloaded, missing.held);
     expect(shown.comments.find((each) => each.id === "c2")?.reactions?.[0]).toMatchObject({
       count: 2,
       viewerHasReacted: true,
@@ -392,6 +259,7 @@ describe("confirmed mobile issue reactions", () => {
     { environmentId, issue: { ...first, projectId: ProjectId.make("other") } },
     { environmentId, issue: { ...first, host: "other.example" } },
     { environmentId, issue: { ...first, scope: "other/repo" } },
+    { environmentId, issue: { ...first, connectionId: "AccountB" } },
   ])("does not carry confirmed flags to another target %j", (target) => {
     const held = confirmIssueReaction(environmentId, first, first.comments, null, "heart", true);
     const view = issueReactionsView(
@@ -418,11 +286,8 @@ effectIt.effect.each(
       Effect.gen(function* () {
         const reactions = [{ ...heart[0]!, count: 2, viewerHasReacted }];
         const first = detail({ reactions, comments: [comment("c3", reactions)] });
-        const older = appendOlderIssueComments(first, null, {
-          comments: [comment("c2", reactions)],
-          nextCursor: null,
-        });
-        const comments = issueCommentsView(first, older).comments;
+        const older = [comment("c2", reactions)];
+        const comments = mergeIssueComments(first.comments, older);
         const refreshStarted = Latch.makeUnsafe();
         const releaseRead = Latch.makeUnsafe();
         const readFailed = Latch.makeUnsafe();
@@ -509,7 +374,7 @@ effectIt.effect.each(
           const view = issueReactionsView(
             environmentId,
             issue,
-            issueCommentsView(issue, older).comments,
+            mergeIssueComments(issue.comments, older),
             held,
           );
           return input.subjectId === undefined

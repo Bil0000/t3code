@@ -131,14 +131,18 @@ describe("issue picker writes while the detail refresh is still on its way", () 
     expect(pick(refreshed, "labels", removed, "docs").ids).toEqual(["ui", "docs"]);
   });
 
-  it("toggles labels by exact name and assignee ids without case", () => {
+  it("keeps case-sensitive label and assignee identities distinct", () => {
     const issue = detail({
       labels: [{ name: "Bug", color: null }],
       assignees: [{ id: "native-uuid", login: "viewer", name: null, avatarUrl: null }],
     });
     expect(nextIssuePickerIds(issue, "labels", null, "bug", environmentId)).toEqual(["Bug", "bug"]);
     expect(nextIssuePickerIds(issue, "labels", null, "Bug", environmentId)).toEqual([]);
-    expect(nextIssuePickerIds(issue, "assignees", null, "NATIVE-UUID", environmentId)).toEqual([]);
+    expect(nextIssuePickerIds(issue, "assignees", null, "NATIVE-UUID", environmentId)).toEqual([
+      "native-uuid",
+      "NATIVE-UUID",
+    ]);
+    expect(nextIssuePickerIds(issue, "assignees", null, "native-uuid", environmentId)).toEqual([]);
   });
 
   it("keeps workspace and team labels with the same name separate when adding and removing by native id", () => {
@@ -266,7 +270,7 @@ describe("issue picker writes while the detail refresh is still on its way", () 
     ]);
   });
 
-  it("retains interleaved native assignee sets and acknowledges matching native ids without case", () => {
+  it("retains interleaved native assignee sets and acknowledges only exact native ids", () => {
     const actor = (id: string) => ({ id, login: id, name: null, avatarUrl: null });
     const base = detail({ assignees: [actor("u-1")] });
     const added = pick(base, "assignees", null, "u-2");
@@ -278,11 +282,13 @@ describe("issue picker writes while the detail refresh is still on its way", () 
       "u-3",
       "u-4",
     ]);
-    const ack = detail({ assignees: [actor("U-3"), actor("U-1"), actor("U-2")] });
+    const differentCase = detail({ assignees: [actor("U-3"), actor("U-1"), actor("U-2")] });
+    expect(heldIssuePicker(differentCase, "assignees", second, environmentId)).toBe(second);
+    const ack = detail({ assignees: [actor("u-3"), actor("u-1"), actor("u-2")] });
     const cleared = heldIssuePicker(ack, "assignees", second, environmentId);
     expect(cleared).toBeNull();
-    expect(issuePickerIds(ack, "assignees", cleared, environmentId)).toEqual(["U-3", "U-1", "U-2"]);
-    expect(nextIssuePickerIds(stale, "assignees", second, "U-2", environmentId)).toEqual([
+    expect(issuePickerIds(ack, "assignees", cleared, environmentId)).toEqual(["u-3", "u-1", "u-2"]);
+    expect(nextIssuePickerIds(stale, "assignees", second, "u-2", environmentId)).toEqual([
       "u-1",
       "u-3",
     ]);
@@ -295,6 +301,11 @@ describe("issue picker writes while the detail refresh is still on its way", () 
     { issue: detail(), kind: "labels" as const, environmentId: "other" },
     { issue: detail(), kind: "assignees" as const, environmentId },
     { issue: detail({ key: "2" }), kind: "labels" as const, environmentId },
+    {
+      issue: detail({ connectionId: "account-B" }),
+      kind: "labels" as const,
+      environmentId,
+    },
     {
       issue: detail({ tracker: IssueTrackerKind.make("jira") }),
       kind: "labels" as const,
@@ -353,6 +364,7 @@ describe("issue picker confirmed set across sheet close and reopen", () => {
         issuePickerKey("other", stale, "labels"),
         issuePickerKey(environmentId, { ...stale, key: "2" }, "labels"),
         issuePickerKey(environmentId, { ...stale, scope: "org/other" }, "labels"),
+        issuePickerKey(environmentId, { ...stale, connectionId: "account-B" }, "labels"),
       ]) {
         expect(registry.get(issuePickerConfirmed(other))).toBeNull();
       }
