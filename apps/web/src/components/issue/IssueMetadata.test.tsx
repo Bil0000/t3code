@@ -23,7 +23,8 @@ vi.mock("./useIssueThreadHandoff", () => ({
   useIssueThreadHandoff: () => ({ pending: false, start: vi.fn() }),
 }));
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => state.update }));
-vi.mock("~/state/query", () => ({
+vi.mock("~/state/query", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/state/query")>()),
   useEnvironmentQuery: (atom: unknown) => ({
     data: atom === null ? null : state.detail,
     error: state.readError,
@@ -32,7 +33,8 @@ vi.mock("~/state/query", () => ({
   }),
 }));
 vi.mock("~/state/issues", async () => {
-  const { Atom } = await import("effect/reactivity");
+  const { Atom, AsyncResult } = await import("effect/reactivity");
+  const detail = Atom.make(AsyncResult.initial()).pipe(Atom.keepAlive);
   const command = { permissionAtom: () => Atom.make(true) };
   const page = {
     hasMore: false,
@@ -44,7 +46,7 @@ vi.mock("~/state/issues", async () => {
   };
   return {
     issueEnvironment: {
-      detail: () => ({}),
+      detail: () => detail,
       comment: command,
       create: command,
       update: command,

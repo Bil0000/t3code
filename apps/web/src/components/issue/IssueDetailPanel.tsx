@@ -1,4 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
+import { identity } from "effect/Function";
 import { reportIssueResult } from "./issueMutation";
 import { IssueLabelPicker } from "./IssueLabelPicker";
 import { IssueAssigneePicker } from "./IssueAssigneePicker";
@@ -55,7 +56,7 @@ import { IssueStateFieldsDialog } from "./IssueStateFieldsDialog";
 import { IssueCreateDialog } from "./IssueCreateDialog";
 import { ISSUES_PANEL_REF, useRightPanelStore } from "~/rightPanelStore";
 import { useProjects, useQuietThreadShell } from "~/state/entities";
-import { useEnvironmentQuery } from "~/state/query";
+import { useEnvironmentQuery, useEnvironmentQuerySelector } from "~/state/query";
 import { useEnvironmentScope } from "~/state/session";
 import { threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -407,9 +408,12 @@ function IssueDetailContent({
   onSelectPullRequest,
   onUpdated,
 }: IssueDetailPanelProps) {
-  const detailQuery = useEnvironmentQuery(
-    issueEnvironment.detail({ environmentId, input: reference }),
-  );
+  const detailAtom = issueEnvironment.detail({ environmentId, input: reference });
+  const detailQuery = useEnvironmentQuery(detailAtom);
+  const detailResult = useAtomValue(detailAtom);
+  const [detailRead, setDetailRead] = useState(detailResult);
+  if (detailResult._tag === "Success" && !detailResult.waiting && detailRead !== detailResult)
+    setDetailRead(detailResult);
   useIssueViewRefresh(
     detailQuery.refresh,
     [{ environmentId, input: reference }],
@@ -1304,6 +1308,7 @@ function IssueDetailContent({
                 environmentId={environmentId}
                 reference={reference}
                 detail={detail}
+                detailRead={detailRead}
                 input={commentsInput}
                 order={order}
                 orders={orders}
@@ -1415,6 +1420,7 @@ function IssueActivity({
   environmentId,
   reference,
   detail,
+  detailRead,
   input,
   order,
   orders,
@@ -1429,6 +1435,7 @@ function IssueActivity({
   environmentId: EnvironmentId;
   reference: IssueRef;
   detail: IssueDetail;
+  detailRead: object;
   input: IssueCommentsPageInput | null;
   order: IssueListOrder;
   orders: ReadonlyArray<IssueListOrder>;
@@ -1441,18 +1448,27 @@ function IssueActivity({
   onUpdated?: (() => void) | undefined;
 }) {
   const pages = useIssueComments(environmentId, input);
+  const commentsResult = useEnvironmentQuerySelector(
+    input === null ? null : issueEnvironment.commentPages({ environmentId, input }),
+    identity,
+  );
+  const [commentsRead, setCommentsRead] = useState(commentsResult);
+  if (
+    commentsResult._tag === "Success" &&
+    !commentsResult.waiting &&
+    commentsRead !== commentsResult
+  )
+    setCommentsRead(commentsResult);
   const source =
     detail.viewer === null
-      ? detail.comments
+      ? detailRead
       : JSON.stringify(detail.comments.map((comment) => comment.id));
   const previousSource = useRef(source);
-  const [heldSource, setHeldSource] = useState({ source, staleItems: new Set<IssueComment>() });
+  const [heldSource, setHeldSource] = useState({ source, staleRead: null as object | null });
   const sourceChanged = heldSource.source !== source;
-  if (sourceChanged) setHeldSource({ source, staleItems: new Set(pages.items) });
-  const staleSource =
-    sourceChanged || pages.items.some((comment) => heldSource.staleItems.has(comment));
-  if (!staleSource && heldSource.staleItems.size > 0)
-    setHeldSource({ source, staleItems: new Set() });
+  if (sourceChanged) setHeldSource({ source, staleRead: commentsRead });
+  const staleSource = sourceChanged || heldSource.staleRead === commentsRead;
+  if (!staleSource && heldSource.staleRead !== null) setHeldSource({ source, staleRead: null });
   const refreshComments = pages.refresh;
   useEffect(() => {
     if (previousSource.current === source) return;
