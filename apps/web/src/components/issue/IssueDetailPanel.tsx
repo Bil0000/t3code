@@ -54,7 +54,7 @@ import { isEditableIssueRichBody, safeIssueExternalUrl } from "./issueAdf";
 import { IssueStateFieldsDialog } from "./IssueStateFieldsDialog";
 import { IssueCreateDialog } from "./IssueCreateDialog";
 import { ISSUES_PANEL_REF, useRightPanelStore } from "~/rightPanelStore";
-import { useProjects, useThreadShell } from "~/state/entities";
+import { useProjects, useQuietThreadShell } from "~/state/entities";
 import { useEnvironmentQuery } from "~/state/query";
 import { useEnvironmentScope } from "~/state/session";
 import { threadEnvironment } from "~/state/threads";
@@ -127,7 +127,7 @@ function IssueThreadLinkButton({
   url: string;
   threadRef: ScopedThreadRef;
 }) {
-  const thread = useThreadShell(threadRef.environmentId === environmentId ? threadRef : null);
+  const thread = useQuietThreadShell(threadRef.environmentId === environmentId ? threadRef : null);
   const canOperate = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
   const link = useAtomCommand(threadEnvironment.linkIssue, { reportFailure: false });
   const unlink = useAtomCommand(threadEnvironment.unlinkIssue, { reportFailure: false });

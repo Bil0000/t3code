@@ -36,6 +36,7 @@ const state = vi.hoisted(() => ({
 vi.mock("../../state/entities", () => ({
   useProject: () => state.project,
   useThreadShell: () => state.thread,
+  useQuietThreadShell: () => state.thread,
   useThreadShellsForProjectRefs: () => [],
 }));
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => state.command }));
