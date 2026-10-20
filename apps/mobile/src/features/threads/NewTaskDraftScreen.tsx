@@ -475,6 +475,13 @@ export function NewTaskDraftScreen(props: {
     ownerKey: flow.draftKey,
     environmentId: selectedProject?.environmentId ?? null,
     threadShells: useThreadShells(),
+    fileAttachmentMaxBytes:
+      selectedEnvironmentServerConfig?.environment.capabilities.attachmentUploads === true &&
+      selectedEnvironmentServerConfig.environment.capabilities.fileAttachments
+        ? clampFileAttachmentUploadBytes(
+            selectedEnvironmentServerConfig.environment.capabilities.fileAttachments.maxUploadBytes,
+          )
+        : null,
     pullRequestProjectId: selectedEnvironmentServerConfig?.environment.capabilities.pullRequests
       ? (selectedProject?.id ?? null)
       : null,

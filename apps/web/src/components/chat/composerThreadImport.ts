@@ -1,4 +1,29 @@
-import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@t3tools/contracts";
+import { type EnvironmentId, PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@t3tools/contracts";
+import { useLayoutEffect, useRef } from "react";
+
+export function useComposerThreadImportScope(environmentId: EnvironmentId, targetKey: string) {
+  const scopeRef = useRef({ active: false, environmentId, targetKey });
+  useLayoutEffect(() => {
+    const scope = { active: true, environmentId, targetKey };
+    scopeRef.current = scope;
+    return () => {
+      scope.active = false;
+    };
+  }, [environmentId, targetKey]);
+  return scopeRef;
+}
+
+export function composerThreadImportBlockReason(input: {
+  readonly fileStagingLimit: number | null;
+  readonly fileCapabilityBlockReason: string | null;
+  readonly reservedAttachmentCount: number;
+}): string | null {
+  if (input.fileStagingLimit === null) return "This server does not support file attachments.";
+  if (input.fileCapabilityBlockReason !== null) return input.fileCapabilityBlockReason;
+  return input.reservedAttachmentCount >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS
+    ? `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} files per message.`
+    : null;
+}
 
 export function remainingComposerAttachmentSlots(
   attachmentCount: number,

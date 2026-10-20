@@ -7,12 +7,15 @@ import type {
   ThreadId,
   ThreadPullRequestLink,
 } from "@t3tools/contracts";
-import { matchComposerThreadItems } from "@t3tools/client-runtime/composerThreadItems";
-import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
+import {
+  matchComposerThreadItems,
+  type ComposerThreadCandidate,
+} from "@t3tools/client-runtime/composerThreadItems";
 
-const EMPTY_THREAD_SHELLS: ReadonlyArray<EnvironmentThreadShell> = [];
+const EMPTY_THREAD_SHELLS: ReadonlyArray<ComposerThreadCandidate> = [];
 import {
   COMPOSER_CONTEXT_MAX_RECORDS,
+  PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_WORKSPACE_SNAPSHOT_TTL_MS,
 } from "@t3tools/contracts";
 import { formatComposerContextReference } from "@t3tools/shared/composerContextReferences";
@@ -22,7 +25,19 @@ import {
   getComposerDraftSnapshot,
   readComposerDraftSelection,
   setComposerDraftContext,
+  appendComposerDraftAttachments,
+  composerContextImportsAtom,
+  setComposerContextImporting,
 } from "../../state/use-composer-drafts";
+import { appAtomRegistry } from "../../state/atom-registry";
+import { useWorkspaceEnvironments } from "../../state/workspace";
+import { orchestrationEnvironment } from "../../state/orchestration";
+import { threadContextAttachment } from "../../lib/threadContextAttachment";
+import {
+  removePersistedComposerAttachmentFile,
+  type DraftComposerFileAttachment,
+} from "../../lib/composerImages";
+import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { USAGE_LIMITS_COMMAND } from "@t3tools/shared/usageLimits";
 import {
   detectComposerTrigger,
@@ -45,7 +60,7 @@ import {
   resolveProviderSkillsForCwd,
   resolveProviderSlashCommandsForCwd,
 } from "@t3tools/client-runtime/providerSkills";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type { ComposerEditorSelection } from "../../components/ComposerEditor";
 import { serverEnvironment } from "../../state/server";
@@ -173,6 +188,7 @@ export function useComposerCommandMenu({
   environmentId,
   threadShells = EMPTY_THREAD_SHELLS,
   currentThreadId = null,
+  fileAttachmentMaxBytes = null,
   projectCwd,
   pullRequestProjectId = null,
   pullRequestRepository = null,
@@ -189,8 +205,9 @@ export function useComposerCommandMenu({
   readonly draftMessage: string;
   readonly ownerKey: string | null;
   readonly environmentId: EnvironmentId | null;
-  readonly threadShells?: ReadonlyArray<EnvironmentThreadShell>;
+  readonly threadShells?: ReadonlyArray<ComposerThreadCandidate>;
   readonly currentThreadId?: ThreadId | null;
+  readonly fileAttachmentMaxBytes?: number | null;
   readonly projectCwd: string | null;
   readonly pullRequestProjectId?: ProjectId | null;
   readonly pullRequestRepository?: string | null;
@@ -204,6 +221,23 @@ export function useComposerCommandMenu({
   readonly onUpdateInteractionMode?: (mode: ProviderInteractionMode) => void;
   readonly onUsageLimits?: () => void;
 }) {
+  const environments = useWorkspaceEnvironments();
+  const connectedEnvironments = new Map(
+    environments
+      .filter((environment) => environment.connectionState === "connected")
+      .map((environment) => [environment.environmentId, environment.environmentLabel]),
+  );
+  const importScopeRef = useRef({ active: false });
+  useLayoutEffect(() => {
+    const scope = { active: ownerKey !== null && environmentId !== null };
+    importScopeRef.current = scope;
+    return () => {
+      scope.active = false;
+    };
+  }, [ownerKey, environmentId]);
+  const loadThreadTranscript = useAtomCommand(orchestrationEnvironment.threadTranscript, {
+    reportFailure: false,
+  });
   const [selection, setSelection] = useState(() => composerSelectionAtEnd(draftMessage));
   const previousOwnerKeyRef = useRef(ownerKey);
   const onSelectionChange = (nextSelection: ComposerEditorSelection) => {
@@ -497,6 +531,7 @@ export function useComposerCommandMenu({
       const threadItems = environmentId
         ? matchComposerThreadItems({
             shells: threadShells,
+            connectedEnvironments,
             environmentId,
             excludeThreadId: currentThreadId,
             query: trigger.query,
@@ -531,6 +566,68 @@ export function useComposerCommandMenu({
           candidate.id === item.thread.threadId,
       );
       if (!shell) return;
+      if (!connectedEnvironments.has(item.thread.environmentId)) return;
+      if (item.thread.environmentId !== environmentId) {
+        if (appAtomRegistry.get(composerContextImportsAtom)[ownerKey]) return;
+        const draft = getComposerDraftSnapshot(ownerKey);
+        if (draft.text !== draftMessage) return;
+        if (fileAttachmentMaxBytes === null) {
+          Dialog.alert("File attachments are not available on this server.");
+          return;
+        }
+        if (
+          draft.attachments.length >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS ||
+          (draft.context?.records.length ?? 0) >= COMPOSER_CONTEXT_MAX_RECORDS
+        ) {
+          Dialog.alert(
+            "Too many context items",
+            "Remove some attachments or context from the draft and try again.",
+          );
+          return;
+        }
+        const scope = importScopeRef.current;
+        const cleared = replaceTextRange(draftMessage, trigger.rangeStart, trigger.rangeEnd, "");
+        setComposerContextImporting(ownerKey, true);
+        onChangeDraftMessage(cleared.text);
+        setSelection({ start: cleared.cursor, end: cleared.cursor });
+        void (async () => {
+          let file: DraftComposerFileAttachment | undefined;
+          let attached = false;
+          const result = await settlePromise(async () => {
+            const transcript = await loadThreadTranscript({
+              environmentId: item.thread.environmentId,
+              input: { threadId: item.thread.threadId },
+            });
+            if (transcript._tag !== "Success") throw squashAtomCommandFailure(transcript);
+            if (!scope.active) return;
+            file = await threadContextAttachment(
+              item.thread.environmentId,
+              transcript.value,
+              fileAttachmentMaxBytes,
+            );
+            if (!scope.active) return;
+            attached =
+              appendComposerDraftAttachments(ownerKey, [file], {
+                appendReference: true,
+                insertion: { text: cleared.text, start: cleared.cursor, end: cleared.cursor },
+              }) === 0;
+            if (!attached)
+              throw new Error("Remove some attachments or context from the draft and try again.");
+          });
+          if (file && !attached) await removePersistedComposerAttachmentFile(file.fileUri);
+          setComposerContextImporting(ownerKey, false);
+          if (result._tag === "Failure" && scope.active) {
+            const error = squashAtomCommandFailure(result);
+            Dialog.alert(
+              "Unable to read the thread",
+              error instanceof Error
+                ? error.message
+                : "Check that its environment is connected and try again.",
+            );
+          }
+        })();
+        return;
+      }
       const record = threadComposerContext(item.thread, shell.title);
       const existing = getComposerDraftSnapshot(ownerKey).context?.records ?? [];
       const alreadyAttached = existing.some((entry) => entry.contextId === record.contextId);

@@ -462,6 +462,13 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     environmentId: props.environmentId,
     threadShells: useThreadShells(),
     currentThreadId: props.selectedThread.id,
+    fileAttachmentMaxBytes:
+      props.serverConfig?.environment.capabilities.attachmentUploads === true &&
+      props.serverConfig.environment.capabilities.fileAttachments
+        ? clampFileAttachmentUploadBytes(
+            props.serverConfig.environment.capabilities.fileAttachments.maxUploadBytes,
+          )
+        : null,
     projectCwd: props.projectCwd,
     pullRequestProjectId: props.serverConfig?.environment.capabilities.pullRequests
       ? (project?.id ?? null)
@@ -565,7 +572,12 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     onEditorFocusChange?.(false);
   };
   const handleSend = async (followUp?: ActiveTurnComposerAction) => {
-    if (voiceInput.blocksSubmission || pendingPastedTextAttachmentCountRef.current > 0) return;
+    if (
+      voiceInput.blocksSubmission ||
+      pendingPastedTextAttachmentCountRef.current > 0 ||
+      appAtomRegistry.get(composerContextImportsAtom)[composerDraftKey]
+    )
+      return;
     if (usageLimitsOffered && isUsageLimitsCommand(draftMessage) && draftAttachments.length === 0) {
       if (openUsageLimits()) onChangeDraftMessage("");
       return;
@@ -768,6 +780,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
           >
             {!isExpanded ? (
               <ComposerAttachmentButton
+                disabled={contextImports[composerDraftKey] === true}
                 supportsFiles={Boolean(
                   props.serverConfig?.environment.capabilities.fileAttachments,
                 )}
@@ -1052,6 +1065,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
                 ) : (
                   <View className="min-w-0 flex-1 flex-row items-center justify-between">
                     <ComposerAttachmentButton
+                      disabled={contextImports[composerDraftKey] === true}
                       supportsFiles={Boolean(
                         props.serverConfig?.environment.capabilities.fileAttachments,
                       )}

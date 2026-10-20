@@ -4,7 +4,11 @@ import { insertAttachmentReferencesForDraft } from "./composerAttachmentReferenc
 import { DESKTOP_PASTE_AS_TEXT_EVENT } from "../../lib/desktopPasteAsText";
 import { runtimeModeConfig, runtimeModeOptions as runtimeModes } from "./runtimeModeConfig";
 import { isLocalEnvironmentDisabled } from "../../localEnvironment";
-import { usePrimaryEnvironmentId } from "../../state/environments";
+import {
+  useConnectedEnvironmentIds,
+  useEnvironmentIdentities,
+  usePrimaryEnvironmentId,
+} from "../../state/environments";
 import { useRightPanelStore } from "~/rightPanelStore";
 import { AttachmentFilePreview } from "../files/AttachmentFilePreview";
 import { Dialog, DialogPopup, DialogTitle } from "../ui/dialog";
@@ -360,7 +364,9 @@ import { ComposerPromptLengthValidation } from "./ComposerPromptLengthValidation
 import { PierreEntryIcon } from "./PierreEntryIcon";
 import { pendingDraftWork } from "./pendingDraftWork";
 import {
+  composerThreadImportBlockReason,
   importComposerThreadAttachment,
+  useComposerThreadImportScope,
   remainingComposerAttachmentSlots,
 } from "./composerThreadImport";
 import { isTimelineScrollTarget } from "./timelineScrollTarget";
@@ -2072,6 +2078,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const attachmentTargetKey = composerTargetKey(attachmentDraftTarget);
   // An import that finishes after a draft change must compare against the draft open *now*, not
   // the one captured in the closure that started it.
+  const attachmentImportScopeRef = useComposerThreadImportScope(environmentId, attachmentTargetKey);
   const attachmentTargetKeyRef = useRef(attachmentTargetKey);
   useLayoutEffect(() => {
     attachmentTargetKeyRef.current = attachmentTargetKey;
@@ -2576,6 +2583,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     pullRequestTextQuery === debouncedPullRequestTextQuery ? pullRequestTextQuery : null;
   const isPathTrigger = composerTriggerKind === "path";
   const environmentThreadShells = useThreadShells(isPathTrigger);
+  const connectedEnvironmentIds = useConnectedEnvironmentIds();
+  const environmentIdentities = useEnvironmentIdentities();
+  const connectedThreadEnvironments = new Map(
+    environmentIdentities
+      .filter((environment) => connectedEnvironmentIds.includes(environment.environmentId))
+      .map((environment) => [environment.environmentId, environment.label]),
+  );
   const workspaceEntries = useComposerPathSearch({
     environmentId,
     cwd: isPathTrigger ? gitCwd : null,
@@ -2656,6 +2670,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       return [
         ...matchComposerThreadItems({
           shells: environmentThreadShells,
+          connectedEnvironments: connectedThreadEnvironments,
           environmentId,
           excludeThreadId: activeThreadId,
           query: composerTrigger.query,
@@ -3937,9 +3952,30 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       return;
     }
     if (item.type === "thread") {
-      if (trigger.kind !== "path") return;
+      if (trigger.kind !== "path" || !connectedThreadEnvironments.has(item.thread.environmentId))
+        return;
       const shell = readThreadShell(item.thread);
       if (!shell) return;
+      if (item.thread.environmentId !== environmentId) {
+        const blockReason = composerThreadImportBlockReason({
+          fileStagingLimit,
+          fileCapabilityBlockReason,
+          reservedAttachmentCount: countReservedAttachments(),
+        });
+        if (blockReason !== null) {
+          setThreadError(activeThreadId, blockReason);
+          return;
+        }
+        const scope = attachmentImportScopeRef.current;
+        const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
+          expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
+        });
+        if (applied) {
+          setComposerHighlightedItemId(null);
+          void importDroppedThread(item.thread, () => scope.active);
+        }
+        return;
+      }
       const record = threadContextRecord(item.thread, shell.title);
       const replacement = `${formatInlineContextReference(threadContextReference(record))} `;
       const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
@@ -5909,59 +5945,56 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   });
 
   const attachDroppedThreadFile = useEffectEvent((file: File) => addComposerAttachments([file]));
-  const importDroppedThread = useEffectEvent(
-    async (ref: ScopedThreadRef, isActive: () => boolean) => {
-      const targetKey = attachmentTargetKey;
-      pendingDraftWork.begin(targetKey);
-      const loadingToast = toastManager.add({
-        type: "loading",
-        title: "Loading thread context…",
-        timeout: 0,
-        data: { threadRef: routeThreadRef, hideCopyButton: true },
+  async function importDroppedThread(ref: ScopedThreadRef, isActive: () => boolean) {
+    const targetKey = attachmentTargetKey;
+    pendingDraftWork.begin(targetKey);
+    const loadingToast = toastManager.add({
+      type: "loading",
+      title: "Loading thread context…",
+      timeout: 0,
+      data: { threadRef: routeThreadRef, hideCopyButton: true },
+    });
+    const importResult = await settlePromise(() =>
+      importComposerThreadAttachment({
+        targetKey,
+        pendingImports: pendingThreadImportsRef.current,
+        countReservedAttachments: countReservedAttachmentsStable,
+        load: async () => {
+          const result = await loadThreadTranscript({
+            environmentId: ref.environmentId,
+            input: { threadId: ref.threadId },
+          });
+          if (result._tag !== "Success") {
+            throw squashAtomCommandFailure(result);
+          }
+          return threadContextAttachment(ref.environmentId, result.value);
+        },
+        isActive,
+        attach: attachDroppedThreadFile,
+        onLimitReached: () => {
+          if (activeThreadId) {
+            setThreadError(
+              activeThreadId,
+              `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} files per message.`,
+            );
+          }
+        },
+      }),
+    );
+    if (importResult._tag === "Failure" && isActive()) {
+      const error = squashAtomCommandFailure(importResult);
+      toastManager.add({
+        type: "error",
+        title: "Unable to read the thread",
+        description:
+          isEnvironmentRequestInvalidError(error) && error.reason === "thread_transcript_too_large"
+            ? "This thread exceeds the attachment size limit. Try a shorter thread."
+            : "Check that its environment is connected and up to date, then try again.",
       });
-      const importResult = await settlePromise(() =>
-        importComposerThreadAttachment({
-          targetKey,
-          pendingImports: pendingThreadImportsRef.current,
-          countReservedAttachments: countReservedAttachmentsStable,
-          load: async () => {
-            const result = await loadThreadTranscript({
-              environmentId: ref.environmentId,
-              input: { threadId: ref.threadId },
-            });
-            if (result._tag !== "Success") {
-              throw squashAtomCommandFailure(result);
-            }
-            return threadContextAttachment(ref.environmentId, result.value);
-          },
-          isActive,
-          attach: attachDroppedThreadFile,
-          onLimitReached: () => {
-            if (activeThreadId) {
-              setThreadError(
-                activeThreadId,
-                `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} files per message.`,
-              );
-            }
-          },
-        }),
-      );
-      if (importResult._tag === "Failure" && isActive()) {
-        const error = squashAtomCommandFailure(importResult);
-        toastManager.add({
-          type: "error",
-          title: "Unable to read the dropped thread",
-          description:
-            isEnvironmentRequestInvalidError(error) &&
-            error.reason === "thread_transcript_too_large"
-              ? "This thread exceeds the attachment size limit. Try a shorter thread."
-              : "Check that its environment is connected and up to date, then try again.",
-        });
-      }
-      toastManager.close(loadingToast);
-      pendingDraftWork.end(targetKey);
-    },
-  );
+    }
+    toastManager.close(loadingToast);
+    pendingDraftWork.end(targetKey);
+  }
 
   useThreadContextDrop(composerFormRef, environmentId, attachmentTargetKey, (refs, isActive) => {
     const records = refs.flatMap((ref) => {

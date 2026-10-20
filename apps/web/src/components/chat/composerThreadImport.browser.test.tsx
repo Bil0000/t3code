@@ -1,9 +1,13 @@
-import { EnvironmentId } from "@t3tools/contracts";
-import { act, useRef } from "react";
+import { EnvironmentId, PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@t3tools/contracts";
+import { act, useLayoutEffect, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { importComposerThreadAttachment } from "./composerThreadImport";
+import {
+  composerThreadImportBlockReason,
+  importComposerThreadAttachment,
+  useComposerThreadImportScope,
+} from "./composerThreadImport";
 import { THREAD_CONTEXT_DROP_EVENT, useThreadContextDrop } from "./threadContextDrag";
 
 function deferredFile() {
@@ -14,7 +18,7 @@ function deferredFile() {
   return { promise, resolve };
 }
 
-describe("importComposerThreadAttachment from a thread drop", () => {
+describe.each(["mention", "drop"])("importComposerThreadAttachment from a thread %s", (source) => {
   it.each(["expand", "draft switch", "environment switch", "unmount"])(
     "keeps import ownership correct after %s while loading",
     async (change) => {
@@ -24,6 +28,7 @@ describe("importComposerThreadAttachment from a thread drop", () => {
       const attached: string[] = [];
       const expandedAtDrop: boolean[] = [];
       let importing!: Promise<void>;
+      let importMention!: () => void;
       function Composer({
         environmentId,
         targetKey,
@@ -34,14 +39,16 @@ describe("importComposerThreadAttachment from a thread drop", () => {
         expanded: boolean;
       }) {
         const targetRef = useRef<EventTarget | null>(target);
-        useThreadContextDrop(targetRef, environmentId, targetKey, (_refs, isActive) => {
+        const scopeRef = useComposerThreadImportScope(environmentId, targetKey);
+        const startImport = (isActive: () => boolean) => {
           expandedAtDrop.push(expanded);
+          const scope = scopeRef.current;
           importing = importComposerThreadAttachment({
             targetKey,
             pendingImports,
             countReservedAttachments: () => pendingImports.get(targetKey) ?? 0,
             load: () => transcript.promise,
-            isActive,
+            isActive: () => scope.active && isActive(),
             attach: async (file) => {
               attached.push(file.name);
               return true;
@@ -50,7 +57,13 @@ describe("importComposerThreadAttachment from a thread drop", () => {
               throw new Error("The slot should be available");
             },
           });
+        };
+        useLayoutEffect(() => {
+          importMention = () => startImport(() => true);
         });
+        useThreadContextDrop(targetRef, environmentId, targetKey, (_refs, isActive) =>
+          startImport(isActive),
+        );
         return null;
       }
 
@@ -63,7 +76,11 @@ describe("importComposerThreadAttachment from a thread drop", () => {
       const root = createRoot(document.createElement("div"));
       try {
         act(() => root.render(<Composer {...props} />));
-        act(() => target.dispatchEvent(new CustomEvent(THREAD_CONTEXT_DROP_EVENT, { detail: [] })));
+        const begin = () =>
+          source === "mention"
+            ? importMention()
+            : target.dispatchEvent(new CustomEvent(THREAD_CONTEXT_DROP_EVENT, { detail: [] }));
+        act(begin);
         expect(pendingImports.get("draft")).toBe(1);
         if (change === "unmount") {
           act(() => root.unmount());
@@ -89,9 +106,7 @@ describe("importComposerThreadAttachment from a thread drop", () => {
         expect(attached).toEqual(change === "expand" ? ["thread.txt"] : []);
         expect(pendingImports.size).toBe(0);
         if (change === "expand") {
-          act(() =>
-            target.dispatchEvent(new CustomEvent(THREAD_CONTEXT_DROP_EVENT, { detail: [] })),
-          );
+          act(begin);
           await act(async () => importing);
           expect(expandedAtDrop).toEqual([false, true]);
           expect(attached).toEqual(["thread.txt", "thread.txt"]);
@@ -102,4 +117,35 @@ describe("importComposerThreadAttachment from a thread drop", () => {
       }
     },
   );
+});
+
+describe("thread mention import preflight", () => {
+  it.each([
+    {
+      fileStagingLimit: null,
+      fileCapabilityBlockReason: null,
+      reservedAttachmentCount: 0,
+      expected: "This server does not support file attachments.",
+    },
+    {
+      fileStagingLimit: 100,
+      fileCapabilityBlockReason: "Waiting for the server before file attachments can send",
+      reservedAttachmentCount: 0,
+      expected: "Waiting for the server before file attachments can send",
+    },
+    {
+      fileStagingLimit: 100,
+      fileCapabilityBlockReason: null,
+      reservedAttachmentCount: PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
+      expected: `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} files per message.`,
+    },
+    {
+      fileStagingLimit: 100,
+      fileCapabilityBlockReason: null,
+      reservedAttachmentCount: PROVIDER_SEND_TURN_MAX_ATTACHMENTS - 1,
+      expected: null,
+    },
+  ])("reports the import rejection reason: $expected", ({ expected, ...input }) => {
+    expect(composerThreadImportBlockReason(input)).toBe(expected);
+  });
 });

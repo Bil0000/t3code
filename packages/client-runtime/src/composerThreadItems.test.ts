@@ -24,27 +24,44 @@ describe("matchComposerThreadItems", () => {
       matchComposerThreadItems({
         shells: [shell("t1", "Fix login")],
         environmentId: env,
+        connectedEnvironments: new Map([
+          [env, "Local"],
+          [otherEnv, "Devbox"],
+        ]),
         excludeThreadId: null,
         query: "  ",
       }),
     ).toEqual([]);
   });
 
-  it("matches titles within the environment, newest first, skipping self and archived", () => {
+  it("matches connected devices, newest first, skipping only the scoped self and archived", () => {
     const items = matchComposerThreadItems({
       shells: [
         shell("old", "Login flow", { updatedAt: "2026-01-01T00:00:00.000Z" }),
         shell("new", "Login redesign", { updatedAt: "2026-02-01T00:00:00.000Z" }),
         shell("self", "Login self"),
         shell("gone", "Login archived", { archivedAt: "2026-01-02T00:00:00.000Z" }),
-        shell("foreign", "Login elsewhere", { environmentId: otherEnv }),
+        shell("self", "Login elsewhere", { environmentId: otherEnv }),
+        shell("offline", "Login offline", { environmentId: EnvironmentId.make("offline") }),
         shell("nope", "Unrelated"),
       ],
       environmentId: env,
+      connectedEnvironments: new Map([
+        [env, "Local"],
+        [otherEnv, "Devbox"],
+      ]),
       excludeThreadId: ThreadId.make("self"),
       query: "LOGIN",
     });
-    expect(items.map((item) => item.thread.threadId)).toEqual(["new", "old"]);
-    expect(items[0]).toMatchObject({ type: "thread", label: "Login redesign" });
+    expect(items.map((item) => item.thread.threadId)).toEqual(["new", "old", "self"]);
+    expect(items[0]).toMatchObject({
+      type: "thread",
+      label: "Login redesign",
+      description: "Thread · Local",
+    });
+    expect(items[2]).toMatchObject({
+      thread: { environmentId: otherEnv, threadId: "self" },
+      description: "Thread · Devbox",
+    });
   });
 });

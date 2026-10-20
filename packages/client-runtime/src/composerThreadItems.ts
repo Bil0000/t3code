@@ -18,13 +18,10 @@ export interface ComposerThreadItem {
   readonly description: string;
 }
 
-/**
- * The agent can only read threads on its own server, so candidates stay within the
- * composer's environment.
- */
 export function matchComposerThreadItems(input: {
   shells: ReadonlyArray<ComposerThreadCandidate>;
   environmentId: EnvironmentId;
+  connectedEnvironments: ReadonlyMap<EnvironmentId, string>;
   excludeThreadId: ThreadId | null;
   query: string;
 }): ComposerThreadItem[] {
@@ -33,8 +30,8 @@ export function matchComposerThreadItems(input: {
   return input.shells
     .filter(
       (shell) =>
-        shell.environmentId === input.environmentId &&
-        shell.id !== input.excludeThreadId &&
+        input.connectedEnvironments.has(shell.environmentId) &&
+        !(shell.environmentId === input.environmentId && shell.id === input.excludeThreadId) &&
         shell.archivedAt === null &&
         shell.title.toLowerCase().includes(query),
     )
@@ -45,6 +42,6 @@ export function matchComposerThreadItems(input: {
       type: "thread",
       thread: { environmentId: shell.environmentId, threadId: shell.id },
       label: shell.title,
-      description: "Thread",
+      description: `Thread · ${input.connectedEnvironments.get(shell.environmentId)}`,
     }));
 }
