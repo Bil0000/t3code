@@ -1,5 +1,3 @@
-// @vitest-environment jsdom
-
 import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
@@ -8,7 +6,10 @@ import { IssueReactionBar } from "./IssueDetailPanel";
 
 const state = vi.hoisted(() => ({ react: vi.fn(), toast: vi.fn() }));
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => state.react }));
-vi.mock("../ui/toast", () => ({ toastManager: { add: state.toast } }));
+vi.mock("../ui/toast", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../ui/toast")>()),
+  toastManager: { add: state.toast },
+}));
 
 const environmentId = EnvironmentId.make("environment");
 const reference = {

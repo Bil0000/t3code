@@ -1,10 +1,6 @@
-// @vitest-environment jsdom
-import { createIssueTestRoot, setIssueTestValue } from "./issueTestUtils";
+import { createIssueTestRoot, makeIssueTestSession, setIssueTestValue } from "./issueTestUtils";
 
-import type {
-  EnvironmentRegistry as EnvironmentRegistryTypes,
-  EnvironmentSupervisor as EnvironmentSupervisorTypes,
-} from "@t3tools/client-runtime/connection";
+import type { createIssueEnvironmentTestRuntime } from "./issueEnvironmentTestkit";
 import { RegistryContext } from "@effect/atom-react";
 import {
   AuthOrchestrationReadScope,
@@ -13,7 +9,6 @@ import {
   IssueTrackerKind,
   ProjectId,
   WS_METHODS,
-  type AuthSessionState,
   type IssueTemplateList,
   type IssueCandidates,
 } from "@t3tools/contracts";
@@ -37,56 +32,40 @@ vi.mock("../../../../../packages/client-runtime/src/rpc/client.ts", async (impor
     },
   };
 });
-vi.mock("../ui/toast", () => ({ toastManager: { add: state.toast } }));
-vi.mock("~/state/query", () => ({
+vi.mock("../ui/toast", async () => ({
+  ...(await import("../ui/toastHelpers")),
+  toastManager: { add: state.toast },
+}));
+vi.mock("~/state/query", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/state/query")>()),
   useEnvironmentQuery: (atom: unknown) => ({
     data: atom === null ? null : state.metadata,
     error: null,
     isPending: false,
   }),
 }));
-vi.mock("~/state/issues", async () => {
+vi.mock("@t3tools/client-runtime/state/session", { spy: true });
+vi.mock("~/state/issues", async (importOriginal) => {
   const { createIssueEnvironmentAtoms } = await import("@t3tools/client-runtime/state/issues");
-  const { EnvironmentRegistry, EnvironmentSupervisor } =
-    await import("@t3tools/client-runtime/connection");
+  const { createIssueTestRuntime } = await vi.importActual<{
+    createIssueTestRuntime: () => ReturnType<typeof createIssueEnvironmentTestRuntime>;
+  }>("../../../../../packages/client-runtime/src/state/issues.testkit");
   const Session = await import("@t3tools/client-runtime/state/session");
-  const Layer = await import("effect/Layer");
-  const { Atom } = await import("effect/reactivity");
-  const Effect = await import("effect/Effect");
-  const supervisor = {} as EnvironmentSupervisorTypes.EnvironmentSupervisor["Service"];
-  const runtime = Atom.runtime(
-    Layer.succeed(
-      EnvironmentRegistry.EnvironmentRegistry,
-      EnvironmentRegistry.EnvironmentRegistry.of({
-        run: (_environmentId, effect) =>
-          Effect.provideService(effect, EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
-      } as EnvironmentRegistryTypes.EnvironmentRegistry["Service"]),
-    ),
-  );
+  const runtime = createIssueTestRuntime();
   const sessions = Session.createEnvironmentSessionAtoms(runtime);
-  const sessionFactory = vi.spyOn(Session, "createEnvironmentSessionAtoms").mockReturnValue({
+  const sessionFactory = vi.mocked(Session.createEnvironmentSessionAtoms).mockReturnValue({
     ...sessions,
     sessionStateAtom: () => session,
   });
   const issueEnvironment = createIssueEnvironmentAtoms(runtime);
   sessionFactory.mockRestore();
-  return { issueEnvironment };
+  return { ...(await importOriginal<typeof import("~/state/issues")>()), issueEnvironment };
 });
 
 import { issueEnvironment } from "~/state/issues";
 import { IssueCreateDialog, type IssueCreateScope } from "./IssueCreateDialog";
 
-const sessionState: AuthSessionState = {
-  authenticated: true,
-  auth: {
-    policy: "remote-reachable",
-    bootstrapMethods: [],
-    sessionMethods: [],
-    sessionCookieName: "test",
-  },
-  scopes: [AuthOrchestrationReadScope, AuthSourceControlWriteScope],
-  permissions: [AuthOrchestrationReadScope, AuthSourceControlWriteScope],
-};
+const sessionState = makeIssueTestSession(AuthOrchestrationReadScope, AuthSourceControlWriteScope);
 const session = Atom.make(AsyncResult.success(sessionState));
 const sourceA: IssueCreateScope = {
   environmentId: EnvironmentId.make("environment-a"),

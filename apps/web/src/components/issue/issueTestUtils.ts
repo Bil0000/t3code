@@ -1,4 +1,9 @@
-import { IssueTrackerKind, ProjectId } from "@t3tools/contracts";
+import {
+  IssueTrackerKind,
+  ProjectId,
+  type AuthEnvironmentScopes,
+  type AuthSessionState,
+} from "@t3tools/contracts";
 import { createRoot } from "react-dom/client";
 
 export function createIssueTestRoot() {
@@ -24,3 +29,15 @@ export function githubIssueTestRef() {
     key: "1",
   };
 }
+
+export const makeIssueTestSession = (...scopes: AuthEnvironmentScopes): AuthSessionState => ({
+  authenticated: true,
+  auth: {
+    policy: "remote-reachable",
+    bootstrapMethods: [],
+    sessionMethods: [],
+    sessionCookieName: "test",
+  },
+  scopes,
+  permissions: [...scopes],
+});

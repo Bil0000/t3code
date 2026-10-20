@@ -1,5 +1,3 @@
-// @vitest-environment jsdom
-
 import {
   EnvironmentId,
   IssueTrackerKind,
@@ -23,9 +21,10 @@ const state = vi.hoisted(() => ({
   scopes: vi.fn(),
 }));
 
-vi.mock("@effect/atom-react", async () => {
+vi.mock("@effect/atom-react", async (importOriginal) => {
   const { useSyncExternalStore } = await import("react");
   return {
+    ...(await importOriginal<typeof import("@effect/atom-react")>()),
     useAtomValue: (permission: string) =>
       useSyncExternalStore(
         (listener) => {

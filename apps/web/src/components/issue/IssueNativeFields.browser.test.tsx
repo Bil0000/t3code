@@ -1,5 +1,3 @@
-// @vitest-environment jsdom
-
 import type { IssueFieldValues, IssueInputField, IssueState } from "@t3tools/contracts";
 import { act, useEffect, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";

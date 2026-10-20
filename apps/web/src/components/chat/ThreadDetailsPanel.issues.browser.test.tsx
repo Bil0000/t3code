@@ -1,5 +1,3 @@
-// @vitest-environment jsdom
-
 import {
   EnvironmentId,
   IssueTrackerKind,
@@ -33,7 +31,8 @@ const state = vi.hoisted(() => ({
   },
   command: vi.fn(),
 }));
-vi.mock("../../state/entities", () => ({
+vi.mock("../../state/entities", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/entities")>()),
   useProject: () => state.project,
   useThreadShell: () => state.thread,
   useQuietThreadShell: () => state.thread,
@@ -45,10 +44,12 @@ vi.mock("../../state/session", async (importOriginal) => ({
   useEnvironmentScope: () => true,
   readEnvironmentScope: () => true,
 }));
-vi.mock("../../state/query", () => ({
+vi.mock("../../state/query", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/query")>()),
   useEnvironmentQuery: () => ({ data: null, isPending: false, error: null, refresh: vi.fn() }),
 }));
-vi.mock("../../state/queries", () => ({
+vi.mock("../../state/queries", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/queries")>()),
   usePaginatedBranches: () => ({
     refs: [],
     data: null,
@@ -57,18 +58,24 @@ vi.mock("../../state/queries", () => ({
     loadNext: vi.fn(),
   }),
 }));
-vi.mock("../../state/threads", () => ({
+vi.mock("../../state/threads", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/threads")>()),
   threadEnvironment: { stopSession: {}, updateMetadata: {} },
 }));
-vi.mock("../../state/vcs", () => ({
+vi.mock("../../state/vcs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/vcs")>()),
   vcsEnvironment: { status: () => null, listRefs: () => null, switchRef: {}, createRef: {} },
 }));
 vi.mock("../../hooks/useT3ProjectFileScripts", () => ({ useT3ProjectFileScripts: () => [] }));
 vi.mock("../../hooks/useSupportsMultiplePullRequests", () => ({
   useSupportsMultiplePullRequests: () => false,
 }));
-vi.mock("../../lib/openPullRequestLink", () => ({ useOpenPrLink: () => vi.fn() }));
-vi.mock("../ThreadStatusIndicators", () => ({
+vi.mock("../../lib/openPullRequestLink", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../lib/openPullRequestLink")>()),
+  useOpenPrLink: () => vi.fn(),
+}));
+vi.mock("../ThreadStatusIndicators", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../ThreadStatusIndicators")>()),
   useLinkedThreadPullRequest: () => null,
   prStatusIndicator: () => null,
   resolveThreadPullRequestBadge: () => null,

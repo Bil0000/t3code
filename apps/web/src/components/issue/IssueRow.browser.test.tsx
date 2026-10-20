@@ -1,18 +1,11 @@
-// @vitest-environment jsdom
-
 import { EnvironmentId, IssueTrackerKind, ProjectId } from "@t3tools/contracts";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { compile } from "tailwindcss";
+import "~/index.css";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
 import { IssueRow, type EnvironmentIssueEntry } from "./IssueRow";
 
-const compactDisplayStyles = (await compile("@tailwind utilities;")).build([
-  "flex",
-  "inline-flex",
-  "hidden",
-]);
 const entry: EnvironmentIssueEntry = {
   environmentId: EnvironmentId.make("environment"),
   projectId: ProjectId.make("project"),
@@ -35,20 +28,15 @@ const entry: EnvironmentIssueEntry = {
 };
 let container: HTMLDivElement;
 let root: Root;
-let styles: HTMLStyleElement;
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
-  styles = document.createElement("style");
-  styles.textContent = compactDisplayStyles;
-  document.head.append(styles);
 });
 afterEach(async () => {
   await act(async () => root.unmount());
   container.remove();
-  styles.remove();
   vi.unstubAllGlobals();
 });
 const visibleLabels = () =>

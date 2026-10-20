@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 import { createIssueTestRoot } from "../issue/issueTestUtils";
 
 import type { Root } from "react-dom/client";
@@ -75,6 +74,21 @@ const state = vi.hoisted(() => {
     link: vi.fn(),
     read: vi.fn(),
     resolve: vi.fn(),
+  };
+});
+type IssueListRpcClient = {
+  request: (tag: string, input: unknown) => Effect.Effect<IssueListResult>;
+  requestGuarded: (tag: string, input: unknown) => Effect.Effect<IssueListResult>;
+};
+
+vi.mock("../../../../../packages/client-runtime/src/rpc/client.ts", async () => {
+  const actual = await vi.importActual<IssueListRpcClient>(
+    "../../../../../packages/client-runtime/src/rpc/client.ts",
+  );
+  return {
+    ...actual,
+    request: vi.fn(actual.request),
+    requestGuarded: vi.fn(actual.requestGuarded),
   };
 });
 vi.mock("~/state/entities", () => ({
@@ -268,7 +282,7 @@ it("blocks a removed account and keeps drafts for explicitly choosing its replac
     vi.unstubAllGlobals();
   }
 });
-const RpcClient = await vi.importActual<typeof import("@t3tools/client-runtime/rpc")>(
+const RpcClient = await vi.importMock<IssueListRpcClient>(
   "../../../../../packages/client-runtime/src/rpc/client.ts",
 );
 

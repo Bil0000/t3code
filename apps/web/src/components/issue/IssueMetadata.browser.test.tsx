@@ -1,5 +1,3 @@
-// @vitest-environment jsdom
-
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
@@ -13,7 +11,10 @@ const state = vi.hoisted(() => ({
   update: vi.fn(),
   assigneeIds: ["W", "Other", "T", "Z"],
 }));
-vi.mock("~/state/entities", () => ({ useProjects: () => [] }));
+vi.mock("~/state/entities", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/state/entities")>()),
+  useProjects: () => [],
+}));
 vi.mock("~/state/session", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/state/session")>()),
   useEnvironmentScope: () => true,
@@ -32,7 +33,7 @@ vi.mock("~/state/query", async (importOriginal) => ({
     refresh: vi.fn(),
   }),
 }));
-vi.mock("~/state/issues", async () => {
+vi.mock("~/state/issues", async (importOriginal) => {
   const { Atom, AsyncResult } = await import("effect/reactivity");
   const detail = Atom.make(AsyncResult.initial()).pipe(Atom.keepAlive);
   const command = { permissionAtom: () => Atom.make(true) };
@@ -45,6 +46,7 @@ vi.mock("~/state/issues", async () => {
     refresh: vi.fn(),
   };
   return {
+    ...(await importOriginal<typeof import("~/state/issues")>()),
     issueEnvironment: {
       detail: () => detail,
       comment: command,

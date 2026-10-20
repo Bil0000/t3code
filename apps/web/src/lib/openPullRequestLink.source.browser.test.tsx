@@ -1,5 +1,3 @@
-// @vitest-environment jsdom
-
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
@@ -22,8 +20,11 @@ const state = vi.hoisted(() => ({
     ]),
   ),
 }));
-vi.mock("@tanstack/react-router", () => ({ useNavigate: () => state.navigate }));
-vi.mock("@effect/atom-react", async () => {
+vi.mock("@tanstack/react-router", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-router")>()),
+  useNavigate: () => state.navigate,
+}));
+vi.mock("@effect/atom-react", async (importOriginal) => {
   const { AtomRegistry } = await import("effect/reactivity");
   const registry = AtomRegistry.make();
   const derived = new Set([
@@ -32,6 +33,7 @@ vi.mock("@effect/atom-react", async () => {
     "source-link-server-config",
   ]);
   return {
+    ...(await importOriginal<typeof import("@effect/atom-react")>()),
     useAtomValue: (atom: { readonly label?: readonly [string, ...unknown[]] } | string) =>
       atom === "edit-permission"
         ? true
@@ -56,11 +58,8 @@ vi.mock("../state/server", async (importOriginal) => {
     },
   };
 });
-vi.mock("../state/entities", () => ({
-  readEnvironmentSupportsServerBrowser: () => false,
-  readThreadShell: () => ({ projectId: "project-env-a" }),
-  useThreadShell: () => ({ projectId: "project-env-a" }),
-  useProjects: () =>
+vi.mock("../state/entities", async (importOriginal) => {
+  const projects = () =>
     ["env-a", "env-b"].map((environmentId) => ({
       id: `project-${environmentId}`,
       environmentId,
@@ -76,17 +75,29 @@ vi.mock("../state/entities", () => ({
           remoteUrl: "https://github.com/acme/repo.git",
         },
       },
-    })),
-  useServerConfigs: () => state.configs,
+    }));
+  return {
+    ...(await importOriginal<typeof import("../state/entities")>()),
+    readEnvironmentSupportsServerBrowser: () => false,
+    readThreadShell: () => ({ projectId: "project-env-a" }),
+    useThreadShell: () => ({ projectId: "project-env-a" }),
+    readProjects: projects,
+    useProjects: projects,
+    useServerConfigs: () => state.configs,
+  };
+});
+vi.mock("../state/environments", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/environments")>()),
+  usePrimaryEnvironmentId: () => "env-a",
 }));
-vi.mock("../state/environments", () => ({ usePrimaryEnvironmentId: () => "env-a" }));
 vi.mock("../state/session", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/session")>()),
   readEnvironmentScope: () => true,
   useEnvironmentScope: () => true,
   usePreparedConnection: () => ({ _tag: "None" }),
 }));
-vi.mock("../state/query", () => ({
+vi.mock("../state/query", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/query")>()),
   useEnvironmentQuery: () => ({
     data: null,
     error: null,
@@ -114,8 +125,12 @@ vi.mock("../state/issues", () => ({
   },
 }));
 vi.mock("../state/use-atom-command", () => ({ useAtomCommand: () => state.command }));
-vi.mock("../hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
-vi.mock("../remoteOpen", () => ({
+vi.mock("../hooks/useTheme", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../hooks/useTheme")>()),
+  useTheme: () => ({ resolvedTheme: "dark" }),
+}));
+vi.mock("../remoteOpen", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../remoteOpen")>()),
   useRemoteOpenResolution: () => ({ state: { mode: "local-exec" }, isResolved: true }),
 }));
 

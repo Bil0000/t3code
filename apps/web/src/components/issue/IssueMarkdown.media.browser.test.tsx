@@ -1,5 +1,3 @@
-// @vitest-environment jsdom
-
 import type {
   EnvironmentRegistry,
   EnvironmentSupervisor,
@@ -19,7 +17,10 @@ import type * as Stream from "effect/Stream";
 import { AtomRegistry } from "effect/reactivity";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
+import { flushSync } from "react-dom";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vite-plus/test";
+import { cdp } from "vite-plus/test/browser";
+import type { CDPSession } from "vite-plus/test/browser-playwright";
 
 const assets = vi.hoisted(() => ({
   calls: [] as Array<{ environmentId: string; resource: AssetResource }>,
@@ -89,10 +90,12 @@ vi.mock("~/state/session", async (importOriginal) => ({
       ? { _tag: "None" }
       : { _tag: "Some", value: { httpBaseUrl: `https://${environmentId}.test/` } },
 }));
-vi.mock("~/state/filesystem", () => ({
+vi.mock("~/state/filesystem", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/state/filesystem")>()),
   useFilesystemReadAccess: () => ({ canReadFiles: true, isPending: false, error: null }),
 }));
-vi.mock("~/state/entities", () => ({
+vi.mock("~/state/entities", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/state/entities")>()),
   readEnvironmentSupportsServerBrowser: () => false,
   readThreadShell: () => null,
   useThreadShell: () => null,
@@ -100,13 +103,20 @@ vi.mock("~/state/entities", () => ({
   useProjects: () => [],
   useServerConfigs: () => new Map(),
 }));
-vi.mock("~/hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
-vi.mock("~/remoteOpen", () => ({
+vi.mock("~/hooks/useTheme", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/hooks/useTheme")>()),
+  useTheme: () => ({ resolvedTheme: "dark" }),
+}));
+vi.mock("~/remoteOpen", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/remoteOpen")>()),
   useRemoteOpenResolution: () => ({ state: { mode: "local-exec" }, isResolved: true }),
 }));
-vi.mock("~/state/issues", async () => {
+vi.mock("~/state/issues", async (importOriginal) => {
   const { Atom } = await import("effect/reactivity");
-  return { issueEnvironment: { editComment: { permissionAtom: () => Atom.make(false) } } };
+  return {
+    ...(await importOriginal<typeof import("~/state/issues")>()),
+    issueEnvironment: { editComment: { permissionAtom: () => Atom.make(false) } },
+  };
 });
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
 vi.mock("../media/MediaActions", () => ({
@@ -141,6 +151,29 @@ let container: HTMLDivElement;
 let root: Root;
 let registry: AtomRegistry.AtomRegistry;
 
+let browserProtocol: CDPSession;
+const imageResponses: Array<Promise<unknown>> = [];
+const serveImage = ({ requestId }: { requestId: string }) => {
+  imageResponses.push(
+    browserProtocol.send("Fetch.fulfillRequest", {
+      requestId,
+      responseCode: 200,
+      responseHeaders: [{ name: "Content-Type", value: "image/png" }],
+      body: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAX+XDSwAAAABJRU5ErkJggg==",
+    }),
+  );
+};
+beforeAll(async () => {
+  browserProtocol = cdp();
+  await browserProtocol.send("Fetch.enable", { patterns: [{ resourceType: "Image" }] });
+  browserProtocol.on("Fetch.requestPaused", serveImage);
+});
+afterAll(async () => {
+  browserProtocol.off("Fetch.requestPaused", serveImage);
+  await Promise.all(imageResponses.splice(0));
+  await browserProtocol.send("Fetch.disable");
+});
+
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   assets.calls.length = 0;
@@ -152,7 +185,10 @@ beforeEach(() => {
   root = createRoot(container);
 });
 afterEach(async () => {
-  await act(async () => root.unmount());
+  await act(async () => {
+    await Promise.all(imageResponses.splice(0));
+    root.unmount();
+  });
   container.remove();
   vi.unstubAllGlobals();
 });
@@ -254,16 +290,23 @@ it.each([
   ["plain HTTP", {}, "http://uploads.linear.app/a/b/screenshot.png"],
   ["public media", {}, "https://example.com/screenshot.png"],
 ] as const)("leaves %s loading directly", async (_name, overrides, url) => {
-  await render(
-    <PullRequestCommentBody
-      text={`![Screenshot](${url})`}
-      cwd="/repo"
-      environmentId={environmentB}
-      issueLinkContext={{ ...issue, ...overrides, environmentId: environmentB }}
-    />,
-  );
+  await act(async () => {
+    flushSync(() =>
+      root.render(
+        <RegistryContext value={registry}>
+          <PullRequestCommentBody
+            text={`![Screenshot](${url})`}
+            cwd="/repo"
+            environmentId={environmentB}
+            issueLinkContext={{ ...issue, ...overrides, environmentId: environmentB }}
+          />
+        </RegistryContext>,
+      ),
+    );
+    expect(sources()).toEqual([new URL(url).href]);
+  });
+  await flush();
   expect(assets.calls).toEqual([]);
-  expect(sources()).toEqual([new URL(url).href]);
 });
 
 it("does not infer a Linear account from the URL alone", async () => {

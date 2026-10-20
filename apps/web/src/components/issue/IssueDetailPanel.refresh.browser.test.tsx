@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 import { createIssueTestRoot, githubIssueTestRef, setIssueTestValue } from "./issueTestUtils";
 
 import { RegistryContext } from "@effect/atom-react";
@@ -15,13 +14,8 @@ import {
   type IssueListOrder,
   type IssueComment,
   type IssueDependencyDirection,
-  type AuthSessionState,
   type IssueRef,
 } from "@t3tools/contracts";
-import type {
-  EnvironmentRegistry as Registry,
-  EnvironmentSupervisor as Supervisor,
-} from "@t3tools/client-runtime/connection";
 import * as Schema from "effect/Schema";
 import { act } from "react";
 import type { Root } from "react-dom/client";
@@ -50,7 +44,7 @@ vi.mock("../../../../../packages/client-runtime/src/rpc/client.ts", async (impor
   const Effect = await import("effect/Effect");
   const { IssueOperationError, WS_METHODS } = await import("@t3tools/contracts");
   return {
-    ...(await importOriginal<typeof import("@t3tools/client-runtime/rpc")>()),
+    ...(await importOriginal<Record<string, unknown>>()),
     request: (
       tag: string,
       input: IssueRef & {
@@ -91,65 +85,28 @@ vi.mock("../../../../../packages/client-runtime/src/rpc/client.ts", async (impor
   };
 });
 vi.mock("~/connection/runtime", async () => {
-  const { Atom } = await import("effect/reactivity");
-  const Effect = await import("effect/Effect");
-  const Layer = await import("effect/Layer");
-  const Stream = await import("effect/Stream");
-  const Option = await import("effect/Option");
-  const SubscriptionRef = await import("effect/SubscriptionRef");
-  const { EnvironmentRegistry, EnvironmentSupervisor } =
-    await import("@t3tools/client-runtime/connection");
-  return {
-    connectionAtomRuntime: Atom.runtime(
-      Layer.effect(
-        EnvironmentRegistry.EnvironmentRegistry,
-        Effect.gen(function* () {
-          const supervisor = {
-            state: yield* SubscriptionRef.make({ phase: "connected" }),
-            session: yield* SubscriptionRef.make(Option.some({})),
-          } as unknown as Supervisor.EnvironmentSupervisor["Service"];
-          return EnvironmentRegistry.EnvironmentRegistry.of({
-            run: (_id, effect) =>
-              Effect.provideService(
-                effect,
-                EnvironmentSupervisor.EnvironmentSupervisor,
-                supervisor,
-              ),
-            followStream: (_id, stream) =>
-              Stream.provideService(
-                stream,
-                EnvironmentSupervisor.EnvironmentSupervisor,
-                supervisor,
-              ),
-          } as Registry.EnvironmentRegistry["Service"]);
-        }),
-      ),
-    ),
-  };
+  const { createIssueEnvironmentTestRuntime } = await import("./issueEnvironmentTestkit");
+  return { connectionAtomRuntime: createIssueEnvironmentTestRuntime("none") };
 });
 vi.mock("../../../../../packages/client-runtime/src/state/session.ts", async (importOriginal) => {
   const { Atom, AsyncResult } = await import("effect/reactivity");
   const { AuthOrchestrationReadScope, AuthSourceControlWriteScope } =
     await import("@t3tools/contracts");
+  const { makeIssueTestSession } = await import("./issueTestUtils");
   const session = Atom.make(
-    AsyncResult.success<AuthSessionState>({
-      authenticated: true,
-      auth: {
-        policy: "remote-reachable",
-        bootstrapMethods: [],
-        sessionMethods: [],
-        sessionCookieName: "test",
-      },
-      scopes: [AuthOrchestrationReadScope, AuthSourceControlWriteScope],
-      permissions: [AuthOrchestrationReadScope, AuthSourceControlWriteScope],
-    }),
+    AsyncResult.success(
+      makeIssueTestSession(AuthOrchestrationReadScope, AuthSourceControlWriteScope),
+    ),
   );
   return {
     ...(await importOriginal<typeof import("@t3tools/client-runtime/state/session")>()),
     createEnvironmentSessionAtoms: () => ({ sessionStateAtom: () => session }),
   };
 });
-vi.mock("~/state/entities", () => ({ useProjects: () => [] }));
+vi.mock("~/state/entities", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/state/entities")>()),
+  useProjects: () => [],
+}));
 vi.mock("~/state/session", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/state/session")>()),
   useEnvironmentScope: () => true,
@@ -158,7 +115,10 @@ vi.mock("~/hooks/useIssueViewRefresh", () => ({ useIssueViewRefresh: () => {} })
 vi.mock("./useIssueThreadHandoff", () => ({
   useIssueThreadHandoff: () => ({ pending: false, start: vi.fn() }),
 }));
-vi.mock("../ui/toast", () => ({ toastManager: { add: vi.fn() } }));
+vi.mock("../ui/toast", async () => ({
+  ...(await import("../ui/toastHelpers")),
+  toastManager: { add: vi.fn() },
+}));
 vi.mock("../pullRequest/PullRequestCommentBody", () => ({
   PullRequestCommentBody: ({ text }: { text: string }) => <div>{text}</div>,
 }));

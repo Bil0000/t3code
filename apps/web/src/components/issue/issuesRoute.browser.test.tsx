@@ -1,5 +1,5 @@
-// @vitest-environment jsdom
 import { createIssueTestRoot } from "./issueTestUtils";
+import { createIssueEnvironmentTestRuntime } from "./issueEnvironmentTestkit";
 
 import { RegistryContext } from "@effect/atom-react";
 import {
@@ -12,15 +12,12 @@ import {
   type IssueListInput,
   type IssueCapabilities,
 } from "@t3tools/contracts";
-import { EnvironmentRegistry, EnvironmentSupervisor } from "@t3tools/client-runtime/connection";
+import { EnvironmentSupervisor } from "@t3tools/client-runtime/connection";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import * as Stream from "effect/Stream";
-import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
-import { Atom, AsyncResult } from "effect/reactivity";
+import { AsyncResult } from "effect/reactivity";
 import { act, type ReactNode, type ComponentProps } from "react";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
@@ -44,6 +41,7 @@ const state = vi.hoisted(() => ({
     } | null,
   })),
 }));
+vi.mock("../../../../../packages/client-runtime/src/rpc/client.ts", { spy: true });
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-router")>()),
   createFileRoute: () => (options: object) => ({ options, useSearch: () => state.search }),
@@ -158,7 +156,10 @@ vi.mock("~/components/pullRequest/PullRequestDetailPanel", () => ({
   },
 }));
 vi.mock("~/components/issue/IssueCreateDialog", () => ({ IssueCreateDialog: () => null }));
-vi.mock("~/components/ui/toast", () => ({ toastManager: { add: vi.fn() } }));
+vi.mock("~/components/ui/toast", async () => ({
+  ...(await import("../ui/toastHelpers")),
+  toastManager: { add: vi.fn() },
+}));
 
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import {
@@ -1094,47 +1095,17 @@ it("labels both native mount scopes when their issue numbers match", async () =>
   expect(rows[1]!.textContent).toContain(lower.scope);
 });
 
-const RpcClient = await vi.importActual<typeof import("@t3tools/client-runtime/rpc")>(
-  "../../../../../packages/client-runtime/src/rpc/client.ts",
-);
+const RpcClient = await import("@t3tools/client-runtime/rpc");
 async function nativeSortSetup(
   respond: (environmentId: EnvironmentId, input: IssueListInput) => Effect.Effect<IssueListResult>,
 ) {
   const { createIssueEnvironmentAtoms } = await vi.importActual<
     typeof import("@t3tools/client-runtime/state/issues")
   >("@t3tools/client-runtime/state/issues");
-  const runtime = Atom.runtime(
-    Layer.effect(
-      EnvironmentRegistry.EnvironmentRegistry,
-      Effect.gen(function* () {
-        const connection = yield* SubscriptionRef.make({ phase: "connected" } as const);
-        const session = yield* SubscriptionRef.make(Option.some({}));
-        const supervisor = (environmentId: EnvironmentId) =>
-          ({
-            target: { environmentId },
-            state: connection,
-            session,
-          }) as unknown as EnvironmentSupervisor.EnvironmentSupervisor["Service"];
-        return EnvironmentRegistry.EnvironmentRegistry.of({
-          run: (id, effect) =>
-            Effect.provideService(
-              effect,
-              EnvironmentSupervisor.EnvironmentSupervisor,
-              supervisor(id),
-            ),
-          followStream: (id, stream) =>
-            Stream.provideService(
-              stream,
-              EnvironmentSupervisor.EnvironmentSupervisor,
-              supervisor(id),
-            ),
-        } as EnvironmentRegistry.EnvironmentRegistry["Service"]);
-      }),
-    ),
-  );
+  const runtime = createIssueEnvironmentTestRuntime();
   const atoms = createIssueEnvironmentAtoms(runtime);
   const list = vi.spyOn(issueEnvironment, "list").mockImplementation(atoms.list);
-  const request = vi.spyOn(RpcClient, "request").mockImplementation(((tag, input) =>
+  const request = vi.mocked(RpcClient.request).mockImplementation(((tag: string, input: unknown) =>
     Effect.gen(function* () {
       expect(tag).toBe(WS_METHODS.issuesList);
       const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
@@ -1277,25 +1248,7 @@ it.each([
   const { createIssueEnvironmentAtoms } = await vi.importActual<
     typeof import("@t3tools/client-runtime/state/issues")
   >("@t3tools/client-runtime/state/issues");
-  const runtime = Atom.runtime(
-    Layer.effect(
-      EnvironmentRegistry.EnvironmentRegistry,
-      Effect.gen(function* () {
-        const connection = yield* SubscriptionRef.make({ phase: "connected" } as const);
-        const session = yield* SubscriptionRef.make(Option.some({}));
-        const supervisor = {
-          state: connection,
-          session,
-        } as unknown as EnvironmentSupervisor.EnvironmentSupervisor["Service"];
-        return EnvironmentRegistry.EnvironmentRegistry.of({
-          run: (_id, effect) =>
-            Effect.provideService(effect, EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
-          followStream: (_id, stream) =>
-            Stream.provideService(stream, EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
-        } as EnvironmentRegistry.EnvironmentRegistry["Service"]);
-      }),
-    ),
-  );
+  const runtime = createIssueEnvironmentTestRuntime("none");
   const atoms = createIssueEnvironmentAtoms(runtime);
   const list = vi.spyOn(issueEnvironment, "list").mockImplementation(atoms.list);
   state.listPage.mockImplementation((target) => atoms.listPage.run(appAtomRegistry, target));
@@ -1338,8 +1291,8 @@ it.each([
       reads.push({ tag, input });
       return decodeIssueList(replies.shift());
     })) as unknown as typeof RpcClient.request;
-  const request = vi.spyOn(RpcClient, "request").mockImplementation(respond);
-  const guarded = vi.spyOn(RpcClient, "requestGuarded");
+  const request = vi.mocked(RpcClient.request).mockImplementation(respond);
+  const guarded = vi.mocked(RpcClient.requestGuarded);
   guarded.mockImplementation(
     respond as unknown as Parameters<typeof guarded.mockImplementation>[0],
   );

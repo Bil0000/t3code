@@ -1,5 +1,3 @@
-// @vitest-environment jsdom
-
 import {
   EnvironmentId,
   IssueOperationError,
@@ -18,11 +16,12 @@ const state = vi.hoisted(() => ({
   write: vi.fn<(value: unknown) => Promise<unknown>>(),
   refresh: vi.fn(),
 }));
-vi.mock("~/state/issues", async () => {
+vi.mock("~/state/issues", async (importOriginal) => {
   const { Atom } = await import("effect/reactivity");
   const granted = Atom.make(true);
   const denied = Atom.make(false);
   return {
+    ...(await importOriginal<typeof import("~/state/issues")>()),
     issueEnvironment: {
       setDependency: { permissionAtom: () => (state.permission ? granted : denied) },
     },
@@ -48,7 +47,10 @@ vi.mock("~/state/issues", async () => {
   };
 });
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => state.write }));
-vi.mock("../ui/toast", () => ({ toastManager: { add: vi.fn() } }));
+vi.mock("../ui/toast", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../ui/toast")>()),
+  toastManager: { add: vi.fn() },
+}));
 
 import { IssueDependencies } from "./IssueDependencies";
 

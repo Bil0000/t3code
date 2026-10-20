@@ -1,12 +1,7 @@
-// @vitest-environment jsdom
-import { createIssueTestRoot, setIssueTestValue } from "./issueTestUtils";
+import { createIssueTestRoot, makeIssueTestSession, setIssueTestValue } from "./issueTestUtils";
 
 import { RegistryContext } from "@effect/atom-react";
-import {
-  EnvironmentSupervisor as TestSupervisor,
-  type EnvironmentRegistry as RegistryTypes,
-  type EnvironmentSupervisor as SupervisorTypes,
-} from "@t3tools/client-runtime/connection";
+import { EnvironmentSupervisor as TestSupervisor } from "@t3tools/client-runtime/connection";
 import {
   AuthOrchestrationReadScope,
   AuthSourceControlWriteScope,
@@ -15,7 +10,6 @@ import {
   IssueOperationError,
   ProjectId,
   WS_METHODS,
-  type AuthSessionState,
   type IssueTemplate,
   type IssueTemplateList,
   type IssueTemplatesInput,
@@ -60,50 +54,19 @@ vi.mock("../../../../../packages/client-runtime/src/rpc/client.ts", async (impor
       }),
   };
 });
-vi.mock("../ui/toast", () => ({ toastManager: { add: vi.fn() } }));
+vi.mock("../ui/toast", async () => ({
+  ...(await import("../ui/toastHelpers")),
+  toastManager: { add: vi.fn() },
+}));
+vi.mock("@t3tools/client-runtime/state/session", { spy: true });
 vi.mock("~/state/issues", async () => {
   const { createIssueEnvironmentAtoms } = await import("@t3tools/client-runtime/state/issues");
-  const { EnvironmentRegistry, EnvironmentSupervisor } =
-    await import("@t3tools/client-runtime/connection");
+  const { createIssueEnvironmentTestRuntime } = await import("./issueEnvironmentTestkit");
   const Session = await import("@t3tools/client-runtime/state/session");
-  const Layer = await import("effect/Layer");
-  const Effect = await import("effect/Effect");
-  const Stream = await import("effect/Stream");
-  const SubscriptionRef = await import("effect/SubscriptionRef");
-  const Option = await import("effect/Option");
-  const { Atom } = await import("effect/reactivity");
-  const runtime = Atom.runtime(
-    Layer.effect(
-      EnvironmentRegistry.EnvironmentRegistry,
-      Effect.gen(function* () {
-        const connection = yield* SubscriptionRef.make({ phase: "connected" });
-        const session = yield* SubscriptionRef.make(Option.some({}));
-        const supervisor = (environmentId: EnvironmentId) =>
-          ({
-            target: { environmentId },
-            state: connection,
-            session,
-          }) as unknown as SupervisorTypes.EnvironmentSupervisor["Service"];
-        return EnvironmentRegistry.EnvironmentRegistry.of({
-          run: (environmentId, effect) =>
-            Effect.provideService(
-              effect,
-              EnvironmentSupervisor.EnvironmentSupervisor,
-              supervisor(environmentId),
-            ),
-          followStream: (environmentId, stream) =>
-            Stream.provideService(
-              stream,
-              EnvironmentSupervisor.EnvironmentSupervisor,
-              supervisor(environmentId),
-            ),
-        } as RegistryTypes.EnvironmentRegistry["Service"]);
-      }),
-    ),
-  );
+  const runtime = createIssueEnvironmentTestRuntime();
   const sessions = Session.createEnvironmentSessionAtoms(runtime);
   const factory = vi
-    .spyOn(Session, "createEnvironmentSessionAtoms")
+    .mocked(Session.createEnvironmentSessionAtoms)
     .mockReturnValue({ ...sessions, sessionStateAtom: () => session });
   const issueEnvironment = createIssueEnvironmentAtoms(runtime);
   factory.mockRestore();
@@ -132,17 +95,9 @@ import { IssueCreateDialog, type IssueCreateScope } from "./IssueCreateDialog";
 import { issueEnvironment } from "~/state/issues";
 
 const session = Atom.make(
-  AsyncResult.success({
-    authenticated: true,
-    auth: {
-      policy: "remote-reachable",
-      bootstrapMethods: [],
-      sessionMethods: [],
-      sessionCookieName: "test",
-    },
-    scopes: [AuthOrchestrationReadScope, AuthSourceControlWriteScope],
-    permissions: [AuthOrchestrationReadScope, AuthSourceControlWriteScope],
-  } satisfies AuthSessionState),
+  AsyncResult.success(
+    makeIssueTestSession(AuthOrchestrationReadScope, AuthSourceControlWriteScope),
+  ),
 );
 const source: IssueCreateScope = {
   environmentId: EnvironmentId.make("environment-a"),
