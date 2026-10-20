@@ -13,7 +13,13 @@ import * as GitHubQuota from "./GitHubQuota.ts";
 import * as GitHubIssueTracker from "./GitHubIssueTracker.ts";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 
-import { issueTarget, templateEntry } from "./issue-test-fixtures.ts";
+import {
+  issueTarget,
+  templateEntry,
+  templateResponse,
+  templateTree,
+  templateTarget,
+} from "./issue-test-fixtures.ts";
 
 function readGraphQlRequest(request: HttpClientRequest.HttpClientRequest) {
   return JSON.parse(
@@ -92,41 +98,28 @@ describe("GitHub issues over native HTTP", () => {
         }
         bodySelections.push(includeBody);
         const hasTemplate = !inherited || name === ".github";
-        return json({
-          data: {
-            repository: {
-              nameWithOwner: `acme/${name}`,
-              isPrivate: false,
-              forms: hasTemplate
-                ? {
-                    __typename: "Tree",
-                    oid: "a".repeat(40),
-                    entries: [
-                      templateEntry(
-                        "bug.md",
-                        "---\nname: Bug report\nabout: Report a bug\n---\nBody",
-                      ),
-                    ],
-                  }
-                : null,
-              rootForms: null,
-              docsForms: null,
-              issueTemplates: hasTemplate
-                ? [
-                    {
-                      filename: "bug.md",
-                      name: "Bug report",
-                      about: null,
-                      title: "Bug: ",
-                      ...(includeBody ? { body: "Describe the bug" } : {}),
-                      assignees: { nodes: [] },
-                      labels: { nodes: [] },
-                    },
-                  ]
-                : [],
-            },
-          },
-        });
+        return json(
+          templateResponse(`acme/${name}`, {
+            forms: hasTemplate
+              ? templateTree([
+                  templateEntry("bug.md", "---\nname: Bug report\nabout: Report a bug\n---\nBody"),
+                ])
+              : null,
+            issueTemplates: hasTemplate
+              ? [
+                  {
+                    filename: "bug.md",
+                    name: "Bug report",
+                    about: null,
+                    title: "Bug: ",
+                    ...(includeBody ? { body: "Describe the bug" } : {}),
+                    assignees: { nodes: [] },
+                    labels: { nodes: [] },
+                  },
+                ]
+              : [],
+          }),
+        );
       });
       return Effect.gen(function* () {
         const driver = yield* GitHubIssueTracker.make;
@@ -653,49 +646,37 @@ describe("GitHub issues over native HTTP", () => {
       if (defaults && kind === "forbidden") return json({ message: "Forbidden" }, { status: 403 });
       if (defaults && kind === "malformed")
         return new Response("{", { headers: { "content-type": "application/json" } });
-      return json({
-        data: {
-          repository: {
-            rootForms: null,
-            docsForms: null,
-            nameWithOwner: defaults ? "acme/.github" : "acme/web",
-            isPrivate: defaults && kind === "private",
-            issueTemplates: [],
-            forms: {
-              __typename: "Tree",
-              oid: "a".repeat(40),
-              entries: defaults
+      return json(
+        templateResponse(defaults ? "acme/.github" : "acme/web", {
+          isPrivate: defaults && kind === "private",
+          forms: templateTree(
+            defaults
+              ? [
+                  templateEntry(
+                    "default.yml",
+                    "name: Default\ndescription: Report an issue\nbody:\n- type: textarea\n  attributes:\n    label: Details\n",
+                  ),
+                  templateEntry("config.yml", "blank_issues_enabled: false"),
+                ]
+              : kind === "local"
                 ? [
                     templateEntry(
-                      "default.yml",
-                      "name: Default\ndescription: Report an issue\nbody:\n- type: textarea\n  attributes:\n    label: Details\n",
+                      "local.yml",
+                      "name: Local\ndescription: Report an issue\nbody:\n- type: textarea\n  attributes:\n    label: Details\n",
                     ),
-                    templateEntry("config.yml", "blank_issues_enabled: false"),
                   ]
-                : kind === "local"
-                  ? [
-                      templateEntry(
-                        "local.yml",
-                        "name: Local\ndescription: Report an issue\nbody:\n- type: textarea\n  attributes:\n    label: Details\n",
-                      ),
-                    ]
-                  : kind === "config-only"
-                    ? [templateEntry("config.yml", "blank_issues_enabled: false")]
-                    : kind === "invalid-local"
-                      ? [templateEntry("local.yml", "name: [")]
-                      : [],
-            },
-          },
-        },
-      });
+                : kind === "config-only"
+                  ? [templateEntry("config.yml", "blank_issues_enabled: false")]
+                  : kind === "invalid-local"
+                    ? [templateEntry("local.yml", "name: [")]
+                    : [],
+          ),
+        }),
+      );
     });
     return Effect.gen(function* () {
       const driver = yield* GitHubIssueTracker.make;
-      const result = yield* driver.listTemplates!({
-        cwd: "/w",
-        host: "github.com",
-        scope: "acme/web",
-      });
+      const result = yield* driver.listTemplates!(templateTarget());
       const inherited = kind === "default" || kind === "invalid-local";
       expect(result.blankIssuesEnabled).toBe(!inherited && kind !== "config-only");
       expect(result.templates.map((template) => template.name)).toEqual(
@@ -753,22 +734,16 @@ describe("GitHub issues over native HTTP", () => {
       "name: Local\ndescription: Report a bug\nbody:\n- type: upload\n  attributes: {label: ' '}",
     ],
     ["invalid-config", "blank_issues_enabled: [false]"],
-  ])("invalid local %s does not suppress native public account defaults", ([kind, text]) => {
-    const { layer, requests } = harness((request) => {
-      const body = readGraphQlRequest(request);
-      const defaults = body.variables.name === ".github";
-      return json({
-        data: {
-          repository: {
-            rootForms: null,
-            docsForms: null,
-            nameWithOwner: defaults ? "acme/.github" : "acme/web",
-            isPrivate: false,
-            issueTemplates: [],
-            forms: {
-              __typename: "Tree",
-              oid: "a".repeat(40),
-              entries: defaults
+  ] as const)(
+    "invalid local %s does not suppress native public account defaults",
+    ([kind, text]) => {
+      const { layer, requests } = harness((request) => {
+        const body = readGraphQlRequest(request);
+        const defaults = body.variables.name === ".github";
+        return json(
+          templateResponse(defaults ? "acme/.github" : "acme/web", {
+            forms: templateTree(
+              defaults
                 ? [
                     templateEntry(
                       "default.yml",
@@ -785,26 +760,21 @@ describe("GitHub issues over native HTTP", () => {
                       },
                     },
                   ],
-            },
-          },
-        },
+            ),
+          }),
+        );
       });
-    });
-    return Effect.gen(function* () {
-      const driver = yield* GitHubIssueTracker.make;
-      const result = yield* driver.listTemplates!({
-        cwd: "/w",
-        host: "github.com",
-        scope: "acme/web",
-        metadataOnly: true,
-      });
-      expect(result).toMatchObject({
-        blankIssuesEnabled: false,
-        templates: [{ name: "Default", about: "Report an issue" }],
-      });
-      expect(requests).toHaveLength(2);
-    }).pipe(Effect.provide(layer));
-  });
+      return Effect.gen(function* () {
+        const driver = yield* GitHubIssueTracker.make;
+        const result = yield* driver.listTemplates!({ ...templateTarget(), metadataOnly: true });
+        expect(result).toMatchObject({
+          blankIssuesEnabled: false,
+          templates: [{ name: "Default", about: "Report an issue" }],
+        });
+        expect(requests).toHaveLength(2);
+      }).pipe(Effect.provide(layer));
+    },
+  );
 
   it.effect.each(["missing", "rate-limited"] as const)(
     "invalid local forms retain %s default-source behavior",
@@ -816,31 +786,20 @@ describe("GitHub issues over native HTTP", () => {
             { message: "Default source unavailable" },
             { status: kind === "missing" ? 404 : 429 },
           );
-        return json({
-          data: {
-            repository: {
-              rootForms: null,
-              docsForms: null,
-              nameWithOwner: "acme/web",
-              isPrivate: false,
-              issueTemplates: [],
-              forms: {
-                __typename: "Tree",
-                oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                entries: [
-                  templateEntry(
-                    "invalid.yml",
-                    "name: Invalid\nbody:\n- type: textarea\n  attributes: {label: Details}",
-                  ),
-                ],
-              },
-            },
-          },
-        });
+        return json(
+          templateResponse("acme/web", {
+            forms: templateTree([
+              templateEntry(
+                "invalid.yml",
+                "name: Invalid\nbody:\n- type: textarea\n  attributes: {label: Details}",
+              ),
+            ]),
+          }),
+        );
       });
       return Effect.gen(function* () {
         const driver = yield* GitHubIssueTracker.make;
-        const read = driver.listTemplates!({ cwd: "/w", host: "github.com", scope: "acme/web" });
+        const read = driver.listTemplates!(templateTarget());
         if (kind === "missing")
           expect(yield* read).toEqual({ templates: [], blankIssuesEnabled: true });
         else expect(yield* read.pipe(Effect.flip)).toMatchObject({ reason: "rate-limited" });
@@ -855,39 +814,26 @@ describe("GitHub issues over native HTTP", () => {
       const { layer, requests } = harness((request) => {
         const body = readGraphQlRequest(request);
         const defaults = body.variables.name === ".github";
-        return json({
-          data: {
-            repository: {
-              rootForms: null,
-              docsForms: null,
-              nameWithOwner: defaults ? "acme/.github" : "acme/web",
-              isPrivate: false,
-              issueTemplates: [],
-              forms:
-                kind !== "inherited" || defaults
-                  ? {
-                      __typename: "Tree",
-                      oid: "a".repeat(40),
-                      entries: [
-                        templateEntry(
-                          "upload.yml",
-                          `name: Upload report\ndescription: Add a file\nbody:\n- type: upload\n  attributes: {label: Screenshot}${kind === "mixed" ? "\n- type: textarea\n  attributes: {label: Details}" : ""}`,
-                        ),
-                        ...(defaults
-                          ? [templateEntry("config.yml", "blank_issues_enabled: false")]
-                          : []),
-                      ],
-                    }
-                  : null,
-            },
-          },
-        });
+        return json(
+          templateResponse(defaults ? "acme/.github" : "acme/web", {
+            forms:
+              kind !== "inherited" || defaults
+                ? templateTree([
+                    templateEntry(
+                      "upload.yml",
+                      `name: Upload report\ndescription: Add a file\nbody:\n- type: upload\n  attributes: {label: Screenshot}${kind === "mixed" ? "\n- type: textarea\n  attributes: {label: Details}" : ""}`,
+                    ),
+                    ...(defaults
+                      ? [templateEntry("config.yml", "blank_issues_enabled: false")]
+                      : []),
+                  ])
+                : null,
+          }),
+        );
       });
       return Effect.gen(function* () {
         const driver = yield* GitHubIssueTracker.make;
-        expect(
-          yield* driver.listTemplates!({ cwd: "/w", host: "github.com", scope: "acme/web" }),
-        ).toEqual({
+        expect(yield* driver.listTemplates!(templateTarget())).toEqual({
           templates: [],
           blankIssuesEnabled: kind !== "inherited",
           externalTemplates: [
@@ -1109,41 +1055,26 @@ describe("GitHub issues over native HTTP", () => {
         const body = readGraphQlRequest(request);
         const defaults = body.variables.name === ".github";
         expect(body.variables.owner).toBe("acme");
-        return json({
-          data: {
-            repository: {
-              rootForms: null,
-              docsForms: null,
-              isPrivate: false,
-              nameWithOwner: defaults ? "acme/.github" : "acme/web",
-              issueTemplates: [],
-              forms: defaults
-                ? {
-                    __typename: "Tree",
-                    oid: "a".repeat(40),
-                    entries: [
-                      templateEntry(
-                        "bug.yml",
-                        "name: Bug\ndescription: Report an issue\nbody:\n- type: textarea\n  attributes:\n    label: Details\n",
-                      ),
-                      templateEntry(
-                        "config.yml",
-                        "blank_issues_enabled: false\ncontact_links: [{name: Support, about: Ask, url: 'https://example.com'}]",
-                      ),
-                    ],
-                  }
-                : null,
-            },
-          },
-        });
+        return json(
+          templateResponse(defaults ? "acme/.github" : "acme/web", {
+            forms: defaults
+              ? templateTree([
+                  templateEntry(
+                    "bug.yml",
+                    "name: Bug\ndescription: Report an issue\nbody:\n- type: textarea\n  attributes:\n    label: Details\n",
+                  ),
+                  templateEntry(
+                    "config.yml",
+                    "blank_issues_enabled: false\ncontact_links: [{name: Support, about: Ask, url: 'https://example.com'}]",
+                  ),
+                ])
+              : null,
+          }),
+        );
       });
       return Effect.gen(function* () {
         const driver = yield* GitHubIssueTracker.make;
-        const result = yield* driver.listTemplates!({
-          cwd: "/w",
-          host: "git.acme.test",
-          scope: "acme/web",
-        });
+        const result = yield* driver.listTemplates!(templateTarget("git.acme.test"));
         expect(result).toMatchObject({
           blankIssuesEnabled: false,
           templates: [{ name: "Bug" }],
@@ -1170,18 +1101,7 @@ describe("GitHub issues over native HTTP", () => {
             { message: "API rate limit exceeded" },
             { status: 429, headers: { "retry-after": "60" } },
           )
-        : json({
-            data: {
-              repository: {
-                nameWithOwner: "acme/web",
-                isPrivate: false,
-                rootForms: null,
-                docsForms: null,
-                issueTemplates: [],
-                forms: null,
-              },
-            },
-          });
+        : json(templateResponse("acme/web"));
     });
     return Effect.gen(function* () {
       const driver = yield* GitHubIssueTracker.make;

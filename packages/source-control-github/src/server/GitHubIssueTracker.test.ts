@@ -14,7 +14,13 @@ import { HttpClient, HttpClientResponse } from "effect/http";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import * as GitHubIssueTracker from "./GitHubIssueTracker.ts";
 
-import { issueTarget, templateEntry } from "./issue-test-fixtures.ts";
+import {
+  issueTarget,
+  templateEntry,
+  templateResponse,
+  templateTree,
+  templateTarget,
+} from "./issue-test-fixtures.ts";
 
 function restResponse(body: string): GitHubRest.GitHubRestResponse {
   return { status: 200, headers: {}, body, truncated: false, invalidUtf8: false };
@@ -223,39 +229,24 @@ describe("GitHubIssueTracker", () => {
       const api = yield* tracker((_query, variables) => {
         reads.push(variables);
         const inherited = (variables as { name: string }).name === ".github";
-        return JSON.stringify({
-          data: {
-            repository: {
-              rootForms: null,
-              docsForms: null,
-              nameWithOwner: inherited ? "acme/.github" : "acme/web",
-              isPrivate: false,
-              forms: inherited
-                ? {
-                    __typename: "Tree",
-                    oid: "a".repeat(40),
-                    entries: [
-                      templateEntry(
-                        "bug.yml",
-                        "name: Bug\ndescription: Report an issue\nbody:\n- type: textarea\n  attributes:\n    label: Details\n",
-                      ),
-                      templateEntry(
-                        "config.yml",
-                        "blank_issues_enabled: false\ncontact_links: [{name: Help, about: Ask us, url: 'https://example.com/help'}]\n",
-                      ),
-                    ],
-                  }
-                : null,
-              issueTemplates: [],
-            },
-          },
-        });
+        return JSON.stringify(
+          templateResponse(inherited ? "acme/.github" : "acme/web", {
+            forms: inherited
+              ? templateTree([
+                  templateEntry(
+                    "bug.yml",
+                    "name: Bug\ndescription: Report an issue\nbody:\n- type: textarea\n  attributes:\n    label: Details\n",
+                  ),
+                  templateEntry(
+                    "config.yml",
+                    "blank_issues_enabled: false\ncontact_links: [{name: Help, about: Ask us, url: 'https://example.com/help'}]\n",
+                  ),
+                ])
+              : null,
+          }),
+        );
       });
-      const result = yield* api.listTemplates!({
-        cwd: "/w",
-        host: "github.com",
-        scope: "acme/web",
-      });
+      const result = yield* api.listTemplates!(templateTarget());
       expect(result.templates).toMatchObject([
         { name: "Bug", fields: [{ kind: "textarea", label: "Details" }] },
       ]);
@@ -291,57 +282,27 @@ describe("GitHubIssueTracker", () => {
         const api = yield* tracker((_query, variables) => {
           reads.push(variables);
           const defaults = (variables as { name: string }).name === ".github";
-          return JSON.stringify({
-            data: {
-              repository: {
-                nameWithOwner: defaults ? "acme/.github" : "acme/web",
-                isPrivate: false,
-                issueTemplates: [markdown],
-                rootForms:
-                  !defaults && kind === "root"
-                    ? {
-                        __typename: "Tree",
-                        oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                        entries: [valid],
-                      }
-                    : null,
-                docsForms:
-                  !defaults && kind === "docs"
-                    ? {
-                        __typename: "Tree",
-                        oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                        entries: [valid],
-                      }
-                    : null,
-                forms: defaults
-                  ? {
-                      __typename: "Tree",
-                      oid: "a".repeat(40),
-                      entries: [
-                        valid,
-                        templateEntry(
-                          "form.yml",
-                          "name: Default form\ndescription: Report an issue\nbody:\n- type: textarea\n  attributes:\n    label: Details\n",
-                        ),
-                        templateEntry("config.yml", "blank_issues_enabled: false"),
-                      ],
-                    }
-                  : kind === "invalid-local"
-                    ? {
-                        __typename: "Tree",
-                        oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                        entries: [templateEntry("bug.md", "Missing native front matter")],
-                      }
-                    : null,
-              },
-            },
-          });
+          return JSON.stringify(
+            templateResponse(defaults ? "acme/.github" : "acme/web", {
+              issueTemplates: [markdown],
+              rootForms: !defaults && kind === "root" ? templateTree([valid]) : null,
+              docsForms: !defaults && kind === "docs" ? templateTree([valid]) : null,
+              forms: defaults
+                ? templateTree([
+                    valid,
+                    templateEntry(
+                      "form.yml",
+                      "name: Default form\ndescription: Report an issue\nbody:\n- type: textarea\n  attributes:\n    label: Details\n",
+                    ),
+                    templateEntry("config.yml", "blank_issues_enabled: false"),
+                  ])
+                : kind === "invalid-local"
+                  ? templateTree([templateEntry("bug.md", "Missing native front matter")])
+                  : null,
+            }),
+          );
         });
-        const result = yield* api.listTemplates!({
-          cwd: "/w",
-          host: "github.com",
-          scope: "acme/web",
-        });
+        const result = yield* api.listTemplates!(templateTarget());
         const local = kind === "root" || kind === "docs";
         expect(reads).toHaveLength(local ? 1 : 2);
         expect(result.blankIssuesEnabled).toBe(local);
@@ -359,50 +320,36 @@ describe("GitHubIssueTracker", () => {
         let reads = 0;
         const api = yield* tracker(() => {
           reads++;
-          return JSON.stringify({
-            data: {
-              repository: {
-                nameWithOwner: "acme/web",
-                isPrivate: false,
-                rootForms: null,
-                docsForms: null,
-                issueTemplates:
-                  kind === "markdown"
-                    ? [
-                        {
-                          about: null,
-                          title: null,
-                          assignees: { nodes: [] },
-                          labels: null,
-                          filename: "bug.md",
-                          name: "Local bug",
-                          body: "Local body",
-                        },
-                      ]
-                    : [],
-                forms: {
-                  __typename: "Tree",
-                  oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                  entries: [
-                    templateEntry(
-                      kind === "form" ? "bug.yml" : kind === "markdown" ? "bug.md" : "config.yml",
-                      kind === "form"
-                        ? "name: Local bug\ndescription: Report an issue\nbody:\n- type: textarea\n  attributes:\n    label: Details\n"
-                        : kind === "config"
-                          ? "blank_issues_enabled: false"
-                          : "---\nname: Local bug\nabout: Local bug\n---\nLocal body",
-                    ),
-                  ],
-                },
-              },
-            },
-          });
+          return JSON.stringify(
+            templateResponse("acme/web", {
+              issueTemplates:
+                kind === "markdown"
+                  ? [
+                      {
+                        about: null,
+                        title: null,
+                        assignees: { nodes: [] },
+                        labels: null,
+                        filename: "bug.md",
+                        name: "Local bug",
+                        body: "Local body",
+                      },
+                    ]
+                  : [],
+              forms: templateTree([
+                templateEntry(
+                  kind === "form" ? "bug.yml" : kind === "markdown" ? "bug.md" : "config.yml",
+                  kind === "form"
+                    ? "name: Local bug\ndescription: Report an issue\nbody:\n- type: textarea\n  attributes:\n    label: Details\n"
+                    : kind === "config"
+                      ? "blank_issues_enabled: false"
+                      : "---\nname: Local bug\nabout: Local bug\n---\nLocal body",
+                ),
+              ]),
+            }),
+          );
         });
-        const result = yield* api.listTemplates!({
-          cwd: "/w",
-          host: "github.com",
-          scope: "acme/web",
-        });
+        const result = yield* api.listTemplates!(templateTarget());
         expect(reads).toBe(1);
         expect(result.blankIssuesEnabled).toBe(kind !== "config");
         expect(result.templates).toHaveLength(kind === "config" ? 0 : 1);
@@ -422,19 +369,7 @@ describe("GitHubIssueTracker", () => {
       let reads = 0;
       const api = yield* tracker((_query, variables) => {
         reads++;
-        if (variables?.name === "web")
-          return JSON.stringify({
-            data: {
-              repository: {
-                nameWithOwner: "acme/web",
-                isPrivate: false,
-                rootForms: null,
-                docsForms: null,
-                issueTemplates: [],
-                forms: null,
-              },
-            },
-          });
+        if (variables?.name === "web") return JSON.stringify(templateResponse("acme/web"));
         if (kind === "missing") return new Response("{}", { status: 404 });
         if (kind === "forbidden") return new Response("{}", { status: 403 });
         if (kind === "rate-limited")
@@ -444,22 +379,12 @@ describe("GitHubIssueTracker", () => {
           });
         return kind === "malformed"
           ? "{"
-          : JSON.stringify({
-              data: {
-                repository: {
-                  rootForms: null,
-                  docsForms: null,
-                  nameWithOwner: kind === "wrong-owner" ? "other/.github" : "acme/.github",
-                  isPrivate: kind === "private",
-                  forms: {
-                    __typename: "Tree",
-                    oid: "a".repeat(40),
-                    entries: [templateEntry("config.yml", "blank_issues_enabled: false")],
-                  },
-                  issueTemplates: [],
-                },
-              },
-            });
+          : JSON.stringify(
+              templateResponse(kind === "wrong-owner" ? "other/.github" : "acme/.github", {
+                isPrivate: kind === "private",
+                forms: templateTree([templateEntry("config.yml", "blank_issues_enabled: false")]),
+              }),
+            );
       });
       const input = { cwd: "/w", host: "github.com", scope: "acme/web" };
       if (kind === "rate-limited")
@@ -483,52 +408,40 @@ describe("GitHubIssueTracker", () => {
       const api = yield* tracker((_query, variables) => {
         reads.push(variables);
         const defaults = (variables as { name: string }).name === ".github";
-        return JSON.stringify({
-          data: {
-            repository: {
-              rootForms: null,
-              docsForms: null,
-              nameWithOwner: defaults ? "acme/.github" : "acme/web",
-              isPrivate: false,
-              forms: defaults
-                ? {
-                    __typename: "Tree",
-                    oid,
-                    entries: [templateEntry("bug.md", "Markdown")],
-                  }
-                : null,
-              issueTemplates: defaults
-                ? [
-                    {
-                      about: null,
-                      title: null,
-                      filename: "bug.md",
-                      name: "Bug",
-                      body: "Native Markdown",
-                      labels: {
-                        pageInfo: { hasNextPage: false },
-                        nodes: [
-                          {
-                            color: "000000",
-                            name: "bug",
-                          },
-                        ],
-                      },
-                      assignees: {
-                        nodes: [
-                          {
-                            name: null,
-                            avatarUrl: "https://avatars.example/user",
-                            login: "alice",
-                          },
-                        ],
-                      },
+        return JSON.stringify(
+          templateResponse(defaults ? "acme/.github" : "acme/web", {
+            forms: defaults ? templateTree([templateEntry("bug.md", "Markdown")], oid) : null,
+            issueTemplates: defaults
+              ? [
+                  {
+                    about: null,
+                    title: null,
+                    filename: "bug.md",
+                    name: "Bug",
+                    body: "Native Markdown",
+                    labels: {
+                      pageInfo: { hasNextPage: false },
+                      nodes: [
+                        {
+                          color: "000000",
+                          name: "bug",
+                        },
+                      ],
                     },
-                  ]
-                : [],
-            },
-          },
-        });
+                    assignees: {
+                      nodes: [
+                        {
+                          name: null,
+                          avatarUrl: "https://avatars.example/user",
+                          login: "alice",
+                        },
+                      ],
+                    },
+                  },
+                ]
+              : [],
+          }),
+        );
       });
       const input = { cwd: "/w", host: "github.com", scope: "acme/web" };
       const metadata = yield* api.listTemplates!({ ...input, metadataOnly: true });
@@ -1815,48 +1728,26 @@ describe("GitHubIssueTracker", () => {
   ] as const)("%s", ([, config, blankIssuesEnabled]) =>
     Effect.gen(function* () {
       const api = yield* tracker(() =>
-        JSON.stringify({
-          data: {
-            repository: {
-              nameWithOwner: "acme/web",
-              isPrivate: false,
-              rootForms: null,
-              docsForms: null,
-              issueTemplates: [],
-              forms: {
-                __typename: "Tree",
-                oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                entries: [templateEntry("config.yml", config)],
-              },
-            },
-          },
-        }),
+        JSON.stringify(
+          templateResponse("acme/web", {
+            forms: templateTree([templateEntry("config.yml", config)]),
+          }),
+        ),
       );
-      expect(
-        yield* api.listTemplates!({ cwd: "/w", host: "github.com", scope: "acme/web" }),
-      ).toEqual({ templates: [], blankIssuesEnabled });
+      expect(yield* api.listTemplates!(templateTarget())).toEqual({
+        templates: [],
+        blankIssuesEnabled,
+      });
     }),
   );
 
   it.effect("enables blank issues when the template config is missing", () =>
     Effect.gen(function* () {
-      const api = yield* tracker(() =>
-        JSON.stringify({
-          data: {
-            repository: {
-              nameWithOwner: "acme/web",
-              isPrivate: false,
-              forms: null,
-              rootForms: null,
-              docsForms: null,
-              issueTemplates: [],
-            },
-          },
-        }),
-      );
-      expect(
-        yield* api.listTemplates!({ cwd: "/w", host: "github.com", scope: "acme/web" }),
-      ).toEqual({ templates: [], blankIssuesEnabled: true });
+      const api = yield* tracker(() => JSON.stringify(templateResponse("acme/web")));
+      expect(yield* api.listTemplates!(templateTarget())).toEqual({
+        templates: [],
+        blankIssuesEnabled: true,
+      });
     }),
   );
 
