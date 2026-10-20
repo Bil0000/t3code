@@ -62,6 +62,7 @@ import { resolvePathLinkTarget } from "@t3tools/shared/fileLinks";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
+import { useComposerHandleContext } from "~/composerHandleContext";
 import { buildFileReviewComment } from "~/reviewCommentContext";
 import { assetEnvironment } from "~/state/assets";
 import { usePreviewAvailable } from "~/browser/previewRuntime";
@@ -123,6 +124,7 @@ interface FilePreviewPanelProps {
   projectName: string;
   relativePath: string | null;
   attachment?: ChatFileAttachment;
+  draftKey?: string | undefined;
   threadRef: ScopedThreadRef;
   composerDraftTarget: ScopedThreadRef | DraftId;
   keybindings: ResolvedKeybindingsConfig;
@@ -1020,6 +1022,7 @@ export default function FilePreviewPanel({
   projectName,
   relativePath: requestedPath,
   attachment,
+  draftKey,
   threadRef,
   composerDraftTarget,
   keybindings,
@@ -1036,6 +1039,12 @@ export default function FilePreviewPanel({
   const relativePath =
     attachment === undefined ? resolveFilePreviewPath(requestedPath, cwd) : requestedPath;
   const draft = typeof composerDraftTarget === "string";
+  const composerRef = useComposerHandleContext();
+  const draftFile = useComposerDraftStore((state) =>
+    draftKey === undefined
+      ? undefined
+      : state.draftsByThreadKey[draftKey]?.files.find((entry) => entry.id === attachment?.id),
+  );
   const { resolvedTheme } = useTheme();
   const wordWrap = useClientSettings((settings) => settings.wordWrap);
   const canOperatePreview = useEnvironmentScope(environmentId, AuthPreviewOperateScope);
@@ -1354,15 +1363,32 @@ export default function FilePreviewPanel({
           className={cn("min-w-0 flex-1 flex-col overflow-hidden", previewPath ? "flex" : "hidden")}
         >
           {isFolder ? null : relativePath && attachment ? (
-            <AttachmentFilePreview
-              key={`${environmentId}:${attachment.id}`}
-              name={attachment.name}
-              mimeType={attachment.mimeType}
-              sizeBytes={attachment.sizeBytes}
-              asset={{ environmentId, attachmentId: attachment.id }}
-              htmlRender={attachment.htmlRender === true}
-              threadRef={threadRef}
-            />
+            draftKey === undefined || draftFile ? (
+              <AttachmentFilePreview
+                key={`${environmentId}:${attachment.id}`}
+                name={attachment.name}
+                mimeType={attachment.mimeType}
+                sizeBytes={attachment.sizeBytes}
+                htmlRender={attachment.htmlRender === true}
+                threadRef={threadRef}
+                {...(draftFile
+                  ? {
+                      file: draftFile.file,
+                      origin: "Draft",
+                      onRemove: () =>
+                        composerRef?.current?.removeDraftFile(draftKey!, draftFile.id),
+                      ...(draftFile.uploadedAttachmentId && draftFile.uploadEnvironmentId
+                        ? {
+                            asset: {
+                              environmentId: draftFile.uploadEnvironmentId,
+                              attachmentId: draftFile.uploadedAttachmentId,
+                            },
+                          }
+                        : {}),
+                    }
+                  : { asset: { environmentId, attachmentId: attachment.id } })}
+              />
+            ) : null
           ) : relativePath && isVideo && absolutePath ? (
             <WorkspaceVideoPreview
               key={`${environmentId}:${threadRef.threadId}:${absolutePath}`}

@@ -5,8 +5,6 @@ import { runtimeModeConfig, runtimeModeOptions as runtimeModes } from "./runtime
 import { isLocalEnvironmentDisabled } from "../../localEnvironment";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { useRightPanelStore } from "~/rightPanelStore";
-import { AttachmentFilePreview } from "../files/AttachmentFilePreview";
-import { Dialog, DialogPopup, DialogTitle } from "../ui/dialog";
 import {
   composerPullRequestsFromLinks,
   filterComposerPullRequestMatches,
@@ -16,6 +14,7 @@ import { elementContextToPreviewAnnotation } from "../../lib/elementContext";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import {
   questionAttachmentDraftId,
+  isQuestionAttachmentRemovalBlocked,
   countQuestionAttachments,
   useQuestionAttachmentPreparation,
   changeQuestionAttachmentPreparation,
@@ -116,7 +115,8 @@ import {
 import {
   type ComposerFileAttachment,
   type ComposerImageAttachment,
-  type DraftId,
+  type ComposerThreadTarget,
+  DraftId,
   type PersistedComposerFileAttachment,
   type PersistedComposerImageAttachment,
   composerFileDedupKey,
@@ -125,6 +125,7 @@ import {
   composerDraftHasUserContent,
   composerTargetKey,
   hydrateImagesFromPersisted,
+  resolveComposerDraftKey,
   useComposerDraftStore,
   useComposerThreadDraft,
   useEffectiveComposerModelState,
@@ -1432,6 +1433,7 @@ export interface ChatComposerHandle {
   addDroppedFiles: (files: File[]) => void;
   addDroppedFolders: (folders: File[]) => void;
   hasPendingAttachments: () => boolean;
+  removeDraftFile: (draftKey: string, fileId: string) => void;
   insertTextAtEnd: (
     text: string,
     options?: { ensureLeadingBoundary?: boolean; clipboardData?: DataTransfer },
@@ -1847,8 +1849,19 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const nonPersistedComposerImageIds = attachmentDraft.nonPersistedImageIds;
   const uploadsByImageId = useAttachmentUploadStore((state) => state.uploadsByImageId);
   const openPrLink = useOpenPrLink(routeThreadRef);
-  const [previewFileId, setPreviewFileId] = useState<string | null>(null);
-  const previewFile = composerFiles.find((file) => file.id === previewFileId);
+  const openDraftFile = (fileId: string) => {
+    const file = composerFiles.find((candidate) => candidate.id === fileId);
+    const draftKey = resolveComposerDraftKey(
+      useComposerDraftStore.getState(),
+      attachmentDraftTarget,
+    );
+    if (!file || !draftKey || composerFileNeedsReattach(file)) return;
+    const { id, name, mimeType, sizeBytes } = file;
+    useRightPanelStore
+      .getState()
+      .openAttachment(routeThreadRef, { type: "file", id, name, mimeType, sizeBytes }, draftKey);
+  };
+  const openDraftFileStable = useStableCallback(openDraftFile);
   const composerContextActions = useMemo(
     () => ({
       environmentId,
@@ -1857,7 +1870,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         const preview = buildExpandedImagePreview(composerImages, imageId);
         if (preview) onExpandImage(preview);
       },
-      openFile: setPreviewFileId,
+      openFile: openDraftFileStable,
       openMention: (path: string) => useRightPanelStore.getState().openFile(routeThreadRef, path),
       expandVideo: (fileId: string) => {
         const file = composerFiles.find((candidate) => candidate.id === fileId);
@@ -1889,6 +1902,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       gitCwd,
       environmentId,
       onExpandImage,
+      openDraftFileStable,
       openPrLink,
       routeThreadRef,
     ],
@@ -2970,18 +2984,33 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     removeComposerDraftImage(attachmentDraftTarget, imageId);
   };
 
-  const removeComposerFileFromDraft = (fileId: string) => {
-    if (questionAttachmentTarget && activePendingIsResponding) return;
+  const removeComposerFileFromDraft = (
+    fileId: string,
+    target: ComposerThreadTarget = attachmentDraftTarget,
+  ) => {
+    if (
+      isQuestionAttachmentRemovalBlocked({
+        target,
+        environmentId,
+        threadId: activeThreadId,
+        responding: incomingPendingIsResponding,
+      })
+    )
+      return;
     // Release by the draft attachment, not the bare queue key: a hydrated
     // file's upload lives server-side under its persisted attachment id.
-    const file = composerFilesRef.current.find((candidate) => candidate.id === fileId);
+    const file = useComposerDraftStore
+      .getState()
+      .getComposerDraft(target)
+      ?.files.find((candidate) => candidate.id === fileId);
     if (file) {
       releaseDraftAttachment(file);
     } else {
       releaseAttachmentUpload(fileId);
     }
-    removeComposerDraftFile(attachmentDraftTarget, fileId);
+    removeComposerDraftFile(target, fileId);
   };
+  const removeComposerFileFromDraftStable = useStableCallback(removeComposerFileFromDraft);
 
   const addComposerDraftTerminalContexts = useComposerDraftStore(
     (store) => store.addTerminalContexts,
@@ -6062,6 +6091,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         }
         focusComposer();
       },
+      removeDraftFile: (draftKey, fileId) =>
+        removeComposerFileFromDraftStable(fileId, DraftId.make(draftKey)),
       hasPendingAttachments: () =>
         (pendingImageCompressionsRef.current.get(attachmentTargetKey) ?? 0) > 0 ||
         pendingDraftWork.has(attachmentTargetKey),
@@ -6228,6 +6259,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       activeThread,
       addComposerAttachments,
       foldPastedText,
+      removeComposerFileFromDraftStable,
       composerDraftTarget,
       composerCursor,
       activePendingProgress,
@@ -6995,7 +7027,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                             type="button"
                             disabled={needsReattach}
                             className="min-w-0 flex-1 truncate text-left hover:underline focus-visible:outline-2"
-                            onClick={() => setPreviewFileId(file.id)}
+                            onClick={() => openDraftFile(file.id)}
                           >
                             {file.name}
                           </button>
@@ -7054,43 +7086,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     : undefined
                 }
               >
-                {previewFile ? (
-                  <Dialog
-                    open
-                    onOpenChange={(open) => {
-                      if (!open) setPreviewFileId(null);
-                    }}
-                  >
-                    <DialogPopup
-                      {...composerFloatingLayerProps}
-                      className="h-[min(85vh,52rem)] max-w-4xl overflow-hidden"
-                      showCloseButton={false}
-                    >
-                      <DialogTitle className="sr-only">{previewFile.name}</DialogTitle>
-                      <AttachmentFilePreview
-                        key={previewFile.id}
-                        name={previewFile.name}
-                        mimeType={previewFile.mimeType}
-                        sizeBytes={previewFile.sizeBytes}
-                        file={previewFile.file}
-                        origin="Draft"
-                        {...(previewFile.uploadedAttachmentId && previewFile.uploadEnvironmentId
-                          ? {
-                              asset: {
-                                environmentId: previewFile.uploadEnvironmentId,
-                                attachmentId: previewFile.uploadedAttachmentId,
-                              },
-                            }
-                          : {})}
-                        onRemove={() => {
-                          removeComposerFileFromDraft(previewFile.id);
-                          setPreviewFileId(null);
-                        }}
-                        onClose={() => setPreviewFileId(null)}
-                      />
-                    </DialogPopup>
-                  </Dialog>
-                ) : null}
                 <ComposerContextActionsContext value={composerContextActions}>
                   <ComposerPromptEditor
                     ariaLabel="Message"

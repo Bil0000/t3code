@@ -387,6 +387,7 @@ import {
   type DraftThreadEnvMode,
   useComposerDraftStore,
   DraftId,
+  composerFileNeedsReattach,
 } from "../composerDraftStore";
 import {
   formatTerminalContextLabel,
@@ -2676,6 +2677,19 @@ export default function ChatView(props: ChatViewProps) {
     if (!activeThreadRef || !activeEnvironmentBootstrapComplete) return;
     useRightPanelStore.getState().reconcileFileSurfaces(activeThreadRef, activeProject !== null);
   }, [activeEnvironmentBootstrapComplete, activeProject, activeThreadRef]);
+
+  useEffect(() => {
+    if (!activeThreadRef) return;
+    const reconcile = () =>
+      useRightPanelStore.getState().reconcileDraftSurfaces(activeThreadRef, (draftKey, fileId) => {
+        const file = useComposerDraftStore
+          .getState()
+          .draftsByThreadKey[draftKey]?.files.find((entry) => entry.id === fileId);
+        return file !== undefined && !composerFileNeedsReattach(file);
+      });
+    reconcile();
+    return useComposerDraftStore.subscribe(reconcile);
+  }, [activeThreadRef]);
 
   const allProjects = useProjects();
   const primaryEnvironmentId = primaryEnvironment?.environmentId ?? null;
@@ -10634,7 +10648,7 @@ export default function ChatView(props: ChatViewProps) {
         <FilePreviewPanel
           key={`${activeThread.environmentId}:${
             renderedRightPanelSurface.kind === "file" && renderedRightPanelSurface.attachment
-              ? `attachment:${renderedRightPanelSurface.attachment.id}`
+              ? renderedRightPanelSurface.id
               : activeWorkspaceRoot
           }`}
           environmentId={activeThread.environmentId}
@@ -10650,7 +10664,10 @@ export default function ChatView(props: ChatViewProps) {
               : null
           }
           {...(renderedRightPanelSurface.kind === "file" && renderedRightPanelSurface.attachment
-            ? { attachment: renderedRightPanelSurface.attachment }
+            ? {
+                attachment: renderedRightPanelSurface.attachment,
+                draftKey: renderedRightPanelSurface.draftKey,
+              }
             : {})}
           revealLine={
             renderedRightPanelSurface.kind === "file"

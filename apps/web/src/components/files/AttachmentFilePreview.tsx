@@ -3,7 +3,7 @@ import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
 import { formatAttachmentSize } from "@t3tools/client-runtime/state/attachments";
 import { readFilePreviewResponse } from "@t3tools/client-runtime/file-preview";
 import { filePreviewKind, FILE_TEXT_PREVIEW_MAX_BYTES } from "@t3tools/shared/filePreview";
-import { ChevronRightIcon, DownloadIcon, Trash2Icon, WrapTextIcon, XIcon } from "lucide-react";
+import { ChevronRightIcon, DownloadIcon, Trash2Icon, WrapTextIcon } from "lucide-react";
 import { Check, Code2, Copy, Eye, Table2 } from "lucide";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 
@@ -57,7 +57,6 @@ export function AttachmentFilePreview(props: {
   threadRef?: ScopedThreadRef;
   origin?: string;
   onRemove?: () => void;
-  onClose?: () => void;
 }) {
   const isZip = isZipPreviewFile(props);
   const kind = isZip ? "unsupported" : filePreviewKind(props);
@@ -337,11 +336,6 @@ export function AttachmentFilePreview(props: {
         {props.onRemove ? (
           <FileSurfaceAction label="Remove from draft" onPress={props.onRemove}>
             <Trash2Icon className="size-3.5" />
-          </FileSurfaceAction>
-        ) : null}
-        {props.onClose ? (
-          <FileSurfaceAction label="Close" onPress={props.onClose}>
-            <XIcon className="size-3.5" />
           </FileSurfaceAction>
         ) : null}
       </div>
