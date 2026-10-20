@@ -286,7 +286,7 @@ export const runEnvironmentReadBridge = Effect.fn("AgentThreadRead.run")(functio
             destinations.push(destination);
             targets.push({
               environmentId: destination.entry.target.environmentId,
-              name: destination.entry.target.label.trim().slice(0, 200) || "Environment",
+              name: destination.entry.target.label.trim().slice(0, 200).trim() || "Environment",
               status:
                 destination.entry.unsupportedReason !== undefined
                   ? "unsupported"

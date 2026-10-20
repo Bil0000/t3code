@@ -5,7 +5,7 @@ import {
   EnvironmentAuthorizationError,
   authScopeRequiredResponse,
   EnvironmentReadError,
-  type EnvironmentReadRegistration,
+  EnvironmentReadRegistration,
   type EnvironmentReadRequest,
   type EnvironmentReadResponse,
   type EnvironmentReadResult,
@@ -18,6 +18,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { RpcClientError } from "effect/rpc";
@@ -48,6 +49,7 @@ const result: EnvironmentReadResult = {
   operation: "project.list",
   data: { projects: [], nextCursor: null },
 };
+const encodeEnvironmentReadRegistration = Schema.encodeEffect(EnvironmentReadRegistration);
 
 const makeHarness = Effect.fn("TestAgentThreadRead.makeHarness")(function* (options?: {
   readonly allowed?: boolean;
@@ -443,6 +445,41 @@ describe("agent environment read responder", () => {
 });
 
 describe("agent environment bridge lifetime", () => {
+  it.effect.each([
+    { label: `${"x".repeat(199)} moretext`, expected: "x".repeat(199) },
+    { label: "   ", expected: "Environment" },
+  ])("advertises a trimmed, encodable name for saved label '$label'", ({ label, expected }) =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness();
+      yield* SubscriptionRef.update(h.entries, (entries) =>
+        new Map(entries).set(h.destination.target.environmentId, {
+          ...h.destination,
+          target: new PrimaryConnectionTarget({
+            environmentId: h.destination.target.environmentId,
+            label,
+            httpBaseUrl: "https://destination.test",
+            wsBaseUrl: "wss://destination.test",
+          }),
+        }),
+      );
+      const fiber = yield* runEnvironmentReadBridge().pipe(
+        Effect.provide(h.layer),
+        Effect.forkChild,
+      );
+      const registration = yield* Queue.take(h.registrations);
+      expect(registration.environments[0]?.name).toBe(expected);
+      const encoded = yield* encodeEnvironmentReadRegistration(registration);
+      expect(encoded.environments).toEqual([
+        {
+          environmentId: h.destination.target.environmentId,
+          name: expected,
+          status: "online",
+        },
+      ]);
+      yield* Fiber.interrupt(fiber);
+    }),
+  );
+
   it.effect.each(["unshared retry", "independent retry", "independent grant"] as const)(
     "keeps an in-flight read alive during an %s change",
     (action) =>
