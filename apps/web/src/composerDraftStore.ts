@@ -201,6 +201,7 @@ export const PersistedComposerFileAttachment = Schema.Struct({
   attachmentId: Schema.String,
   environmentId: EnvironmentId,
   source: Schema.optional(PastedTextAttachmentSource),
+  threadTitle: Schema.optional(Schema.String),
 });
 export type PersistedComposerFileAttachment = typeof PersistedComposerFileAttachment.Type;
 
@@ -217,6 +218,7 @@ export const PersistedComposerDraftFileAttachment = Schema.Struct({
   attachmentId: Schema.optionalKey(Schema.String),
   environmentId: Schema.optionalKey(EnvironmentId),
   source: Schema.optional(PastedTextAttachmentSource),
+  threadTitle: Schema.optional(Schema.String),
 });
 export type PersistedComposerDraftFileAttachment = typeof PersistedComposerDraftFileAttachment.Type;
 const isPersistedComposerDraftFileAttachment = Schema.is(PersistedComposerDraftFileAttachment);
@@ -2044,6 +2046,7 @@ export function partializeComposerDraftStoreState(
               mimeType: file.mimeType,
               sizeBytes: file.sizeBytes,
               ...(file.source ? { source: file.source } : {}),
+              ...(file.threadTitle !== undefined ? { threadTitle: file.threadTitle } : {}),
               ...(file.uploadedAttachmentId && file.uploadEnvironmentId
                 ? {
                     attachmentId: file.uploadedAttachmentId,
@@ -2331,6 +2334,7 @@ function toHydratedThreadDraft(
       sizeBytes: file.sizeBytes,
       file: null,
       ...(file.source ? { source: file.source } : {}),
+      ...(file.threadTitle !== undefined ? { threadTitle: file.threadTitle } : {}),
       ...(file.attachmentId !== undefined && file.environmentId !== undefined
         ? { uploadedAttachmentId: file.attachmentId, uploadEnvironmentId: file.environmentId }
         : {}),
@@ -3320,9 +3324,13 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                   ));
               if (duplicate) {
                 if (composerFileNeedsReattach(duplicate) && !replacements.has(duplicate.id)) {
-                  replacements.set(duplicate.id, file);
+                  const replacement =
+                    file.threadTitle === undefined && duplicate.threadTitle !== undefined
+                      ? { ...file, threadTitle: duplicate.threadTitle }
+                      : file;
+                  replacements.set(duplicate.id, replacement);
                   knownIds.add(file.id);
-                  knownFiles.set(key, file);
+                  knownFiles.set(key, replacement);
                 }
                 continue;
               }

@@ -38,7 +38,7 @@ describe("threadContextAttachment", () => {
       sourceItemId: item.id,
       item,
     };
-    const file = threadContextAttachment(EnvironmentId.make("source"), {
+    const { file } = threadContextAttachment(EnvironmentId.make("source"), {
       threadId: projection.thread.id,
       title: projection.thread.title,
       updatedAt: projection.updatedAt,
@@ -69,7 +69,7 @@ describe("threadContextAttachment", () => {
       updatedAt: DateTime.makeUnsafe("2026-09-29T00:00:00.000Z"),
       items: [],
     };
-    const file = threadContextAttachment(EnvironmentId.make("بيئة"), transcript);
+    const { file } = threadContextAttachment(EnvironmentId.make("بيئة"), transcript);
     const expected = `${JSON.stringify({
       title: transcript.title,
       environmentId: "بيئة",
@@ -92,16 +92,17 @@ describe("threadContextAttachment", () => {
       items: [],
     };
     const source = EnvironmentId.make("source/with:unsafe characters");
-    const first = threadContextAttachment(source, transcript);
-    expect(threadContextAttachment(source, transcript).name).toBe(first.name);
-    expect(threadContextAttachment(EnvironmentId.make("other"), transcript).name).not.toBe(
+    const { file: first, threadTitle } = threadContextAttachment(source, transcript);
+    expect(threadTitle).toBe(transcript.title);
+    expect(threadContextAttachment(source, transcript).file.name).toBe(first.name);
+    expect(threadContextAttachment(EnvironmentId.make("other"), transcript).file.name).not.toBe(
       first.name,
     );
     expect(
       threadContextAttachment(source, {
         ...transcript,
         updatedAt: DateTime.add(transcript.updatedAt, { seconds: 1 }),
-      }).name,
+      }).file.name,
     ).not.toBe(first.name);
     expect(first.name).toMatch(/^Same _ title_ notes-[a-f0-9]+\.jsonl$/);
     expect(first.name.length).toBeLessThan(255);

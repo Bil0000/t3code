@@ -429,6 +429,19 @@ describe("prepareTurnAttachments", () => {
     });
   });
 
+  it("keeps the thread title on sent snapshot attachments", async () => {
+    const prepared = await prepareTurnAttachments({
+      environmentId,
+      attachments: [{ ...file, threadTitle: "Remote / thread" }],
+    });
+    expect(prepared.status).toBe("ready");
+    if (prepared.status !== "ready") return;
+    expect(prepared.attachments[0]).toMatchObject({
+      name: file.name,
+      threadTitle: "Remote / thread",
+    });
+  });
+
   it("uploads generic file bytes directly and keeps mixed attachment order", async () => {
     const pastedFile = {
       ...file,

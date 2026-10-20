@@ -102,6 +102,7 @@ export const FileContextRecord = Schema.Struct({
   ...recordBase,
   kind: Schema.Literal("file"),
   ...attachmentBinding,
+  threadTitle: Schema.optional(Schema.String),
 });
 export type FileContextRecord = typeof FileContextRecord.Type;
 

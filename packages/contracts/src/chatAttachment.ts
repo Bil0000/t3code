@@ -171,6 +171,7 @@ export const ChatFileAttachment = Schema.Struct({
       agent can inspect the file selectively instead of eagerly spending the
       same context the fold is intended to preserve. */
   source: Schema.optional(PastedTextAttachmentSource),
+  threadTitle: Schema.optional(Schema.String),
 });
 export type ChatFileAttachment = typeof ChatFileAttachment.Type;
 

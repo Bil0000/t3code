@@ -1569,7 +1569,11 @@ function UserMessageContent(props: UserMessageContentProps) {
           linkCustomization: (href) => {
             const presentation = enrichedContextLinkPresentation(href, props.context?.records);
             return presentation
-              ? { color: presentation.color, icon: markdownFileIconSource(presentation.icon) }
+              ? {
+                  color: presentation.color,
+                  icon: markdownFileIconSource(presentation.icon),
+                  label: presentation.label,
+                }
               : props.linkHandlers.linkCustomization?.(href);
           },
         }}

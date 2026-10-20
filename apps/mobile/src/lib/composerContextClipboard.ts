@@ -211,5 +211,9 @@ async function persistImportedAttachment(
   };
   return record.kind === "image"
     ? { ...common, type: "image", previewUri: fileUri }
-    : { ...common, type: "file" };
+    : {
+        ...common,
+        type: "file",
+        ...(record.threadTitle !== undefined ? { threadTitle: record.threadTitle } : {}),
+      };
 }

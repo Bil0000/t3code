@@ -3198,6 +3198,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           mimeType: file.type,
           sizeBytes: file.size,
           file,
+          ...(record.threadTitle !== undefined ? { threadTitle: record.threadTitle } : {}),
         },
       ]);
       if (!accepted.includes(localId))
@@ -3837,6 +3838,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   };
 
   const { onUsageLimitsCommand } = props;
+  const importDroppedThreadRef = useRef<typeof importDroppedThread | null>(null);
   const onSelectComposerItem = (item: ComposerCommandItem) => {
     if (composerSelectLockRef.current) return;
     composerSelectLockRef.current = true;
@@ -3972,7 +3974,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         });
         if (applied) {
           setComposerHighlightedItemId(null);
-          void importDroppedThread(item.thread, () => scope.active);
+          void importDroppedThreadRef.current?.(item.thread, () => scope.active);
         }
         return;
       }
@@ -4456,6 +4458,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           sizeBytes: file.sizeBytes,
           file: null,
           ...(file.source ? { source: file.source } : {}),
+          ...(file.threadTitle !== undefined ? { threadTitle: file.threadTitle } : {}),
           ...(expired
             ? {}
             : { uploadedAttachmentId: file.attachmentId, uploadEnvironmentId: environmentId }),
@@ -4699,6 +4702,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         attachmentId: upload.attachmentId,
         environmentId,
         ...(file.source ? { source: file.source } : {}),
+        ...(file.threadTitle !== undefined ? { threadTitle: file.threadTitle } : {}),
       });
     }
     // A repeat ⌘S on the *same* still-unencoded snapshot would stash it
@@ -5438,6 +5442,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     files: File[],
     options?: {
       readonly source?: ChatFileAttachment["source"];
+      readonly threadTitle?: string;
       readonly selection?: { start: number; end: number };
       readonly skipImageInlineChip?: boolean;
     },
@@ -5530,6 +5535,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           file.type === fileMimeType
             ? file
             : new File([file], file.name, { type: fileMimeType, lastModified: file.lastModified });
+        const threadTitle = options?.threadTitle ?? matchingReattachMarker?.threadTitle;
         acceptedFiles.push({
           type: "file",
           id: randomUUID(),
@@ -5538,6 +5544,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           sizeBytes: attachmentFile.size,
           file: attachmentFile,
           ...(options?.source ? { source: options.source } : {}),
+          ...(threadTitle !== undefined ? { threadTitle } : {}),
         });
       }
       if (!matchingReattachMarker) {
@@ -5944,8 +5951,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     },
   });
 
-  const attachDroppedThreadFile = useEffectEvent((file: File) => addComposerAttachments([file]));
-  async function importDroppedThread(ref: ScopedThreadRef, isActive: () => boolean) {
+  const attachDroppedThreadFile = useStableCallback(
+    ({ file, threadTitle }: ReturnType<typeof threadContextAttachment>) =>
+      addComposerAttachments([file], { threadTitle }),
+  );
+  const importDroppedThread = async (ref: ScopedThreadRef, isActive: () => boolean) => {
     const targetKey = attachmentTargetKey;
     pendingDraftWork.begin(targetKey);
     const loadingToast = toastManager.add({
@@ -5994,7 +6004,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     }
     toastManager.close(loadingToast);
     pendingDraftWork.end(targetKey);
-  }
+  };
+
+  useLayoutEffect(() => {
+    importDroppedThreadRef.current = importDroppedThread;
+  });
 
   useThreadContextDrop(composerFormRef, environmentId, attachmentTargetKey, (refs, isActive) => {
     const records = refs.flatMap((ref) => {

@@ -303,3 +303,36 @@ describe("mobile context clipboard imports", () => {
     expect(mocks.download).not.toHaveBeenCalled();
   });
 });
+
+it("keeps the thread title when copying a saved snapshot into another draft", async () => {
+  const record = {
+    ...image,
+    kind: "file" as const,
+    label: "Remote / thread",
+    name: "Remote _ thread-0123456789abcdef.jsonl",
+    mimeType: "application/x-ndjson",
+    threadTitle: "Remote / thread",
+  };
+  const copied = {
+    text: formatComposerContextReference(record),
+    fragment: encodeComposerContextFragment({
+      version: 1,
+      source: { environmentId: EnvironmentId.make("source") },
+      records: [record],
+    })!,
+    html: "",
+  };
+  mocks.local.mockReturnValue(undefined);
+  mocks.execute.mockResolvedValue({ _tag: "Success", value: { relativeUrl: "/snapshot" } });
+  mocks.download.mockResolvedValue({ uri: "file:///temporary.jsonl", dispose: mocks.dispose });
+  mocks.persist.mockResolvedValue("file:///owned.jsonl");
+  const result = await importComposerContextClipboard(copied, 0, new AbortController().signal);
+  expect(result?.attachments[0]).toMatchObject({
+    name: record.name,
+    threadTitle: record.threadTitle,
+  });
+  expect(result?.context.records[0]).toMatchObject({
+    label: record.label,
+    threadTitle: record.threadTitle,
+  });
+});

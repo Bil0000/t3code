@@ -114,6 +114,25 @@ describe("Enriched link presentation", () => {
     ).toEqual({ color: "#8a70dd", icon: "markdown" });
   });
 
+  it("shows the stored snapshot title as plain pill text in sent messages", () => {
+    const record = {
+      version: 1 as const,
+      kind: "file" as const,
+      contextId: "snapshot" as ComposerContextId,
+      attachmentId: "snapshot-file",
+      name: "snapshot.jsonl",
+      mimeType: "application/x-ndjson",
+      sizeBytes: 123,
+      label: "PR Fix",
+      threadTitle: "[PR] Fix <label> & \\ path",
+    };
+    expect(enrichedContextLinkPresentation("t3-context://v1/file/snapshot", [record])).toEqual({
+      color: "#0090cd",
+      icon: "default",
+      label: record.threadTitle,
+    });
+  });
+
   it("retains recognizable presentation for unavailable and future context kinds", () => {
     expect(enrichedContextLinkPresentation("t3-context://v1/terminal/missing")).toEqual({
       color: "#009f6e",

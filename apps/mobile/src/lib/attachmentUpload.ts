@@ -184,6 +184,7 @@ function uploadedReference(
         type: "file",
         ...fields,
         ...(attachment.source ? { source: attachment.source } : {}),
+        ...(attachment.threadTitle !== undefined ? { threadTitle: attachment.threadTitle } : {}),
       };
 }
 

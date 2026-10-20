@@ -21,8 +21,10 @@ const CONTEXT_CHIP_PRESENTATIONS = {
 export function composerChipSizeSuffix(record?: {
   readonly kind?: string;
   readonly sizeBytes?: number;
+  readonly threadTitle?: string;
 }): string {
   if (record?.kind !== "file" && record?.kind !== "image") return "";
+  if (record.threadTitle !== undefined) return "";
   return typeof record.sizeBytes === "number" ? formatAttachmentSize(record.sizeBytes) : "";
 }
 

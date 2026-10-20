@@ -318,6 +318,9 @@ export function useSelectedThreadRequests() {
           name: attachment.name,
           mimeType: attachment.mimeType,
           sizeBytes: attachment.sizeBytes,
+          ...(attachment.type === "file" && attachment.threadTitle !== undefined
+            ? { threadTitle: attachment.threadTitle }
+            : {}),
         })),
       );
     }

@@ -29,6 +29,7 @@ export const DraftComposerFileAttachmentSchema = Schema.Struct({
   sizeBytes: Schema.Number,
   fileUri: Schema.String,
   source: Schema.optional(PastedTextAttachmentSource),
+  threadTitle: Schema.optional(Schema.String),
   uploadedAttachmentId: Schema.optional(Schema.String),
   uploadEnvironmentId: Schema.optional(EnvironmentId),
 });

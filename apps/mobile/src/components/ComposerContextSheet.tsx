@@ -293,6 +293,9 @@ export function ComposerContextSheet(props: {
                 value={`${record.mimeType} · ${formatAttachmentSize(record.sizeBytes)}`}
               />
             ) : null}
+            {record.kind === "file" && record.threadTitle !== undefined ? (
+              <ContextField label="Thread snapshot" value={record.threadTitle} />
+            ) : null}
             {record.kind === "mention" ? (
               <ContextField label="Path" value={record.path} code />
             ) : null}

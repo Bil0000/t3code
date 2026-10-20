@@ -162,6 +162,25 @@ describe("mobile composer context", () => {
     expect(restore("deleted")?.records ?? []).toEqual([]);
     expect(createComposerContextHistory()(source)?.records).toEqual([]);
   });
+  it("uses the stored snapshot title in native editor tokens without changing the link", () => {
+    const record = {
+      ...image,
+      kind: "file" as const,
+      name: "snapshot.jsonl",
+      mimeType: "application/x-ndjson",
+      label: "PR Fix",
+      threadTitle: "[PR] Fix <label> & \\ path",
+    };
+    const text = formatComposerContextReference(record);
+    const tokens = composerContextEditorTokens(text, collectComposerInlineTokens(text), new Map(), {
+      version: 1,
+      records: [record],
+    });
+    expect(tokens).toHaveLength(1);
+    expect(tokens[0]).toMatchObject({ label: record.threadTitle, source: text });
+    expect(text.slice(tokens[0]!.start, tokens[0]!.end)).toBe(text);
+  });
+
   it("keeps exact source positions and repeated references alongside existing native tokens", () => {
     const reference = formatComposerContextReference(terminal);
     const text = `Use $babysit with $disabled $agentOnly $HOME $PATH $anything $notaskill $20 $20k and [app.ts](src/app.ts) with ${reference} then ${reference}`;

@@ -78,3 +78,14 @@ describe("pull request chip status", () => {
     ).toBe("#7079e4");
   });
 });
+
+it("keeps snapshot chips focused on the title instead of the file size", async () => {
+  const { composerChipSizeSuffix } = await import("./composerChipPresentation");
+  expect(
+    composerChipSizeSuffix({
+      kind: "file",
+      sizeBytes: 1024,
+      threadTitle: "Remote / title",
+    }),
+  ).toBe("");
+});

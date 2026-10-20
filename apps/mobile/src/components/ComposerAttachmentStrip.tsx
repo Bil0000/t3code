@@ -232,6 +232,7 @@ function ComposerFileAttachment(
   props: ComposerAttachmentThumbnailProps & { readonly attachment: DraftComposerFileAttachment },
 ) {
   const { attachment } = props;
+  const title = attachment.threadTitle ?? attachment.name;
   const style = { width: props.size, height: props.size, borderRadius: props.borderRadius };
   const canPreview = isPdfFile(attachment) && props.onPressPreview !== undefined;
   const sourceIdentifier = `draft-file:${attachment.id}`;
@@ -241,7 +242,7 @@ function ComposerFileAttachment(
       <PresentationSource identifier={sourceIdentifier}>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={`Open ${attachment.name}`}
+          accessibilityLabel={`Open ${title}`}
           disabled={!canPreview && onPressDocument === undefined}
           onPress={() =>
             canPreview
@@ -263,7 +264,7 @@ function ComposerFileAttachment(
           <PierreEntryIcon path={attachment.name} kind="file" size={props.compact ? 15 : 22} />
           {!props.compact ? (
             <Text className="w-full text-center text-2xs text-foreground" numberOfLines={1}>
-              {attachment.name}
+              {title}
             </Text>
           ) : null}
         </Pressable>

@@ -30,6 +30,7 @@ export async function threadContextAttachment(
       type: "file",
       name: transcriptFile.name,
       mimeType: transcriptFile.mimeType,
+      threadTitle: transcriptFile.threadTitle,
       sizeBytes,
       fileUri: file.uri,
     };

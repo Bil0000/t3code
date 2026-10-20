@@ -32,13 +32,13 @@ export function remainingComposerAttachmentSlots(
   return Math.max(0, PROVIDER_SEND_TURN_MAX_ATTACHMENTS - attachmentCount - pendingThreadImports);
 }
 
-export async function importComposerThreadAttachment(input: {
+export async function importComposerThreadAttachment<Attachment>(input: {
   readonly targetKey: string;
   readonly pendingImports: Map<string, number>;
   readonly countReservedAttachments: () => number;
-  readonly load: () => Promise<File>;
+  readonly load: () => Promise<Attachment>;
   readonly isActive: () => boolean;
-  readonly attach: (file: File) => Promise<boolean>;
+  readonly attach: (file: Attachment) => Promise<boolean>;
   readonly onLimitReached: () => void;
 }): Promise<void> {
   if (input.countReservedAttachments() >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {

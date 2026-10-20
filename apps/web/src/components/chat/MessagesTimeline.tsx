@@ -4437,6 +4437,7 @@ const userMessageContextPresentationRegistry = createContextPresentationRegistry
         return (
           <FileChip
             name={record.name}
+            threadTitle={record.threadTitle}
             size={size}
             isVideo={isVideo}
             theme={context.resolvedTheme}

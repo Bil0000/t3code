@@ -431,6 +431,18 @@ describe("attachmentUploadQueue", () => {
     );
   });
 
+  it("keeps the title on uploaded thread snapshot references", async () => {
+    const file = { ...makeFile("snapshot"), threadTitle: "Remote / thread" };
+    startAttachmentUpload({ environmentId: firstEnvironment, image: file });
+    await Promise.resolve();
+    const settled = awaitAttachmentUploads([file.id]);
+    TestXmlHttpRequest.requests[0]!.complete();
+    await settled;
+    expect(getUploadedAttachments({ environmentId: firstEnvironment, images: [file] })).toEqual([
+      expect.objectContaining({ name: file.name, threadTitle: file.threadTitle }),
+    ]);
+  });
+
   it("uploads generic files and sends file attachment references", async () => {
     const file = {
       ...makeFile("report"),

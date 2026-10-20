@@ -74,3 +74,17 @@ it("isProviderSendTurnSupportedImageMimeType accepts raster formats and rejects 
   assert.strictEqual(isProviderSendTurnSupportedImageMimeType("IMAGE/JPEG"), true);
   assert.strictEqual(isProviderSendTurnSupportedImageMimeType("image/svg+xml"), false);
 });
+
+it.effect("preserves thread snapshot metadata on a file attachment", () =>
+  Effect.gen(function* () {
+    const attachment = {
+      type: "file" as const,
+      id: "snapshot",
+      name: "remote-0123456789abcdef.jsonl",
+      mimeType: "application/x-ndjson",
+      sizeBytes: 1024,
+      threadTitle: "Remote / thread",
+    };
+    assert.deepStrictEqual(yield* decodeAttachment(attachment), attachment);
+  }),
+);

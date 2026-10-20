@@ -42,6 +42,7 @@ export interface DraftComposerFileAttachment {
   readonly sizeBytes: number;
   readonly fileUri: string;
   readonly source?: PastedTextAttachmentSource;
+  readonly threadTitle?: string;
   readonly uploadedAttachmentId?: string;
   readonly uploadEnvironmentId?: EnvironmentId;
 }

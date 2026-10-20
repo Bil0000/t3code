@@ -165,6 +165,7 @@ export function composerContextEditorTokens(
   text: string,
   tokens: readonly ComposerInlineToken[],
   knownSkills: { has(name: string): boolean },
+  context?: OrchestrationMessageContext,
 ) {
   const references = collectComposerContextReferences(text);
   return [
@@ -174,11 +175,18 @@ export function composerContextEditorTokens(
         (token.type !== "skill" || knownSkills.has(token.value)) &&
         !references.some((ref) => token.start < ref.end && token.end > ref.start),
     ),
-    ...references.map((ref) => ({
-      type: "context" as const,
-      value: ref.label,
-      ...ref,
-    })),
+    ...references.map((ref) => {
+      const record = context?.records.find((record) => record.contextId === ref.contextId);
+      return {
+        type: "context" as const,
+        value: ref.label,
+        ...ref,
+        label:
+          record?.kind === "file" && !("payload" in record)
+            ? (record.threadTitle ?? ref.label)
+            : ref.label,
+      };
+    }),
   ].sort((a, b) => a.start - b.start);
 }
 

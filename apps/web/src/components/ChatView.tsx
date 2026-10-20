@@ -214,6 +214,7 @@ import {
   resolvePlanFollowUpSubmission,
 } from "../proposedPlan";
 import {
+  isFileAttachment,
   DEFAULT_INTERACTION_MODE,
   MAX_TERMINALS_PER_GROUP,
   type ChatMessage,
@@ -848,10 +849,17 @@ async function rewindToMessage(input: {
         sizeBytes: file.size,
         file,
       };
-      if (message.attachments?.[index]?.type === "image") {
+      const saved = message.attachments?.[index];
+      if (saved?.type === "image") {
         images.push({ ...attachment, type: "image", previewUrl: URL.createObjectURL(file) });
       } else {
-        restoredFiles.push({ ...attachment, type: "file" });
+        restoredFiles.push({
+          ...attachment,
+          type: "file",
+          ...(saved && isFileAttachment(saved) && saved.threadTitle !== undefined
+            ? { threadTitle: saved.threadTitle }
+            : {}),
+        });
       }
     });
     store.addImages(draftTarget, images, { allowDuplicates: true });
@@ -7045,6 +7053,9 @@ export default function ChatView(props: ChatViewProps) {
             sizeBytes: attachment.sizeBytes,
             downloadable: false,
             ...(attachment.source ? { source: attachment.source } : {}),
+            ...(attachment.threadTitle !== undefined
+              ? { threadTitle: attachment.threadTitle }
+              : {}),
           },
     );
     if (!shouldQueueBehindActiveRun) {

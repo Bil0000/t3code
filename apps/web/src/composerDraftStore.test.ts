@@ -514,26 +514,27 @@ describe("composerDraftStore file attachments", () => {
     resetComposerDraftStore();
   });
 
-  it("persists uploaded file references without including file contents", () => {
-    const store = useComposerDraftStore.getState();
-    store.addFiles(threadRef, [
-      { ...makeFile("file-1"), source: { _tag: "pasted-text" as const } },
-    ]);
-    store.setFileUpload(threadRef, "file-1", TEST_ENVIRONMENT_ID, "pending-report-pdf");
+  it.each([{ source: { _tag: "pasted-text" as const } }, { threadTitle: "Remote / thread" }])(
+    "persists uploaded file metadata without file contents: %j",
+    (metadata) => {
+      const store = useComposerDraftStore.getState();
+      store.addFiles(threadRef, [{ ...makeFile("file-1"), ...metadata }]);
+      store.setFileUpload(threadRef, "file-1", TEST_ENVIRONMENT_ID, "pending-report-pdf");
 
-    const persistApi = useComposerDraftStore.persist as unknown as {
-      getOptions: () => {
-        merge: (
-          persistedState: unknown,
-          currentState: ReturnType<typeof useComposerDraftStore.getState>,
-        ) => ReturnType<typeof useComposerDraftStore.getState>;
+      const persistApi = useComposerDraftStore.persist as unknown as {
+        getOptions: () => {
+          merge: (
+            persistedState: unknown,
+            currentState: ReturnType<typeof useComposerDraftStore.getState>,
+          ) => ReturnType<typeof useComposerDraftStore.getState>;
+        };
       };
-    };
-    const options = persistApi.getOptions();
-    const persisted = partializeComposerDraftStoreState(useComposerDraftStore.getState());
+      const options = persistApi.getOptions();
+      const persisted = partializeComposerDraftStoreState(useComposerDraftStore.getState());
 
-    expect(persisted.draftsByThreadKey[threadKeyFor(threadId, TEST_ENVIRONMENT_ID)]?.files).toEqual(
-      [
+      expect(
+        persisted.draftsByThreadKey[threadKeyFor(threadId, TEST_ENVIRONMENT_ID)]?.files,
+      ).toEqual([
         {
           id: "file-1",
           name: "report.pdf",
@@ -541,26 +542,28 @@ describe("composerDraftStore file attachments", () => {
           sizeBytes: 6,
           attachmentId: "pending-report-pdf",
           environmentId: TEST_ENVIRONMENT_ID,
-          source: { _tag: "pasted-text" },
+          ...metadata,
         },
-      ],
-    );
+      ]);
 
-    const hydrated = options.merge(persisted, useComposerDraftStore.getState());
-    expect(hydrated.draftsByThreadKey[threadKeyFor(threadId, TEST_ENVIRONMENT_ID)]?.files).toEqual([
-      {
-        type: "file",
-        id: "file-1",
-        name: "report.pdf",
-        mimeType: "application/pdf",
-        sizeBytes: 6,
-        file: null,
-        uploadedAttachmentId: "pending-report-pdf",
-        uploadEnvironmentId: TEST_ENVIRONMENT_ID,
-        source: { _tag: "pasted-text" },
-      },
-    ]);
-  });
+      const hydrated = options.merge(persisted, useComposerDraftStore.getState());
+      expect(
+        hydrated.draftsByThreadKey[threadKeyFor(threadId, TEST_ENVIRONMENT_ID)]?.files,
+      ).toEqual([
+        {
+          type: "file",
+          id: "file-1",
+          name: "report.pdf",
+          mimeType: "application/pdf",
+          sizeBytes: 6,
+          file: null,
+          uploadedAttachmentId: "pending-report-pdf",
+          uploadEnvironmentId: TEST_ENVIRONMENT_ID,
+          ...metadata,
+        },
+      ]);
+    },
+  );
 
   it("persists a pending file as a needs-reattach marker instead of dropping it", () => {
     const store = useComposerDraftStore.getState();
@@ -3649,6 +3652,25 @@ describe("composerDraftStore attachment references", () => {
     store.removeFile(threadRef, "file-1");
     expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.prompt).toBe("see and ok");
   });
+
+  it.each([undefined, "[PR] New title"])(
+    "preserves the snapshot title when reattaching with replacement title %s",
+    (threadTitle) => {
+      const store = useComposerDraftStore.getState();
+      const marker = { ...makeFile("file-marker"), file: null, threadTitle: "[PR] Saved title" };
+      store.addFiles(threadRef, [marker], { appendReference: true });
+      const replacement = {
+        ...makeFile("file-repicked"),
+        ...(threadTitle !== undefined ? { threadTitle } : {}),
+      };
+      store.addFiles(threadRef, [replacement]);
+      const draft = store.getComposerDraft(threadRef);
+      expect(draft?.files[0]?.threadTitle).toBe(threadTitle ?? marker.threadTitle);
+      expect(draft?.prompt).toBe(
+        `[PR ${threadTitle ? "New" : "Saved"} title](t3-context://v1/file/file_file-repicked) `,
+      );
+    },
+  );
 
   it("moves a needs-reattach marker's chip to the re-picked file", () => {
     const store = useComposerDraftStore.getState();

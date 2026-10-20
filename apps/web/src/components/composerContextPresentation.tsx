@@ -222,6 +222,7 @@ function FileContextChip(props: {
   return (
     <FileChip
       name={props.record.name}
+      threadTitle={props.record.threadTitle}
       size={size}
       isVideo={isVideo}
       theme={resolvedTheme}

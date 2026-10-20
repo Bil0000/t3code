@@ -1,5 +1,5 @@
 import type { EnvironmentId, PullRequestContextMetadata } from "@t3tools/contracts";
-import { CircleDashedIcon, FilmIcon, ImageIcon } from "lucide-react";
+import { CircleDashedIcon, FilmIcon, ImageIcon, MessageCircleIcon } from "lucide-react";
 import {
   useState,
   type ComponentProps,
@@ -212,6 +212,7 @@ export function ImageChipButton({
 
 export function FileChip(props: {
   name: string;
+  threadTitle?: string | undefined;
   size: string;
   isVideo: boolean;
   theme: "light" | "dark";
@@ -224,6 +225,7 @@ export function FileChip(props: {
   unresolved?: boolean;
   onOpen?: (() => void) | undefined;
 }) {
+  const { threadTitle } = props;
   const content = <FileChipContent {...props} />;
   const state = props.unresolved
     ? ("unresolved" as const)
@@ -233,7 +235,12 @@ export function FileChip(props: {
   const attributes = {
     kind: props.isVideo ? "video" : "file",
     ...(state ? { state } : {}),
-    "aria-label": [props.accessibleLabel, props.suffix].filter(Boolean).join(", "),
+    "aria-label": [
+      threadTitle !== undefined ? `Thread snapshot, ${threadTitle}` : props.accessibleLabel,
+      props.suffix,
+    ]
+      .filter(Boolean)
+      .join(", "),
     "data-markdown-copy": props.copyMarkdown,
     "data-context-unresolved": props.unresolved ? "true" : undefined,
   } as const;
@@ -257,7 +264,9 @@ export function FileChip(props: {
         }
       />
       <TooltipPopup side="top" className="whitespace-pre-wrap">
-        {props.tooltip}
+        {threadTitle !== undefined
+          ? `${threadTitle}\nThread snapshot\n${props.tooltip}`
+          : props.tooltip}
       </TooltipPopup>
     </Tooltip>
   );
@@ -265,6 +274,7 @@ export function FileChip(props: {
 
 function FileChipContent(props: {
   name: string;
+  threadTitle?: string | undefined;
   size: string;
   isVideo: boolean;
   theme: "light" | "dark";
@@ -272,14 +282,20 @@ function FileChipContent(props: {
 }) {
   return (
     <>
-      {props.isVideo ? (
+      {props.threadTitle !== undefined ? (
+        <MessageCircleIcon />
+      ) : props.isVideo ? (
         <FilmIcon />
       ) : (
         <PierreEntryIcon pathValue={props.name} kind="file" theme={props.theme} />
       )}
       <ContextChipLabel className="flex items-baseline gap-[0.33em]">
-        <span className="max-w-72 truncate">{middleTruncateAttachmentName(props.name)}</span>
-        <span className="shrink-0 text-3xs text-current">{props.size}</span>
+        <span className="max-w-72 truncate">
+          {props.threadTitle ?? middleTruncateAttachmentName(props.name)}
+        </span>
+        {props.threadTitle === undefined ? (
+          <span className="shrink-0 text-3xs text-current">{props.size}</span>
+        ) : null}
         {props.suffix ? <span className="text-3xs text-current">{props.suffix}</span> : null}
       </ContextChipLabel>
     </>

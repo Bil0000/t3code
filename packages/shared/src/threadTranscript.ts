@@ -28,6 +28,7 @@ export function threadTranscriptFile(
   return {
     name: `${title}-${name.slice(-16)}.jsonl`,
     mimeType: "application/x-ndjson",
+    threadTitle: transcript.title,
     parts: [
       threadTranscriptHeader(environmentId, transcript),
       ...transcript.items.map((row) => `${JSON.stringify(row)}\n`),

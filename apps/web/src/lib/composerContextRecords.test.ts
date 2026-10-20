@@ -18,6 +18,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   asKnownContextRecord,
   attachmentContextRecord,
+  fileContextReference,
   buildMessageContext,
   composerContextImportLookupIds,
   isPullRequestSummaryContext,
@@ -747,5 +748,28 @@ describe("selectedMessageContextFragment", () => {
         markdown: `[b.ts L4](t3-context://v1/review-comment/${review.contextId})`,
       }),
     ).toBeNull();
+  });
+});
+
+describe("imported thread snapshot context", () => {
+  it("uses the thread title for draft and sent references while keeping the JSONL filename", () => {
+    const file = {
+      type: "file" as const,
+      id: "snapshot",
+      name: "Remote _ title-0123456789abcdef.jsonl",
+      mimeType: "application/x-ndjson",
+      sizeBytes: 1024,
+      file: new File(["history"], "snapshot.jsonl"),
+      threadTitle: "Remote / title",
+    };
+    expect(fileContextReference(file).label).toBe("Remote / title");
+    const record = attachmentContextRecord({ attachment: file, attachmentId: "uploaded" });
+    const context = decodeMessageContext({ version: 1, records: [record] });
+    expect(context.records[0]).toMatchObject({
+      kind: "file",
+      label: "Remote / title",
+      name: file.name,
+      threadTitle: file.threadTitle,
+    });
   });
 });

@@ -159,7 +159,7 @@ export function ComposerEditor({
     });
     confirmedTokensRef.current = tokens;
     return JSON.stringify(
-      composerContextEditorTokens(props.value, tokens, skillLabels).map((token) => {
+      composerContextEditorTokens(props.value, tokens, skillLabels, props.context).map((token) => {
         const record =
           token.type === "context"
             ? props.context?.records.find((record) => record.contextId === token.contextId)

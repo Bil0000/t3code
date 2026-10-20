@@ -2986,3 +2986,28 @@ describe("mobile composer drafts", () => {
     expect(composerAttachmentCleanupMocks.remove).not.toHaveBeenCalled();
   });
 });
+
+it("restores a thread snapshot with its title", () => {
+  const threadTitle = "Remote / thread";
+  const file = {
+    id: "snapshot",
+    type: "file",
+    name: "Remote _ thread-0123456789abcdef.jsonl",
+    mimeType: "application/x-ndjson",
+    sizeBytes: 1024,
+    fileUri: "file:///snapshot.jsonl",
+    threadTitle,
+  };
+  const draft = decodePersistedComposerState({
+    schemaVersion: 1,
+    drafts: { thread: { text: "", attachments: [file] } },
+  }).drafts.thread;
+  expect(draft?.attachments).toEqual([file]);
+  expect(draft?.context?.records[0]).toMatchObject({
+    kind: "file",
+    name: file.name,
+    label: threadTitle,
+    threadTitle,
+  });
+  expect(draft?.text).toContain("[Remote / thread](t3-context://v1/file/");
+});

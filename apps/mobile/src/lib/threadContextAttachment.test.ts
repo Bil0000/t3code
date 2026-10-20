@@ -59,7 +59,7 @@ describe("mobile thread transcript attachment", () => {
       threadId: "thread",
     });
     expect(text.endsWith("\n")).toBe(true);
-    expect(attachment).not.toHaveProperty("source");
+    expect(attachment.threadTitle).toBe(transcript.title);
   });
 
   it("rejects a file above the destination limit before writing", async () => {

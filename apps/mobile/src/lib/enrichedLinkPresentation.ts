@@ -26,6 +26,9 @@ export function enrichedContextLinkPresentation(
   return {
     color: presentation.accent,
     icon: CONTEXT_ICONS[presentation.symbol] ?? "default",
+    ...(record?.kind === "file" && !("payload" in record) && record.threadTitle !== undefined
+      ? { label: record.threadTitle }
+      : {}),
   };
 }
 

@@ -484,7 +484,10 @@ function attachmentContextRecord(
   const common = {
     version: 1 as const,
     contextId,
-    label: sanitizeComposerContextLabel(attachment.name, attachment.type),
+    label: sanitizeComposerContextLabel(
+      attachment.type === "file" ? (attachment.threadTitle ?? attachment.name) : attachment.name,
+      attachment.type,
+    ),
     attachmentId: attachment.id,
     name: attachment.name,
     mimeType: attachment.mimeType,
@@ -494,7 +497,11 @@ function attachmentContextRecord(
   // record has to say what it is or no client will offer to open it as an image.
   return attachment.type === "image" || imageMimeType(attachment) !== null
     ? { ...common, kind: "image" as const }
-    : { ...common, kind: "file" as const };
+    : {
+        ...common,
+        kind: "file" as const,
+        ...(attachment.threadTitle !== undefined ? { threadTitle: attachment.threadTitle } : {}),
+      };
 }
 
 function restoreMissingComposerFileReferences(

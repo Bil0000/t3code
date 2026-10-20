@@ -267,7 +267,7 @@ export function fileContextReference(file: ComposerFileAttachment): ComposerCont
   return {
     kind: "file",
     contextId: toKindScopedComposerContextId("file", file.id),
-    label: file.name,
+    label: file.threadTitle ?? file.name,
   };
 }
 
@@ -297,13 +297,22 @@ export function attachmentContextRecord(
   const base = {
     version: 1 as const,
     contextId: toKindScopedComposerContextId(attachment.type, attachment.id),
-    label: sanitizeComposerContextLabel(attachment.name, attachment.type),
+    label: sanitizeComposerContextLabel(
+      attachment.type === "file" ? (attachment.threadTitle ?? attachment.name) : attachment.name,
+      attachment.type,
+    ),
     attachmentId,
     name: attachment.name,
     mimeType: attachment.mimeType,
     sizeBytes: attachment.sizeBytes,
   };
-  return attachment.type === "image" ? { ...base, kind: "image" } : { ...base, kind: "file" };
+  return attachment.type === "image"
+    ? { ...base, kind: "image" }
+    : {
+        ...base,
+        kind: "file",
+        ...(attachment.threadTitle !== undefined ? { threadTitle: attachment.threadTitle } : {}),
+      };
 }
 
 export function buildMessageContext(input: {
