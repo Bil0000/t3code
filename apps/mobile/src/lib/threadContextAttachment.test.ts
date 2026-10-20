@@ -40,6 +40,10 @@ vi.mock("./composerImages", () => ({ removePersistedComposerAttachmentFile: file
 vi.mock("./uuid", () => ({ uuidv4: () => "00000000-0000-4000-8000-000000000000" }));
 
 import { threadContextAttachment } from "./threadContextAttachment";
+import {
+  composerAttachmentFileReferenceKey,
+  resolveOwnedComposerAttachmentFileUri,
+} from "./composerAttachmentFiles";
 
 const transcript = {
   threadId: ThreadId.make("thread"),
@@ -67,7 +71,7 @@ describe("mobile thread transcript attachment", () => {
       sizeBytes: new TextEncoder().encode(text).byteLength,
     });
     expect(attachment.fileUri).toMatch(
-      /^file:\/\/\/documents\/t3-composer-attachments\/00000000-0000-4000-8000-000000000000\.jsonl$/,
+      /^file:\/\/\/documents\/t3-composer-attachments\/00000000-0000-4000-8000-000000000000-thread\.jsonl$/,
     );
     expect(JSON.parse(text.trim())).toMatchObject({
       title: transcript.title,
@@ -107,6 +111,26 @@ describe("mobile thread transcript attachment", () => {
       threadContextAttachment(EnvironmentId.make("remote"), transcript, 1),
     ).rejects.toThrow();
     expect(files.write).not.toHaveBeenCalled();
+  });
+
+  it("restores a generated snapshot after the iOS app container changes", async () => {
+    const attachment = await threadContextAttachment(
+      EnvironmentId.make("remote"),
+      transcript,
+      4096,
+    );
+    const oldDocuments =
+      "file:///var/mobile/Containers/Data/Application/11111111-1111-4111-8111-111111111111/Documents";
+    const newDocuments = oldDocuments.replace(
+      "11111111-1111-4111-8111-111111111111",
+      "22222222-2222-4222-8222-222222222222",
+    );
+    const oldUri = attachment.fileUri.replace("file:///documents", oldDocuments);
+    const newUri = attachment.fileUri.replace("file:///documents", newDocuments);
+    expect(resolveOwnedComposerAttachmentFileUri(oldUri, newDocuments)).toBe(newUri);
+    expect(composerAttachmentFileReferenceKey(oldUri)).toBe(
+      composerAttachmentFileReferenceKey(newUri),
+    );
   });
 
   it("cleans up its file if writing fails", async () => {
