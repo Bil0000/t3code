@@ -5,18 +5,12 @@ import {
   DEFAULT_UNIFIED_SETTINGS,
   type IssueTrackerConnectionList,
 } from "@t3tools/contracts";
-import {
-  createMemoryHistory,
-  createRootRoute,
-  createRouter,
-  RouterProvider,
-} from "@tanstack/react-router";
-import { act, StrictMode } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { StrictMode } from "react";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { page } from "vite-plus/test/browser";
 
 import "../../index.css";
+import { act, render } from "../../../test/render";
 
 const { listBrowserImportSources, trackerState } = vi.hoisted(() => ({
   trackerState: {
@@ -121,11 +115,7 @@ vi.mock(import("./SettingsScopeContext"), async (importOriginal) => {
 
 import { IntegrationsSettingsPanel } from "./IntegrationsSettings";
 
-let root: Root;
-let container: HTMLDivElement;
-
-beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+function setup() {
   listBrowserImportSources.mockClear();
   trackerState.environmentId = null;
   trackerState.phase = "connected";
@@ -133,69 +123,50 @@ beforeEach(() => {
   trackerState.data = null;
   trackerState.connections.mockReset().mockReturnValue(trackerState.connections);
   trackerState.connect.mockReset().mockResolvedValue({ _tag: "Success", value: undefined });
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
-});
-
-afterEach(async () => {
-  await act(async () => root.unmount());
-  container.remove();
-  vi.unstubAllGlobals();
-});
+}
 
 async function openSettings() {
-  const router = createRouter({
-    routeTree: createRootRoute({ component: IntegrationsSettingsPanel }),
-    history: createMemoryHistory(),
-  });
-  await router.load();
-  await act(async () =>
-    root.render(
+  await using stack = new AsyncDisposableStack();
+  const screen = stack.use(
+    await render(
       <StrictMode>
-        <RouterProvider router={router} />
+        <IntegrationsSettingsPanel />
       </StrictMode>,
     ),
   );
-  await vi.waitFor(() => expect(container.querySelector("section#browser")).not.toBeNull());
+  await vi.waitFor(() => expect(screen.container.querySelector("section#browser")).not.toBeNull());
+  stack.move();
+  return screen;
 }
 
 describe("Integrations browser discovery", () => {
   it("keeps agent browser access in the single Browser section", async () => {
-    await openSettings();
+    setup();
+    await using screen = await openSettings();
 
     expect(page.getByRole("heading", { name: "Browser", exact: true }).elements()).toHaveLength(1);
     const access = page.getByRole("switch", { name: "Agent browser access", exact: true });
     await expect.element(access).toBeVisible();
-    expect(access.element().closest("section")).toBe(container.querySelector("section#browser"));
+    expect(access.element().closest("section")).toBe(
+      screen.container.querySelector("section#browser"),
+    );
     expect(access.element().closest("#agent-browser-access")).not.toBeNull();
   });
 
   it("does not scan browser files when entering or revisiting settings", async () => {
-    await openSettings();
+    setup();
+    await using first = await openSettings();
     expect(listBrowserImportSources).not.toHaveBeenCalled();
 
-    await act(async () => root.unmount());
-    root = createRoot(container);
-    await openSettings();
+    await first.unmount();
+    await using _second = await openSettings();
     expect(listBrowserImportSources).not.toHaveBeenCalled();
   });
 });
 
-async function openIntegrationsDom() {
-  const router = createRouter({
-    routeTree: createRootRoute({ component: IntegrationsSettingsPanel }),
-    history: createMemoryHistory(),
-  });
-  await router.load();
-  await act(async () => {
-    trackerState.scopeListeners.forEach((listener) => listener());
-    root.render(<RouterProvider router={router} />);
-  });
-}
-
 describe("Integrations issue tracker setup", () => {
   it.each(["linear", "jira"] as const)("connects %s in the selected environment", async (kind) => {
+    setup();
     const tracker = IssueTrackerKind.make(kind);
     const displayName = kind === "linear" ? "Linear" : "Jira";
     trackerState.environmentId = "remote";
@@ -217,12 +188,13 @@ describe("Integrations issue tracker setup", () => {
       projectBindings: {},
       bindings: {},
     };
-    await openIntegrationsDom();
-    const section = container!.querySelector<HTMLElement>("#issue-trackers");
+    await using screen = await render(<IntegrationsSettingsPanel />);
+    await act(() => screen.router!.load());
+    const section = screen.container.querySelector<HTMLElement>("#issue-trackers");
     expect(section).not.toBeNull();
     expect(section!.textContent).toContain(displayName);
-    expect([...container!.querySelectorAll("section")].indexOf(section!)).toBeLessThan(
-      [...container!.querySelectorAll("section")].findIndex((item) => item.id === "browser"),
+    expect([...screen.container.querySelectorAll("section")].indexOf(section!)).toBeLessThan(
+      [...screen.container.querySelectorAll("section")].findIndex((item) => item.id === "browser"),
     );
     const credential = section!.querySelector<HTMLInputElement>('input[type="password"]')!;
     expect(credential).not.toBeNull();
@@ -252,12 +224,15 @@ describe("Integrations issue tracker setup", () => {
     expect(credential.value).toBe("fake-unsaved-draft");
     trackerState.environmentId = "local";
     trackerState.canEdit = false;
-    await openIntegrationsDom();
+    await act(async () => {
+      trackerState.scopeListeners.forEach((listener) => listener());
+      await screen.rerender(<IntegrationsSettingsPanel />);
+    });
     expect(trackerState.connections).toHaveBeenLastCalledWith({
       environmentId: "local",
       input: {},
     });
-    const localSection = container!.querySelector("#issue-trackers")!;
+    const localSection = screen.container.querySelector("#issue-trackers")!;
     expect(localSection.querySelector<HTMLInputElement>('input[type="password"]')!.value).toBe("");
     expect(localSection.querySelector("fieldset")!.disabled).toBe(true);
     await act(async () => {
@@ -271,11 +246,13 @@ describe("Integrations issue tracker setup", () => {
   it.each([null, "disconnected"])(
     "does not load tracker setup for an unavailable environment (%s)",
     async (phase) => {
+      setup();
       trackerState.environmentId = phase === null ? null : "remote";
       trackerState.phase = phase ?? "connected";
-      await openIntegrationsDom();
+      await using screen = await render(<IntegrationsSettingsPanel />);
+      await act(() => screen.router!.load());
       expect(trackerState.connections).not.toHaveBeenCalled();
-      expect(container!.querySelector("#issue-trackers")).toBeNull();
+      expect(screen.container.querySelector("#issue-trackers")).toBeNull();
     },
   );
 });
