@@ -1,6 +1,5 @@
 import { createIssueTestRoot, makeIssueTestSession, setIssueTestValue } from "./issueTestUtils";
 
-import type { createIssueEnvironmentTestRuntime } from "./issueEnvironmentTestkit";
 import { RegistryContext } from "@effect/atom-react";
 import {
   AuthOrchestrationReadScope,
@@ -47,11 +46,9 @@ vi.mock("~/state/query", async (importOriginal) => ({
 vi.mock("@t3tools/client-runtime/state/session", { spy: true });
 vi.mock("~/state/issues", async (importOriginal) => {
   const { createIssueEnvironmentAtoms } = await import("@t3tools/client-runtime/state/issues");
-  const { createIssueTestRuntime } = await vi.importActual<{
-    createIssueTestRuntime: () => ReturnType<typeof createIssueEnvironmentTestRuntime>;
-  }>("../../../../../packages/client-runtime/src/state/issues.testkit");
+  const { createIssueEnvironmentTestRuntime } = await import("./issueEnvironmentTestkit");
   const Session = await import("@t3tools/client-runtime/state/session");
-  const runtime = createIssueTestRuntime();
+  const runtime = createIssueEnvironmentTestRuntime("none");
   const sessions = Session.createEnvironmentSessionAtoms(runtime);
   const sessionFactory = vi.mocked(Session.createEnvironmentSessionAtoms).mockReturnValue({
     ...sessions,

@@ -16,7 +16,7 @@ import * as EnvironmentRegistry from "../connection/registry.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import { createIssueEnvironmentAtoms, issueEntryKey, refreshIssueListPage } from "./issues.ts";
 
-export const createIssueTestRuntime = () => {
+const createIssueTestRuntime = () => {
   const supervisor = {} as EnvironmentSupervisor.EnvironmentSupervisor["Service"];
   return Atom.runtime(
     Layer.succeed(
