@@ -171,7 +171,7 @@ import {
   clearBackgroundDraftSubmissionByRef,
   composerDraftHasUserContent,
   finalizePromotedDraftThreadByRef,
-  restoreFailedBackgroundDraftThread,
+  restoreFailedDraftThread,
   useComposerDraftStore,
 } from "~/composerDraftStore";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
@@ -424,7 +424,7 @@ it("keeps the issue after failed creation and links on retry with a replacement 
     detail.url,
   );
   const retryThreadId = ThreadId.make("retry-thread");
-  restoreFailedBackgroundDraftThread(draftId, draft, retryThreadId);
+  restoreFailedDraftThread(draftId, draft, retryThreadId);
   state.launchError = null;
   expect((await send(target, retryThreadId))._tag).toBe("Success");
   expect(state.calls.at(-1)?.input.threadId).toBe(retryThreadId);
@@ -483,7 +483,7 @@ it.each([
   release.resolve();
   expect((await sending)._tag).toBe("Failure");
   if (mode === "background") {
-    restoreFailedBackgroundDraftThread(draftId, draft, ThreadId.make("retry-thread"));
+    restoreFailedDraftThread(draftId, draft, ThreadId.make("retry-thread"));
     clearBackgroundDraftSubmissionByRef(target.threadRef);
   }
   expect(store.restoreSubmittedDraft(draftId, submitted)).toBe(newer === "none");

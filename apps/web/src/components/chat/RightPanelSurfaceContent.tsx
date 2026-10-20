@@ -112,6 +112,7 @@ export function RightPanelSurfaceContent(props: {
             mode="embedded"
             composerDraftTarget={props.composerDraftTarget}
             workspaceMutationId={props.workspaceMutationId}
+            visible={visible}
           />
         </Suspense>
       );
@@ -122,7 +123,7 @@ export function RightPanelSurfaceContent(props: {
           environmentById={props.environmentById}
           getShortcutContext={props.getShortcutContext}
           shortcutsEnabled={visible && props.activeSurfaceId === surface.id}
-          key={surface.id}
+          key={`${scopedThreadKey(threadRef)}:${surface.id}`}
           environmentId={
             (surface.environmentId as EnvironmentId | undefined) ?? props.environmentId
           }
@@ -143,6 +144,10 @@ export function RightPanelSurfaceContent(props: {
             ...(surface.host ? { host: surface.host } : {}),
             repository: surface.repository,
             number: surface.number,
+          }}
+          initialTab={surface.detailTab ?? "summary"}
+          onTabChange={(tab) => {
+            useRightPanelStore.getState().setPullRequestDetailTab(threadRef, surface.id, tab);
           }}
           context={pullRequestPanelContext(
             {
@@ -194,6 +199,7 @@ export function RightPanelSurfaceContent(props: {
             composerDraftTarget={props.composerDraftTarget}
             keybindings={props.keybindings}
             availableEditors={files.availableEditors}
+            openInShortcutEnabled={visible}
             relativePath={surface.kind === "file" ? surface.relativePath : null}
             {...(attachment ? { attachment } : {})}
             revealLine={surface.kind === "file" ? (surface.revealLine ?? null) : null}

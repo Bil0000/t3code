@@ -30,8 +30,8 @@ const seedPreview = Effect.gen(function* () {
   `;
 });
 
-const seedIssuePreview = Effect.fnUntraced(function* (throughId: number) {
-  yield* runMigrations({ toMigrationInclusive: 62 });
+const seedIssuePreview = Effect.fnUntraced(function* (throughId: number, startId = 63) {
+  yield* runMigrations({ toMigrationInclusive: startId - 1 });
   return yield* Migrator.make({})({
     loader: Migrator.fromRecord(
       Object.fromEntries(
@@ -43,6 +43,7 @@ const seedIssuePreview = Effect.fnUntraced(function* (throughId: number) {
             [66, "IssueAccountStorage", IssueAccountStorage],
           ] as const
         )
+          .map(([id, name, migration]) => [id + startId - 63, name, migration] as const)
           .filter(([id]) => id <= throughId)
           .map(([id, name, migration]) => [`${id}_${name}`, migration]),
       ),
@@ -51,21 +52,33 @@ const seedIssuePreview = Effect.fnUntraced(function* (throughId: number) {
 });
 
 describe("Issues preview upgrade", () => {
-  it.effect.each([63, 64, 65, 66])(
-    "preserves data and canonical history from preview migration %s",
-    (throughId) =>
+  it.effect.each(
+    [63, 65].flatMap((startId) =>
+      [0, 1, 2, 3].map((offset) => ({ startId, throughId: startId + offset })),
+    ),
+  )(
+    "preserves data and canonical history from preview $startId through $throughId",
+    ({ startId, throughId }) =>
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
-        yield* seedIssuePreview(throughId);
+        yield* seedIssuePreview(throughId, startId);
+        const legacyThroughId = throughId - startId + 63;
         yield* sql`UPDATE effect_sql_migrations SET created_at = '2026-10-15 00:00:00'
-          WHERE migration_id >= 63`;
+          WHERE migration_id >= ${startId}`;
         const oldHistory = yield* sql<{ migration_id: number; name: string; created_at: string }>`
           SELECT migration_id, name, created_at FROM effect_sql_migrations
-          WHERE migration_id >= 63 ORDER BY migration_id`;
+          WHERE migration_id >= ${startId} ORDER BY migration_id`;
         const historyBefore = yield* sql`SELECT * FROM effect_sql_migrations ORDER BY migration_id`;
         const schemaBefore = yield* sql`SELECT name, sql FROM sqlite_master ORDER BY name`;
-        assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 62 }), []);
-        assert.ok(Exit.isFailure(yield* Effect.exit(runMigrations({ toMigrationInclusive: 63 }))));
+        assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: startId - 1 }), []);
+        assert.ok(
+          Exit.isFailure(yield* Effect.exit(runMigrations({ toMigrationInclusive: startId }))),
+        );
+        if (startId === 63) {
+          assert.ok(
+            Exit.isFailure(yield* Effect.exit(runMigrations({ toMigrationInclusive: 65 }))),
+          );
+        }
         assert.deepStrictEqual(
           yield* sql`SELECT * FROM effect_sql_migrations ORDER BY migration_id`,
           historyBefore,
@@ -74,12 +87,12 @@ describe("Issues preview upgrade", () => {
           yield* sql`SELECT name, sql FROM sqlite_master ORDER BY name`,
           schemaBefore,
         );
-        if (throughId >= 65) {
+        if (legacyThroughId >= 65) {
           yield* sql`INSERT INTO issue_tracker_accounts
             VALUES ('linear', 'Account', 'linear.app', 'native-account')`;
         }
         const storedTracker =
-          throughId === 66
+          legacyThroughId === 66
             ? JSON.stringify({ tracker: "linear", connectionId: "Account" })
             : "linear";
         yield* sql`INSERT INTO issue_tracker_bindings ${sql.insert({
@@ -87,26 +100,44 @@ describe("Issues preview upgrade", () => {
           tracker: storedTracker,
           scope: "acme/ENG",
           updated_at: "2026-10-15T00:00:00Z",
-          ...(throughId >= 64 ? { host: "linear.app" } : {}),
-          ...(throughId >= 65 ? { connection_id: "Account" } : {}),
-          ...(throughId >= 66 ? { native_tracker: "linear" } : {}),
+          ...(legacyThroughId >= 64 ? { host: "linear.app" } : {}),
+          ...(legacyThroughId >= 65 ? { connection_id: "Account" } : {}),
+          ...(legacyThroughId >= 66 ? { native_tracker: "linear" } : {}),
         })}`;
         const selectedProject = { value: "project", connectionId: "Account" };
         const issue = {
-          projectId: throughId === 66 ? selectedProject : "project",
-          ...(throughId === 65 ? { connectionId: "Account" } : {}),
+          projectId: legacyThroughId === 66 ? selectedProject : "project",
+          ...(legacyThroughId === 65 ? { connectionId: "Account" } : {}),
           tracker: "linear",
           key: "ENG-7",
           preserved: "issue-data",
         };
         const payload = JSON.stringify({
           issues: [issue],
-          linkedPullRequest: {
-            projectId: "project",
-            repository: "acme/web",
-            number: 42,
-            url: "https://github.com/acme/web/pull/42",
-          },
+          ...(startId === 63
+            ? {
+                linkedPullRequest: {
+                  projectId: "project",
+                  repository: "acme/web",
+                  number: 42,
+                  url: "https://github.com/acme/web/pull/42",
+                },
+              }
+            : {
+                pullRequests: [
+                  {
+                    provider: "github",
+                    host: "github.com",
+                    repository: "acme/web",
+                    number: 42,
+                    url: "https://github.com/acme/web/pull/42",
+                    source: "manual",
+                    linkedAt: "2026-10-15T00:00:00Z",
+                    snapshot: null,
+                    stack: null,
+                  },
+                ],
+              }),
           preserved: "thread-data",
         });
         yield* sql`INSERT INTO orchestration_v2_projection_threads
@@ -115,10 +146,18 @@ describe("Issues preview upgrade", () => {
           VALUES ('thread', 'project', 'Thread', 'codex', 'full-access', 'default',
             '2026-10-15T00:00:00Z', '2026-10-15T00:00:00Z', ${payload})`;
 
-        assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 64 }), [
-          [63, "DropUnusedV1Projections"],
-          [64, "CanonicalizeThreadPullRequestLinks"],
-        ]);
+        assert.deepStrictEqual(
+          yield* runMigrations({ toMigrationInclusive: startId + 1 }),
+          startId === 63
+            ? [
+                [63, "DropUnusedV1Projections"],
+                [64, "CanonicalizeThreadPullRequestLinks"],
+              ]
+            : [
+                [65, "CodexUsageNativeTurnIndex"],
+                [66, "RepairClientSettlementTimestamps"],
+              ],
+        );
         yield* runMigrations();
         assert.deepStrictEqual(yield* runMigrations(), []);
         const history = yield* sql<{ migration_id: number; name: string }>`
@@ -128,13 +167,13 @@ describe("Issues preview upgrade", () => {
           migrationManifest,
         );
         const shiftedHistory = yield* sql`SELECT migration_id, name, created_at
-          FROM effect_sql_migrations WHERE migration_id BETWEEN 65 AND ${throughId + 2}
+          FROM effect_sql_migrations WHERE migration_id BETWEEN 67 AND ${throughId + 67 - startId}
           ORDER BY migration_id`;
         assert.deepStrictEqual(
           shiftedHistory,
           oldHistory.map((row) => ({
             ...row,
-            migration_id: row.migration_id + 2,
+            migration_id: row.migration_id + 67 - startId,
           })),
         );
         const bindings = yield* sql`SELECT * FROM issue_tracker_bindings`;
@@ -142,19 +181,19 @@ describe("Issues preview upgrade", () => {
           {
             project_id: "project",
             tracker:
-              throughId >= 65
+              legacyThroughId >= 65
                 ? JSON.stringify({ tracker: "linear", connectionId: "Account" })
                 : "linear",
             native_tracker: "linear",
             scope: "acme/ENG",
-            host: throughId >= 64 ? "linear.app" : null,
-            connection_id: throughId >= 65 ? "Account" : null,
+            host: legacyThroughId >= 64 ? "linear.app" : null,
+            connection_id: legacyThroughId >= 65 ? "Account" : null,
             updated_at: "2026-10-15T00:00:00Z",
           },
         ]);
         assert.deepStrictEqual(
           yield* sql`SELECT * FROM issue_tracker_accounts`,
-          throughId >= 65
+          legacyThroughId >= 65
             ? [
                 {
                   tracker: "linear",
@@ -172,7 +211,7 @@ describe("Issues preview upgrade", () => {
         assert.deepStrictEqual(stored.issues, [
           {
             ...expectedIssue,
-            projectId: throughId >= 65 ? selectedProject : "project",
+            projectId: legacyThroughId >= 65 ? selectedProject : "project",
           },
         ]);
         assert.equal(stored.preserved, "thread-data");
@@ -181,45 +220,58 @@ describe("Issues preview upgrade", () => {
       }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
-  it.effect("upgrades released main 64 to Issues without changing released history", () =>
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 64 });
-      const released = yield* sql`SELECT * FROM effect_sql_migrations ORDER BY migration_id`;
-      assert.deepStrictEqual(yield* runMigrations(), [
-        [65, "IssueTrackerBindings"],
-        [66, "IssueTrackerBindingHost"],
-        [67, "IssueTrackerAccounts"],
-        [68, "IssueAccountStorage"],
-      ]);
-      assert.deepStrictEqual(
-        yield* sql`SELECT * FROM effect_sql_migrations
-        WHERE migration_id <= 64 ORDER BY migration_id`,
-        released,
-      );
-      assert.deepStrictEqual(yield* runMigrations(), []);
-    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  it.effect.each([64, 66])(
+    "upgrades released main %s to Issues without changing released history",
+    (releasedId) =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: releasedId });
+        const released = yield* sql`SELECT * FROM effect_sql_migrations ORDER BY migration_id`;
+        assert.deepStrictEqual(yield* runMigrations(), [
+          ...(releasedId === 64
+            ? ([
+                [65, "CodexUsageNativeTurnIndex"],
+                [66, "RepairClientSettlementTimestamps"],
+              ] as const)
+            : []),
+          [67, "IssueTrackerBindings"],
+          [68, "IssueTrackerBindingHost"],
+          [69, "IssueTrackerAccounts"],
+          [70, "IssueAccountStorage"],
+        ]);
+        assert.deepStrictEqual(
+          yield* sql`SELECT * FROM effect_sql_migrations
+        WHERE migration_id <= ${releasedId} ORDER BY migration_id`,
+          released,
+        );
+        assert.deepStrictEqual(yield* runMigrations(), []);
+      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
-  it.effect("rolls back schema and history on a ledger write failure and can retry", () =>
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* seedIssuePreview(66);
-      const history = yield* sql`SELECT * FROM effect_sql_migrations ORDER BY migration_id`;
-      const schema = yield* sql`SELECT name, sql FROM sqlite_master ORDER BY name`;
-      yield* sql`CREATE TRIGGER fail_issue_upgrade BEFORE INSERT ON effect_sql_migrations
-        WHEN NEW.name = 'CanonicalizeThreadPullRequestLinks'
+  it.effect.each([63, 65])(
+    "rolls back preview %s schema and history on a ledger write failure and can retry",
+    (startId) =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* seedIssuePreview(startId + 3, startId);
+        const history = yield* sql`SELECT * FROM effect_sql_migrations ORDER BY migration_id`;
+        const schema = yield* sql`SELECT name, sql FROM sqlite_master ORDER BY name`;
+        yield* sql`CREATE TRIGGER fail_issue_upgrade BEFORE INSERT ON effect_sql_migrations
+        WHEN NEW.name IN ('CanonicalizeThreadPullRequestLinks', 'RepairClientSettlementTimestamps')
         BEGIN SELECT RAISE(ABORT, 'injected failure'); END`;
-      assert.ok(Exit.isFailure(yield* Effect.exit(runMigrations())));
-      assert.deepStrictEqual(
-        yield* sql`SELECT * FROM effect_sql_migrations ORDER BY migration_id`,
-        history,
-      );
-      yield* sql`DROP TRIGGER fail_issue_upgrade`;
-      assert.deepStrictEqual(yield* sql`SELECT name, sql FROM sqlite_master ORDER BY name`, schema);
-      yield* runMigrations();
-      assert.deepStrictEqual(yield* runMigrations(), []);
-    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+        assert.ok(Exit.isFailure(yield* Effect.exit(runMigrations())));
+        assert.deepStrictEqual(
+          yield* sql`SELECT * FROM effect_sql_migrations ORDER BY migration_id`,
+          history,
+        );
+        yield* sql`DROP TRIGGER fail_issue_upgrade`;
+        assert.deepStrictEqual(
+          yield* sql`SELECT name, sql FROM sqlite_master ORDER BY name`,
+          schema,
+        );
+        yield* runMigrations();
+        assert.deepStrictEqual(yield* runMigrations(), []);
+      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
   it.effect("wraps an invalid legacy PR link and rolls back schema and history before retry", () =>
@@ -257,18 +309,22 @@ describe("Issues preview upgrade", () => {
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
-  it.effect.each(["later", "renamed", "gap"])(
-    "rejects %s preview history without changing data or history",
-    (invalidHistory) =>
+  it.effect.each(
+    [63, 65].flatMap((startId) =>
+      ["later", "renamed", "gap"].map((invalidHistory) => ({ startId, invalidHistory })),
+    ),
+  )(
+    "rejects $invalidHistory preview $startId history without changing data or history",
+    ({ startId, invalidHistory }) =>
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
-        yield* seedIssuePreview(66);
+        yield* seedIssuePreview(startId + 3, startId);
         if (invalidHistory === "later") {
-          yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (67, 'UnknownFork')`;
+          yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (${startId + 4}, 'UnknownFork')`;
         } else if (invalidHistory === "renamed") {
-          yield* sql`UPDATE effect_sql_migrations SET name = 'UnknownFork' WHERE migration_id = 64`;
+          yield* sql`UPDATE effect_sql_migrations SET name = 'UnknownFork' WHERE migration_id = ${startId + 1}`;
         } else {
-          yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id = 64`;
+          yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id = ${startId + 1}`;
         }
         const history = yield* sql`SELECT * FROM effect_sql_migrations ORDER BY migration_id`;
         const schema = yield* sql`SELECT name, sql FROM sqlite_master ORDER BY name`;
@@ -310,10 +366,12 @@ describe("V2 preview upgrade", () => {
         [62, "ThreadFailureLookupIndex"],
         [63, "DropUnusedV1Projections"],
         [64, "CanonicalizeThreadPullRequestLinks"],
-        [65, "IssueTrackerBindings"],
-        [66, "IssueTrackerBindingHost"],
-        [67, "IssueTrackerAccounts"],
-        [68, "IssueAccountStorage"],
+        [65, "CodexUsageNativeTurnIndex"],
+        [66, "RepairClientSettlementTimestamps"],
+        [67, "IssueTrackerBindings"],
+        [68, "IssueTrackerBindingHost"],
+        [69, "IssueTrackerAccounts"],
+        [70, "IssueAccountStorage"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -401,10 +459,12 @@ describe("V2 preview upgrade", () => {
         [62, "ThreadFailureLookupIndex"],
         [63, "DropUnusedV1Projections"],
         [64, "CanonicalizeThreadPullRequestLinks"],
-        [65, "IssueTrackerBindings"],
-        [66, "IssueTrackerBindingHost"],
-        [67, "IssueTrackerAccounts"],
-        [68, "IssueAccountStorage"],
+        [65, "CodexUsageNativeTurnIndex"],
+        [66, "RepairClientSettlementTimestamps"],
+        [67, "IssueTrackerBindings"],
+        [68, "IssueTrackerBindingHost"],
+        [69, "IssueTrackerAccounts"],
+        [70, "IssueAccountStorage"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

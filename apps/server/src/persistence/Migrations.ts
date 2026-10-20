@@ -67,10 +67,12 @@ import Migration0061 from "./Migrations/061_PullRequestReviewGuides.ts";
 import Migration0062 from "./Migrations/062_ThreadFailureLookupIndex.ts";
 import Migration0063 from "./Migrations/063_DropUnusedV1Projections.ts";
 import Migration0064 from "./Migrations/064_CanonicalizeThreadPullRequestLinks.ts";
-import Migration0065 from "./Migrations/063_IssueTrackerBindings.ts";
-import Migration0066 from "./Migrations/064_IssueTrackerBindingHost.ts";
-import Migration0067 from "./Migrations/065_IssueTrackerAccounts.ts";
-import Migration0068 from "./Migrations/066_IssueAccountStorage.ts";
+import Migration0065 from "./Migrations/065_CodexUsageNativeTurnIndex.ts";
+import Migration0066 from "./Migrations/066_RepairClientSettlementTimestamps.ts";
+import Migration0067 from "./Migrations/063_IssueTrackerBindings.ts";
+import Migration0068 from "./Migrations/064_IssueTrackerBindingHost.ts";
+import Migration0069 from "./Migrations/065_IssueTrackerAccounts.ts";
+import Migration0070 from "./Migrations/066_IssueAccountStorage.ts";
 
 export const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -138,10 +140,12 @@ export const migrationEntries = [
   [62, "ThreadFailureLookupIndex", Migration0062],
   [63, "DropUnusedV1Projections", Migration0063],
   [64, "CanonicalizeThreadPullRequestLinks", Migration0064],
-  [65, "IssueTrackerBindings", Migration0065],
-  [66, "IssueTrackerBindingHost", Migration0066],
-  [67, "IssueTrackerAccounts", Migration0067],
-  [68, "IssueAccountStorage", Migration0068],
+  [65, "CodexUsageNativeTurnIndex", Migration0065],
+  [66, "RepairClientSettlementTimestamps", Migration0066],
+  [67, "IssueTrackerBindings", Migration0067],
+  [68, "IssueTrackerBindingHost", Migration0068],
+  [69, "IssueTrackerAccounts", Migration0069],
+  [70, "IssueAccountStorage", Migration0070],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -195,7 +199,9 @@ const assertV2MigrationsCanRun = Effect.fn("assertV2MigrationsCanRun")(function*
   });
 });
 
-const reconcileIssueMigrations = Effect.fn("reconcileIssueMigrations")(function* () {
+const reconcileIssueMigrations = Effect.fn("reconcileIssueMigrations")(function* (
+  throughId?: number,
+) {
   const sql = yield* SqlClient.SqlClient;
   return yield* sql.withTransaction(
     Effect.gen(function* () {
@@ -207,9 +213,13 @@ const reconcileIssueMigrations = Effect.fn("reconcileIssueMigrations")(function*
         SELECT migration_id, name FROM effect_sql_migrations
         WHERE migration_id >= 63 ORDER BY migration_id
       `;
-      if (history[0]?.migration_id !== 63 || history[0].name !== "IssueTrackerBindings") {
+      const firstIssueId = history.find((row) => row.name === "IssueTrackerBindings")?.migration_id;
+      if (firstIssueId !== 63 && firstIssueId !== 65) {
         return [];
       }
+      const targetIssueId = throughId !== undefined && throughId < 66 ? 65 : 67;
+      if (firstIssueId >= targetIssueId || throughId === 65) return [];
+      const issueHistory = history.filter((row) => row.migration_id >= firstIssueId);
       const expected = [
         "IssueTrackerBindings",
         "IssueTrackerBindingHost",
@@ -217,8 +227,8 @@ const reconcileIssueMigrations = Effect.fn("reconcileIssueMigrations")(function*
         "IssueAccountStorage",
       ];
       if (
-        !history.every(
-          (row, index) => row.migration_id === 63 + index && row.name === expected[index],
+        !issueHistory.every(
+          (row, index) => row.migration_id === firstIssueId + index && row.name === expected[index],
         )
       ) {
         return yield* new Migrator.MigrationError({
@@ -226,30 +236,35 @@ const reconcileIssueMigrations = Effect.fn("reconcileIssueMigrations")(function*
           message: "Cannot upgrade Issues preview with unexpected later migrations.",
         });
       }
-      yield* assertV2MigrationsCanRun(62);
-      yield* Migration0063;
-      yield* Migration0064.pipe(
-        Effect.catchTags({
-          SchemaError: (cause) =>
-            Effect.fail(
-              new Migrator.MigrationError({
-                kind: "Failed",
-                message: 'Migration "64_CanonicalizeThreadPullRequestLinks" failed',
-                cause,
-              }),
-            ),
-        }),
-      );
-      for (const row of history.toReversed()) {
-        yield* sql`UPDATE effect_sql_migrations SET migration_id = ${row.migration_id + 2}
+      yield* assertV2MigrationsCanRun(firstIssueId - 1);
+      const missing = migrationEntries.filter(([id]) => id >= firstIssueId && id < targetIssueId);
+      if (firstIssueId === 63) {
+        yield* Migration0063;
+        yield* Migration0064.pipe(
+          Effect.catchTags({
+            SchemaError: (cause) =>
+              Effect.fail(
+                new Migrator.MigrationError({
+                  kind: "Failed",
+                  message: 'Migration "64_CanonicalizeThreadPullRequestLinks" failed',
+                  cause,
+                }),
+              ),
+          }),
+        );
+      }
+      if (targetIssueId === 67) {
+        yield* Migration0065;
+        yield* Migration0066;
+      }
+      for (const row of issueHistory.toReversed()) {
+        yield* sql`UPDATE effect_sql_migrations SET migration_id = ${row.migration_id + targetIssueId - firstIssueId}
           WHERE migration_id = ${row.migration_id} AND name = ${row.name}`;
       }
-      yield* sql`INSERT INTO effect_sql_migrations (migration_id, name)
-        VALUES (63, 'DropUnusedV1Projections'), (64, 'CanonicalizeThreadPullRequestLinks')`;
-      return [
-        [63, "DropUnusedV1Projections"],
-        [64, "CanonicalizeThreadPullRequestLinks"],
-      ] as const;
+      for (const [id, name] of missing) {
+        yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (${id}, ${name})`;
+      }
+      return missing.map(([id, name]) => [id, name] as const);
     }),
   );
 });
@@ -268,7 +283,7 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
   const previewMigrations = includesV2 ? yield* reconcileV2PreviewMigration() : [];
   const issueMigrations =
     toMigrationInclusive === undefined || toMigrationInclusive >= 64
-      ? yield* reconcileIssueMigrations()
+      ? yield* reconcileIssueMigrations(toMigrationInclusive)
       : [];
   if (includesV2) {
     yield* assertV2MigrationsCanRun(toMigrationInclusive);

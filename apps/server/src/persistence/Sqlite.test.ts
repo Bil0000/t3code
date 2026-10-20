@@ -73,8 +73,8 @@ it.effect("upgrades an Issues preview file and keeps account bindings after reop
         loader: Migrator.fromRecord(
           Object.fromEntries(
             migrationEntries
-              .filter(([id]) => id >= 65)
-              .map(([id, name, migration]) => [`${id - 2}_${name}`, migration]),
+              .filter(([id]) => id >= 67)
+              .map(([id, name, migration]) => [`${id - 4}_${name}`, migration]),
           ),
         ),
       });
@@ -110,8 +110,8 @@ it.effect("upgrades an Issues preview file and keeps account bindings after reop
         assert.deepStrictEqual(yield* sql`PRAGMA foreign_key_check`, []);
         assert.deepStrictEqual(
           yield* sql`SELECT migration_id, name FROM effect_sql_migrations
-          WHERE migration_id = 68`,
-          [{ migration_id: 68, name: "IssueAccountStorage" }],
+          WHERE migration_id = 70`,
+          [{ migration_id: 70, name: "IssueAccountStorage" }],
         );
       }).pipe(
         Effect.provide(

@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 import type { NativeStackHeaderItem } from "@react-navigation/native-stack";
 import { act, createContext, use } from "react";
 import { createRoot, type Root } from "react-dom/client";

@@ -1,6 +1,7 @@
 import type { PullRequestAction } from "@t3tools/contracts";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { SearchIcon } from "lucide-react";
+import { PullRequestChangeBreakdownStat } from "./PullRequestChangeBreakdownStat";
 import { PullRequestStackPopover } from "./PullRequestStackPopover";
 import {
   PullRequestSpeedActions,
@@ -24,7 +25,7 @@ import {
   PullRequestRowLabels,
   PullRequestRowLines,
 } from "./PullRequestListRow";
-import { PullRequestDiffStat, PullRequestReviewDecisionGlyph } from "./pullRequestPresentation";
+import { PullRequestReviewDecisionGlyph } from "./pullRequestPresentation";
 
 export type PullRequestRowTarget = Pick<
   EnvironmentPullRequestEntry,
@@ -142,7 +143,14 @@ function PullRequestRowImpl({
                   }
                 />
               ) : null}
-              <PullRequestDiffStat
+              <PullRequestChangeBreakdownStat
+                environmentId={entry.environmentId}
+                reference={{
+                  projectId: entry.projectId,
+                  host: entry.host,
+                  repository: entry.repository,
+                  number: entry.number,
+                }}
                 additions={entry.additions}
                 deletions={entry.deletions}
                 className="font-mono"
