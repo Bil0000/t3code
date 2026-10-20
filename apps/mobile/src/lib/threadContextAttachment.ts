@@ -22,7 +22,7 @@ export async function threadContextAttachment(
   const { Directory, File, Paths } = await import("expo-file-system");
   const directory = new Directory(Paths.document, COMPOSER_ATTACHMENT_DIRECTORY);
   directory.create({ idempotent: true, intermediates: true });
-  const file = new File(directory, `${uuidv4()}-${transcriptFile.name}`);
+  const file = new File(directory, `${uuidv4()}.jsonl`);
   try {
     await writeFileAtomically(file, text);
     return {
