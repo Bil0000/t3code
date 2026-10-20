@@ -1,3 +1,4 @@
+import { makeIssueListEntry } from "./issue-test-fixtures";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { Atom, AtomRegistry } from "effect/reactivity";
 import {
@@ -51,26 +52,13 @@ const capabilities: IssueCapabilities = {
 };
 
 function entry(key: string, patch: Partial<IssueListEntry> = {}): IssueListEntry {
-  return {
-    tracker,
-    host: "github.com",
-    scope: "org/repo",
+  return makeIssueListEntry({
     key,
     displayKey: `#${key}`,
-    projectId: ProjectId.make("project"),
-    projectTitle: "Project",
     title: `Issue ${key}`,
     url: `https://example.com/issues/${key}`,
-    author: null,
-    state: { category: "open", name: "Open" },
-    createdAt: "2026-10-01T00:00:00Z",
-    updatedAt: "2026-10-01T00:00:00Z",
-    closedAt: null,
-    assignees: [],
-    labels: [],
-    commentCount: 0,
     ...patch,
-  };
+  });
 }
 
 function answer(patch: Partial<IssueListResult> = {}): IssueListResult {

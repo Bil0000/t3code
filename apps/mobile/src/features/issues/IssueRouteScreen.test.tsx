@@ -1,10 +1,7 @@
-// @vitest-environment jsdom
 import { makeIssueDetail } from "./issue-test-fixtures";
-import { RegistryContext } from "@effect/atom-react";
+import { createIssueTestRoot } from "./issue-testkit";
 import { act, type ReactNode } from "react";
-import { createRoot } from "react-dom/client";
 import * as Effect from "effect/Effect";
-import { AtomRegistry } from "effect/reactivity";
 import { afterEach, expect, it, vi } from "vite-plus/test";
 import { IssueOperationError, WS_METHODS, type IssueDetail } from "@t3tools/contracts";
 import { Alert, Linking } from "react-native";
@@ -231,16 +228,13 @@ function detail(title: string): IssueDetail {
   return makeIssueDetail({ title });
 }
 
-function renderRoute(
-  root: ReturnType<typeof createRoot>,
-  registry: AtomRegistry.AtomRegistry,
-  params: Parameters<typeof IssueRouteScreen>[0]["route"]["params"],
-) {
-  return root.render(
-    <RegistryContext.Provider value={registry}>
-      <IssueRouteScreen route={{ params }} />
-    </RegistryContext.Provider>,
-  );
+function createRouteRoot() {
+  const root = createIssueTestRoot();
+  return {
+    ...root,
+    renderRoute: (params: Parameters<typeof IssueRouteScreen>[0]["route"]["params"]) =>
+      root.render(<IssueRouteScreen route={{ params }} />),
+  };
 }
 
 const request = vi.spyOn(RpcClient, "request");
@@ -309,11 +303,9 @@ it("pages an asc-only native account on scroll, retains partial history and fenc
         },
       };
     })) as unknown as Parameters<typeof request.mockImplementation>[0]);
-  const registry = AtomRegistry.make();
-  const container = document.createElement("div");
-  const root = createRoot(container);
+  const { container, renderRoute, dispose } = createRouteRoot();
   const render = (connectionId: string) =>
-    renderRoute(root, registry, {
+    renderRoute({
       environmentId: "env",
       projectId: "project",
       tracker: "forgejo",
@@ -352,8 +344,7 @@ it("pages an asc-only native account on scroll, retains partial history and fenc
       .filter((call) => call.input.connectionId === "B" && call.tag === WS_METHODS.issuesComments)
       .map((call) => call.input.cursor),
   ).toEqual(["page-1"]);
-  await act(() => root.unmount());
-  registry.dispose();
+  await dispose();
 });
 
 it("starts the true oldest window without a cursor and sends distinct native transitions safely", async () => {
@@ -398,11 +389,9 @@ it("starts the true oldest window without a cursor and sends distinct native tra
         commentsCursor: "desc-tail",
       };
     })) as unknown as Parameters<typeof request.mockImplementation>[0]);
-  const registry = AtomRegistry.make();
-  const container = document.createElement("div");
-  const root = createRoot(container);
+  const { container, renderRoute, dispose } = createRouteRoot();
   await act(() =>
-    renderRoute(root, registry, {
+    renderRoute({
       environmentId: "env",
       projectId: "project",
       tracker: "jira",
@@ -446,8 +435,7 @@ it("starts the true oldest window without a cursor and sends distinct native tra
     "This transition needs native fields.",
     expect.any(Array),
   );
-  await act(() => root.unmount());
-  registry.dispose();
+  await dispose();
 });
 
 it.each([false, true])(
@@ -474,11 +462,9 @@ it.each([false, true])(
         const issue = detail("Linked pull requests");
         return { ...issue, capabilities: { ...issue.capabilities, linkedPullRequests: true } };
       })) as unknown as Parameters<typeof request.mockImplementation>[0]);
-    const registry = AtomRegistry.make();
-    const container = document.createElement("div");
-    const root = createRoot(container);
+    const { container, renderRoute, dispose } = createRouteRoot();
     await act(() =>
-      renderRoute(root, registry, {
+      renderRoute({
         environmentId: "env",
         projectId: "project",
         tracker: "github",
@@ -509,8 +495,7 @@ it.each([false, true])(
     );
     expect(container.textContent).not.toContain("Linked PR 4");
     expect(cursors).toHaveLength(2);
-    await act(() => root.unmount());
-    registry.dispose();
+    await dispose();
   },
 );
 
@@ -542,11 +527,9 @@ it("reloads a shifted Jira window and reaches all 151 native comments without du
         commentsCursor: "50",
       };
     })) as unknown as Parameters<typeof request.mockImplementation>[0]);
-  const registry = AtomRegistry.make();
-  const container = document.createElement("div");
-  const root = createRoot(container);
+  const { container, renderRoute, dispose } = createRouteRoot();
   await act(() =>
-    renderRoute(root, registry, {
+    renderRoute({
       environmentId: "env",
       projectId: "project",
       tracker: "jira",
@@ -572,8 +555,7 @@ it("reloads a shifted Jira window and reaches all 151 native comments without du
   expect(bodies[0]).toBe("comment-151");
   expect(bodies.at(-1)).toBe("comment-1");
   expect(cursors).toEqual(["50", "50", "100", "150"]);
-  await act(() => root.unmount());
-  registry.dispose();
+  await dispose();
 });
 
 it("fences older reaction rights when an unknown viewer receives a fresh equal-ID seed", async () => {
@@ -618,11 +600,9 @@ it("fences older reaction rights when an unknown viewer receives a fresh equal-I
       commentsCursor: "tail",
     }));
   }) as unknown as Parameters<typeof request.mockImplementation>[0]);
-  const registry = AtomRegistry.make();
-  const container = document.createElement("div");
-  const root = createRoot(container);
+  const { container, renderRoute, dispose, registry } = createRouteRoot();
   await act(() =>
-    renderRoute(root, registry, {
+    renderRoute({
       environmentId: "env",
       projectId: "project",
       tracker: "jira",
@@ -661,8 +641,7 @@ it("fences older reaction rights when an unknown viewer receives a fresh equal-I
   expect(container.textContent).toContain("Older comment");
   expect(container.querySelector('[aria-label="Heart, 1, including you"]')).toBeNull();
   expect(container.querySelector('[aria-label="Heart, 1"]')).not.toBeNull();
-  await act(() => root.unmount());
-  registry.dispose();
+  await dispose();
 });
 
 it("keeps a cached issue on a failed refresh, says so, and recovers through Retry", async () => {
@@ -673,11 +652,9 @@ it("keeps a cached issue on a failed refresh, says so, and recovers through Retr
       const answer = answers[reads++]!;
       return answer instanceof Error ? Effect.fail(answer) : Effect.succeed(answer);
     })) as unknown as Parameters<typeof request.mockImplementation>[0]);
-  const registry = AtomRegistry.make();
-  const container = document.createElement("div");
-  const root = createRoot(container);
+  const { container, renderRoute, dispose } = createRouteRoot();
   await act(() =>
-    renderRoute(root, registry, {
+    renderRoute({
       environmentId: "environment",
       projectId: "project",
       tracker: "github",
@@ -705,19 +682,16 @@ it("keeps a cached issue on a failed refresh, says so, and recovers through Retr
   expect(container.textContent).toContain("New title");
   expect(container.textContent).not.toContain("Couldn't refresh");
 
-  await act(() => root.unmount());
-  registry.dispose();
+  await dispose();
 });
 
 it.each([{ environmentId: " " }, { projectId: "" }, { tracker: "Not A Tracker" }])(
   "shows a way back instead of reading an issue from invalid link params %j",
   async (change) => {
     harness.back = 0;
-    const registry = AtomRegistry.make();
-    const container = document.createElement("div");
-    const root = createRoot(container);
+    const { container, renderRoute, dispose } = createRouteRoot();
     await act(() =>
-      renderRoute(root, registry, {
+      renderRoute({
         environmentId: "environment",
         projectId: "project",
         tracker: "github",
@@ -735,8 +709,7 @@ it.each([{ environmentId: " " }, { projectId: "" }, { tracker: "Not A Tracker" }
     );
     await act(() => back!.click());
     expect(harness.back).toBe(1);
-    await act(() => root.unmount());
-    registry.dispose();
+    await dispose();
   },
 );
 
@@ -759,11 +732,9 @@ it.each([
         );
       })) as unknown as Parameters<typeof request.mockImplementation>[0]);
     vi.mocked(Linking.openURL).mockClear();
-    const registry = AtomRegistry.make();
-    const container = document.createElement("div");
-    const root = createRoot(container);
+    const { container, renderRoute, dispose } = createRouteRoot();
     await act(() =>
-      renderRoute(root, registry, {
+      renderRoute({
         environmentId: "environment",
         projectId: "project",
         tracker: "github",
@@ -786,8 +757,7 @@ it.each([
       expect(browser).toBeUndefined();
     }
     expect(reads).toBe(1);
-    await act(() => root.unmount());
-    registry.dispose();
+    await dispose();
   },
 );
 
@@ -830,11 +800,9 @@ it.each([true, false])(
           commentsCursor: "older-cursor",
         };
       })) as unknown as Parameters<typeof request.mockImplementation>[0]);
-    const registry = AtomRegistry.make();
-    const container = document.createElement("div");
-    const root = createRoot(container);
+    const { container, renderRoute, dispose } = createRouteRoot();
     await act(() =>
-      renderRoute(root, registry, {
+      renderRoute({
         environmentId: "issue-env",
         projectId: "issue-project",
         tracker: "github",
@@ -860,7 +828,6 @@ it.each([true, false])(
         .toSorted(),
     );
     expect(reads).toBe(1);
-    await act(() => root.unmount());
-    registry.dispose();
+    await dispose();
   },
 );

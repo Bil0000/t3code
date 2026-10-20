@@ -1,5 +1,4 @@
-// @vitest-environment jsdom
-import { RegistryContext } from "@effect/atom-react";
+import { createIssueTestHook } from "../features/issues/issue-testkit";
 import {
   AuthOrchestrationReadScope,
   EnvironmentId,
@@ -10,8 +9,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
-import { act, useEffect } from "react";
-import { createRoot } from "react-dom/client";
+import { act } from "react";
 import { beforeEach, expect, it, vi } from "vite-plus/test";
 import type {
   EnvironmentRegistry as Registry,
@@ -189,27 +187,15 @@ async function open(
     registry.mount(sessionAtom(id));
     registry.set(sessionAtom(id), AsyncResult.success(session(options.granted ?? true)));
   }
-  const held: { openLink?: (url: string) => Promise<boolean> } = {};
-  function Probe() {
-    const openLink = useOpenIssueLink(options.context ? { context: options.context } : undefined);
-    useEffect(() => {
-      held.openLink = openLink;
-    });
-    return null;
-  }
-  const root = createRoot(document.createElement("div"));
-  await act(() =>
-    root.render(
-      <RegistryContext.Provider value={registry}>
-        <Probe />
-      </RegistryContext.Provider>,
-    ),
+  const hook = createIssueTestHook(registry, () =>
+    useOpenIssueLink(options.context ? { context: options.context } : undefined),
   );
+  await act(() => hook.render());
   let opened: boolean | undefined;
   await act(async () => {
-    opened = await held.openLink!(url);
+    opened = await hook.current(url);
   });
-  await act(() => root.unmount());
+  await hook.unmount();
   registry.dispose();
   return opened;
 }

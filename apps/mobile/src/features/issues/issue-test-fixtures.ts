@@ -1,6 +1,11 @@
-import { IssueTrackerKind, ProjectId, type IssueDetail } from "@t3tools/contracts";
+import {
+  IssueTrackerKind,
+  ProjectId,
+  type IssueDetail,
+  type IssueListEntry,
+} from "@t3tools/contracts";
 
-export function makeIssueDetail(input: Partial<IssueDetail> = {}): IssueDetail {
+export function makeIssueListEntry(input: Partial<IssueListEntry> = {}): IssueListEntry {
   return {
     tracker: IssueTrackerKind.make("github"),
     host: "github.com",
@@ -19,6 +24,13 @@ export function makeIssueDetail(input: Partial<IssueDetail> = {}): IssueDetail {
     assignees: [],
     labels: [],
     commentCount: 0,
+    ...input,
+  };
+}
+
+export function makeIssueDetail(input: Partial<IssueDetail> = {}): IssueDetail {
+  return {
+    ...makeIssueListEntry(),
     writable: true,
     viewer: "viewer",
     body: "",

@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 import { makeIssueDetail } from "./issue-test-fixtures";
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";

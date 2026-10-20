@@ -1,5 +1,5 @@
-// @vitest-environment jsdom
-import { RegistryContext } from "@effect/atom-react";
+import { makeIssueListEntry } from "./issue-test-fixtures";
+import { createIssueTestHook } from "./issue-testkit";
 import {
   EnvironmentId,
   IssueTrackerKind,
@@ -15,8 +15,7 @@ import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
-import { act, createElement, useLayoutEffect } from "react";
-import { createRoot } from "react-dom/client";
+import { act } from "react";
 import { expect, it, vi } from "vite-plus/test";
 import { it as effectIt } from "@effect/vitest";
 
@@ -41,26 +40,21 @@ import {
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const row = (key: string, overrides: Partial<IssueListEntry> = {}): IssueListEntry => ({
-  tracker: IssueTrackerKind.make("gitlab"),
-  host: "gitlab.example",
-  scope: "group/app",
-  displayKey: `#${key}`,
-  title: key,
-  url: `https://gitlab.example/group/app/-/issues/${key}`,
-  author: null,
-  state: { category: "open", name: "open" },
-  createdAt: "2026-10-01T00:00:00.000Z",
-  updatedAt: "2026-10-01T00:00:00.000Z",
-  closedAt: null,
-  assignees: [],
-  labels: [],
-  commentCount: 0,
-  projectId: ProjectId.make("project"),
-  projectTitle: "Project",
-  ...overrides,
-  key,
-});
+const row = (key: string, overrides: Partial<IssueListEntry> = {}): IssueListEntry =>
+  makeIssueListEntry({
+    tracker: IssueTrackerKind.make("gitlab"),
+    host: "gitlab.example",
+    scope: "group/app",
+    displayKey: `#${key}`,
+    title: key,
+    url: `https://gitlab.example/group/app/-/issues/${key}`,
+    state: { category: "open", name: "open" },
+    createdAt: "2026-10-01T00:00:00.000Z",
+    updatedAt: "2026-10-01T00:00:00.000Z",
+    ...overrides,
+    key,
+  });
+
 const source = (entry: IssueListEntry) => ({ ...entry, capabilities: {} as IssueCapabilities });
 const cursor = "gitlab gitlab.example group/app";
 const failedCursor = "gitlab gitlab.example group/failed";
@@ -219,23 +213,11 @@ it.each([
       ),
     );
     issueEnvironment.list = list;
-    const root = createRoot(document.createElement("div"));
-    let result: ReturnType<typeof useIssueList>;
     let targets = companion ? [target, offlineTarget] : [target];
-    function Probe() {
-      const current = useIssueList(targets);
-      useLayoutEffect(() => {
-        result = current;
-      });
-      return null;
-    }
+    const hook = createIssueTestHook(registry, () => useIssueList(targets));
     try {
-      await act(async () =>
-        root.render(
-          createElement(RegistryContext.Provider, { value: registry }, createElement(Probe)),
-        ),
-      );
-      expect(result!.lists[0]?.held.entries).toHaveLength(restartFailure ? 51 : 52);
+      await act(async () => hook.render());
+      expect(hook.current.lists[0]?.held.entries).toHaveLength(restartFailure ? 51 : 52);
       if (companion === "waiting" || companion === "failed") {
         await act(async () =>
           registry.set(
@@ -249,43 +231,39 @@ it.each([
       if (switchFilter) {
         let pending: Promise<void>;
         await act(async () => {
-          pending = result!.loadMore();
+          pending = hook.current.loadMore();
           await started.promise;
         });
         targets = [{ ...target, input: { ...target.input, state: "open" } }];
-        await act(async () =>
-          root.render(
-            createElement(RegistryContext.Provider, { value: registry }, createElement(Probe)),
-          ),
-        );
+        await act(async () => hook.render());
         await act(async () => {
           continuation.resolve(continued);
           await pending!;
         });
       } else {
-        await act(async () => result!.loadMore());
+        await act(async () => hook.current.loadMore());
       }
       expect(pageRequest.mock.calls.map(([tag]) => tag)).toEqual(
         Array(restarts ? (companion === "ready" ? 4 : 3) : 2).fill("issues.list"),
       );
       expect(pageRequest.mock.calls[1]?.[1]).toMatchObject({ cursors: first.nextCursors });
       if (restartFailure) {
-        expect(result!.lists[0]?.held.entries.map((entry) => entry.key)).toEqual([
+        expect(hook.current.lists[0]?.held.entries.map((entry) => entry.key)).toEqual([
           "other",
           "other-tail",
         ]);
-        expect(result!.lists[0]?.held.nextCursors).toEqual({ [otherCursor]: "O3" });
-        expect(result!.loadingMore).toBe(false);
-        expect(result!.refreshing).toBe(false);
-        expect(result!.loadMoreError).toContain("restart failed");
-        await act(async () => result!.loadMore());
+        expect(hook.current.lists[0]?.held.nextCursors).toEqual({ [otherCursor]: "O3" });
+        expect(hook.current.loadingMore).toBe(false);
+        expect(hook.current.refreshing).toBe(false);
+        expect(hook.current.loadMoreError).toContain("restart failed");
+        await act(async () => hook.current.loadMore());
         expect(pageRequest).toHaveBeenCalledTimes(3);
         replies.push(fresh);
-        await act(async () => result!.loadMore(true));
+        await act(async () => hook.current.loadMore(true));
         expect(pageRequest).toHaveBeenCalledTimes(4);
         expect(pageRequest.mock.calls[3]?.[1]).toEqual(pageRequest.mock.calls[2]?.[1]);
-        expect(result!.loadMoreError).toBeNull();
-        expect(result!.lists[0]?.held.pendingWrites.size).toBe(0);
+        expect(hook.current.loadMoreError).toBeNull();
+        expect(hook.current.lists[0]?.held.pendingWrites.size).toBe(0);
       }
       if (restarts) {
         expect(pageRequest.mock.calls[companion === "ready" ? 3 : 2]?.[1]).toEqual({
@@ -295,25 +273,25 @@ it.each([
           host: "gitlab.example",
           limit: 50,
         });
-        expect(result!.lists[0]?.held.entries.map((entry) => entry.key)).toEqual([
+        expect(hook.current.lists[0]?.held.entries.map((entry) => entry.key)).toEqual([
           ...(restartFailure ? [] : ["failed"]),
           "other",
           "other-tail",
           "B-first",
         ]);
       } else {
-        expect(result!.lists[0]?.held.entries.map((entry) => entry.key)).toEqual(
+        expect(hook.current.lists[0]?.held.entries.map((entry) => entry.key)).toEqual(
           (switchFilter ? first.entries : [...first.entries, otherTail]).map((entry) => entry.key),
         );
       }
-      expect(result!.lists[0]?.held.nextCursors).toEqual(
+      expect(hook.current.lists[0]?.held.nextCursors).toEqual(
         switchFilter
           ? first.nextCursors
           : { ...(restartFailure ? {} : { [failedCursor]: "F2" }), [otherCursor]: "O3" },
       );
       expect(replies).toEqual([]);
       if (companion) {
-        const held = result!.lists.find(
+        const held = hook.current.lists.find(
           (source) => source.environmentId === offlineTarget.environmentId,
         )!.held;
         expect(held.entries).toEqual(
@@ -323,15 +301,11 @@ it.each([
           companion === "ready" ? { [cursor]: "offline-3" } : offline.nextCursors,
         );
         targets = [offlineTarget];
-        await act(async () =>
-          root.render(
-            createElement(RegistryContext.Provider, { value: registry }, createElement(Probe)),
-          ),
-        );
-        expect(result!.hasMore).toBe(companion === "ready");
+        await act(async () => hook.render());
+        expect(hook.current.hasMore).toBe(companion === "ready");
       }
     } finally {
-      await act(async () => root.unmount());
+      await hook.unmount();
       registry.dispose();
       pageRequest.mockRestore();
     }
@@ -430,27 +404,13 @@ effectIt.effect.each(["connecting", "failed-connected"])(
       ];
       const registry = AtomRegistry.make();
       const releases = targets.map((target) => registry.mount(issueEnvironment.list(target)));
-      const root = createRoot(document.createElement("div"));
-      let result: ReturnType<typeof useIssueList>;
       let refresh: Promise<void> | undefined;
-      function Probe() {
-        const current = useIssueList(targets);
-        useLayoutEffect(() => {
-          result = current;
-        });
-        return null;
-      }
+      const hook = createIssueTestHook(registry, () => useIssueList(targets));
       try {
         yield* Effect.all(
           targets.map((target) => AtomRegistry.getResult(registry, issueEnvironment.list(target))),
         );
-        yield* Effect.promise(() =>
-          act(async () =>
-            root.render(
-              createElement(RegistryContext.Provider, { value: registry }, createElement(Probe)),
-            ),
-          ),
-        );
+        yield* Effect.promise(() => act(async () => hook.render()));
         const peerQuery = issueEnvironment.list(targets[1]!);
         if (peerState === "connecting") {
           const waiting = Promise.withResolvers<void>();
@@ -491,7 +451,7 @@ effectIt.effect.each(["connecting", "failed-connected"])(
         });
         yield* Effect.promise(() =>
           act(async () => {
-            refresh = result!.onRefresh().then(() => {
+            refresh = hook.current.onRefresh().then(() => {
               complete = true;
             });
             await refreshed.promise;
@@ -500,26 +460,26 @@ effectIt.effect.each(["connecting", "failed-connected"])(
         );
         unsubscribe();
         expect(complete).toBe(true);
-        expect(result!.refreshing).toBe(false);
+        expect(hook.current.refreshing).toBe(false);
         if (peerState === "connecting") {
           expect(reads.filter((id) => id === peerProject)).toHaveLength(1);
-          const held = result!.lists.find((source) => source.environmentId === peerId)!.held;
+          const held = hook.current.lists.find((source) => source.environmentId === peerId)!.held;
           expect(held.entries).toEqual(peer.entries);
           expect(held.nextCursors).toEqual(peer.nextCursors);
           expect(held.errors).toEqual(peer.errors);
-          yield* Effect.promise(() => act(async () => result!.loadMore()));
+          yield* Effect.promise(() => act(async () => hook.current.loadMore()));
           expect(page).toHaveBeenCalledExactlyOnceWith("issues.list", {
             ...targets[0]!.input,
             cursors: first.nextCursors,
           });
         } else {
           expect(reads.filter((id) => id === peerProject)).toHaveLength(3);
-          expect(result!.errors).toEqual([]);
+          expect(hook.current.errors).toEqual([]);
           expect(page).not.toHaveBeenCalled();
         }
         expect(reads.filter((id) => id === readyProject)).toHaveLength(2);
       } finally {
-        yield* Effect.promise(() => act(async () => root.unmount()));
+        yield* Effect.promise(() => hook.unmount());
         yield* Effect.promise(() => refresh ?? Promise.resolve());
         for (const release of releases) release();
         registry.dispose();
@@ -601,38 +561,24 @@ effectIt.effect(
       const registry = AtomRegistry.make();
       const query = issueEnvironment.list(targets[0]!);
       const release = registry.mount(query);
-      const root = createRoot(document.createElement("div"));
-      let result: ReturnType<typeof useIssueList>;
-      function Probe() {
-        const current = useIssueList(targets);
-        useLayoutEffect(() => {
-          result = current;
-        });
-        return null;
-      }
+      const hook = createIssueTestHook(registry, () => useIssueList(targets));
       try {
         yield* AtomRegistry.getResult(registry, query);
-        yield* Effect.promise(() =>
-          act(async () =>
-            root.render(
-              createElement(RegistryContext.Provider, { value: registry }, createElement(Probe)),
-            ),
-          ),
-        );
-        yield* Effect.promise(() => act(async () => result!.loadMore()));
-        expect(result!.loadMoreError).toContain("restart failed");
-        yield* Effect.promise(() => act(async () => result!.onRefresh()));
-        expect(result!.loadMoreError).toContain("restart failed");
-        expect(result!.lists[0]!.held.entries.map((entry) => entry.key)).toEqual([
+        yield* Effect.promise(() => act(async () => hook.render()));
+        yield* Effect.promise(() => act(async () => hook.current.loadMore()));
+        expect(hook.current.loadMoreError).toContain("restart failed");
+        yield* Effect.promise(() => act(async () => hook.current.onRefresh()));
+        expect(hook.current.loadMoreError).toContain("restart failed");
+        expect(hook.current.lists[0]!.held.entries.map((entry) => entry.key)).toEqual([
           "other-tail",
           "other",
         ]);
-        expect(result!.lists[0]!.held.nextCursors).toEqual({ [otherCursor]: "O3" });
+        expect(hook.current.lists[0]!.held.nextCursors).toEqual({ [otherCursor]: "O3" });
         expect(reads).toBe(2);
         expect(pages).toHaveLength(2);
-        yield* Effect.promise(() => act(async () => result!.loadMore()));
+        yield* Effect.promise(() => act(async () => hook.current.loadMore()));
         expect(pages).toHaveLength(2);
-        yield* Effect.promise(() => act(async () => result!.loadMore(true)));
+        yield* Effect.promise(() => act(async () => hook.current.loadMore(true)));
         const restart = { ...targets[0]!.input, projectId: current.projectId, host: current.host };
         expect(pages).toEqual([
           { ...targets[0]!.input, cursors: first.nextCursors },
@@ -640,16 +586,16 @@ effectIt.effect(
           restart,
         ]);
         expect(reads).toBe(2);
-        expect(result!.loadMoreError).toBeNull();
-        expect(result!.lists[0]!.held.entries.map((entry) => entry.key)).toEqual([
+        expect(hook.current.loadMoreError).toBeNull();
+        expect(hook.current.lists[0]!.held.entries.map((entry) => entry.key)).toEqual([
           "other-tail",
           "other",
           "B-first",
         ]);
-        expect(result!.lists[0]!.held.nextCursors).toEqual({ [otherCursor]: "O3" });
-        expect(result!.lists[0]!.held.errors).toEqual([]);
+        expect(hook.current.lists[0]!.held.nextCursors).toEqual({ [otherCursor]: "O3" });
+        expect(hook.current.lists[0]!.held.errors).toEqual([]);
       } finally {
-        yield* Effect.promise(() => act(async () => root.unmount()));
+        yield* Effect.promise(() => hook.unmount());
         release();
         registry.dispose();
         request.mockRestore();
@@ -703,35 +649,21 @@ effectIt.effect.each([undefined, "Account-A"])(
       const registry = AtomRegistry.make();
       const query = issueEnvironment.list(targets[0]!);
       const release = registry.mount(query);
-      const root = createRoot(document.createElement("div"));
-      let result: ReturnType<typeof useIssueList>;
-      function Probe() {
-        const current = useIssueList(targets);
-        useLayoutEffect(() => {
-          result = current;
-        });
-        return null;
-      }
+      const hook = createIssueTestHook(registry, () => useIssueList(targets));
       try {
         yield* AtomRegistry.getResult(registry, query);
-        yield* Effect.promise(() =>
-          act(async () =>
-            root.render(
-              createElement(RegistryContext.Provider, { value: registry }, createElement(Probe)),
-            ),
-          ),
-        );
-        expect(result!.hasMore).toBe(true);
-        expect(result!.continued).toBe(false);
-        yield* Effect.promise(() => act(async () => result!.loadMore()));
-        expect(result!.continued).toBe(true);
-        expect(result!.lists[0]!.held.entries).toEqual(rows);
-        expect(result!.hasMore).toBe(false);
-        yield* Effect.promise(() => act(async () => result!.onRefresh()));
-        expect(result!.lists[0]!.held.entries).toEqual(rows);
-        expect(result!.lists[0]!.held.nextCursors).toEqual({});
-        expect(result!.hasMore).toBe(false);
-        yield* Effect.promise(() => act(async () => result!.loadMore()));
+        yield* Effect.promise(() => act(async () => hook.render()));
+        expect(hook.current.hasMore).toBe(true);
+        expect(hook.current.continued).toBe(false);
+        yield* Effect.promise(() => act(async () => hook.current.loadMore()));
+        expect(hook.current.continued).toBe(true);
+        expect(hook.current.lists[0]!.held.entries).toEqual(rows);
+        expect(hook.current.hasMore).toBe(false);
+        yield* Effect.promise(() => act(async () => hook.current.onRefresh()));
+        expect(hook.current.lists[0]!.held.entries).toEqual(rows);
+        expect(hook.current.lists[0]!.held.nextCursors).toEqual({});
+        expect(hook.current.hasMore).toBe(false);
+        yield* Effect.promise(() => act(async () => hook.current.loadMore()));
         expect(request.mock.calls.map(([, input]) => input)).toEqual([
           targets[0]!.input,
           targets[0]!.input,
@@ -741,7 +673,7 @@ effectIt.effect.each([undefined, "Account-A"])(
           cursors: first.nextCursors,
         });
       } finally {
-        yield* Effect.promise(() => act(async () => root.unmount()));
+        yield* Effect.promise(() => hook.unmount());
         release();
         registry.dispose();
         request.mockRestore();
@@ -841,45 +773,31 @@ effectIt.effect.each([false, true])(
       const registry = AtomRegistry.make();
       const query = issueEnvironment.list(targets[0]!);
       const release = registry.mount(query);
-      const root = createRoot(document.createElement("div"));
-      let result: ReturnType<typeof useIssueList>;
-      function Probe() {
-        const current = useIssueList(targets);
-        useLayoutEffect(() => {
-          result = current;
-        });
-        return null;
-      }
+      const hook = createIssueTestHook(registry, () => useIssueList(targets));
       try {
         yield* AtomRegistry.getResult(registry, query);
-        yield* Effect.promise(() =>
-          act(async () =>
-            root.render(
-              createElement(RegistryContext.Provider, { value: registry }, createElement(Probe)),
-            ),
-          ),
-        );
-        expect(result!.lists[0]!.held.entries.map((entry) => entry.key)).toEqual(
+        yield* Effect.promise(() => act(async () => hook.render()));
+        expect(hook.current.lists[0]!.held.entries.map((entry) => entry.key)).toEqual(
           defaultAccount ? ["default-first"] : ["default-first", "named-first"],
         );
-        expect(issueListTrackers(result!.lists).map((tracker) => tracker.connectionId)).toEqual(
-          defaultAccount ? [undefined] : ["Account-B", undefined],
-        );
-        expect(issueListNotices(result!.lists).map((error) => error.message)).toEqual(
+        expect(
+          issueListTrackers(hook.current.lists).map((tracker) => tracker.connectionId),
+        ).toEqual(defaultAccount ? [undefined] : ["Account-B", undefined]);
+        expect(issueListNotices(hook.current.lists).map((error) => error.message)).toEqual(
           defaultAccount ? [] : ["Named account warning"],
         );
         expect(
-          issueCreateScopes(result!.lists, []).map((scope) => scope.scope.connectionId),
+          issueCreateScopes(hook.current.lists, []).map((scope) => scope.scope.connectionId),
         ).toEqual(defaultAccount ? [undefined] : [undefined, "Account-B"]);
-        expect(Object.keys(result!.lists[0]!.held.answer.viewers)).toEqual(
+        expect(Object.keys(hook.current.lists[0]!.held.answer.viewers)).toEqual(
           defaultAccount ? ["linear api.linear.app"] : Object.keys(first.viewers),
         );
-        yield* Effect.promise(() => act(async () => result!.loadMore()));
+        yield* Effect.promise(() => act(async () => hook.current.loadMore()));
         expect(page).toHaveBeenCalledExactlyOnceWith("issues.list", {
           ...targets[0]!.input,
           cursors: defaultAccount ? { [defaultCursor]: "D2" } : first.nextCursors,
         });
-        expect(result!.lists[0]!.held.entries.map((entry) => entry.key)).toEqual(
+        expect(hook.current.lists[0]!.held.entries.map((entry) => entry.key)).toEqual(
           defaultAccount
             ? ["default-first", "default-tail"]
             : ["default-first", "named-first", "default-tail", "named-tail"],
@@ -904,18 +822,18 @@ effectIt.effect.each([false, true])(
           { ...targets[0]!.input, projectId: a.projectId },
         ]);
         expect(
-          result!.lists[0]!.held.entries.some((entry) => entry.connectionId !== undefined),
+          hook.current.lists[0]!.held.entries.some((entry) => entry.connectionId !== undefined),
         ).toBe(!defaultAccount);
-        yield* Effect.promise(() => act(async () => result!.onRefresh()));
-        expect(result!.loadMoreError).toBe(defaultAccount ? null : "Named account warning");
-        expect(result!.lists[0]!.held.entries.map((entry) => entry.key)).toEqual(
+        yield* Effect.promise(() => act(async () => hook.current.onRefresh()));
+        expect(hook.current.loadMoreError).toBe(defaultAccount ? null : "Named account warning");
+        expect(hook.current.lists[0]!.held.entries.map((entry) => entry.key)).toEqual(
           defaultAccount ? ["default-first"] : ["named-refreshed", "default-first"],
         );
         expect(
-          issueCreateScopes(result!.lists, []).map((scope) => scope.scope.connectionId),
+          issueCreateScopes(hook.current.lists, []).map((scope) => scope.scope.connectionId),
         ).toEqual(defaultAccount ? [undefined] : [undefined, "Account-B"]);
       } finally {
-        yield* Effect.promise(() => act(async () => root.unmount()));
+        yield* Effect.promise(() => hook.unmount());
         release();
         registry.dispose();
         request.mockRestore();
@@ -975,21 +893,9 @@ it("retries a stale written-source answer once in the selected native account", 
     return Effect.succeed({ ...first, entries: [row("current-account-answer", current)] });
   }) as unknown as Parameters<typeof page.mockImplementation>[0]);
   const registry = AtomRegistry.make();
-  const root = createRoot(document.createElement("div"));
-  let result: ReturnType<typeof useIssueList>;
-  function Probe() {
-    const value = useIssueList([target]);
-    useLayoutEffect(() => {
-      result = value;
-    });
-    return null;
-  }
+  const hook = createIssueTestHook(registry, () => useIssueList([target]));
   try {
-    await act(async () =>
-      root.render(
-        createElement(RegistryContext.Provider, { value: registry }, createElement(Probe)),
-      ),
-    );
+    await act(async () => hook.render());
     await act(async () => {
       markIssueWritten(registry, target.environmentId, current);
       await started.promise;
@@ -1008,16 +914,16 @@ it("retries a stale written-source answer once in the selected native account", 
         { ...target.input, projectId: current.projectId },
       ]),
     );
-    expect(result!.lists[0]!.held.entries.map((entry) => entry.key)).toEqual([
+    expect(hook.current.lists[0]!.held.entries.map((entry) => entry.key)).toEqual([
       "current-account-answer",
     ]);
     expect(
-      result!.lists[0]!.held.entries.every((entry) => entry.connectionId === "Account-A"),
+      hook.current.lists[0]!.held.entries.every((entry) => entry.connectionId === "Account-A"),
     ).toBe(true);
-    expect(result!.refreshing).toBe(false);
+    expect(hook.current.refreshing).toBe(false);
   } finally {
     stale.resolve(first);
-    await act(async () => root.unmount());
+    await hook.unmount();
     registry.dispose();
     page.mockRestore();
   }

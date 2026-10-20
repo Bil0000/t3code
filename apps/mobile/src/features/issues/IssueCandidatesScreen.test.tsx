@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+import { makeIssueDetail } from "./issue-test-fixtures";
 import { RegistryContext } from "@effect/atom-react";
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -137,45 +137,14 @@ const click = (label: string) =>
   });
 
 beforeEach(() => {
-  harness.issue = {
+  harness.issue = makeIssueDetail({
     ...params,
     tracker: IssueTrackerKind.make("jira"),
     projectId: ProjectId.make("project"),
-    projectTitle: "Project",
     displayKey: "ENG-1",
-    title: "Issue",
     url: "https://jira.example/browse/ENG-1",
-    author: null,
-    state: { category: "open", name: "Open" },
-    createdAt: "2026-10-01T00:00:00Z",
-    updatedAt: "2026-10-01T00:00:00Z",
-    closedAt: null,
     assignees: [actor("User")],
-    labels: [],
-    commentCount: 0,
-    writable: true,
-    viewer: "viewer",
-    body: "",
-    comments: [],
-    commentsCursor: null,
-    events: [],
-    linkedPullRequests: [],
-    capabilities: {
-      create: true,
-      edit: true,
-      comment: true,
-      labels: true,
-      assignees: true,
-      reactions: false,
-      templates: false,
-      linkedPullRequests: false,
-      events: false,
-      search: true,
-      states: [],
-      closeReasons: [],
-    },
-    viewerPermissions: { setState: true, comment: true, edit: true, labels: true, assignees: true },
-  };
+  });
   harness.actors = [actor("User"), actor("user"), actor("User")];
   harness.sent = [];
   harness.more = false;
