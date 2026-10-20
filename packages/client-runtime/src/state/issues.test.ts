@@ -22,7 +22,7 @@ import { AuthOrchestrationReadScope, AuthSourceControlWriteScope } from "@t3tool
 import * as Session from "./session.ts";
 import * as RpcClient from "../rpc/client.ts";
 import { executeAtomQuery } from "./runtime.ts";
-import { makeIssueTestSession } from "./issues.testkit.ts";
+import { issueTestHeld, issueTestPage, makeIssueTestSession } from "./issues.testkit.ts";
 
 import {
   continueIssueListPage,
@@ -398,7 +398,7 @@ describe("issue list continuations", () => {
     };
     const held = holdIssueListAnswer(answer);
     expect(held.firstCursors).toBe(answer.nextCursors);
-    const page = { entries: [entry({ key: "2" })], nextCursors: {}, errors: [] };
+    const page = issueTestPage([entry({ key: "2" })]);
     expect(continueIssueListPage(held, held.nextCursors, page, { ...answer.nextCursors })).toBe(
       held,
     );
@@ -409,13 +409,11 @@ describe("issue list continuations", () => {
   });
 
   it("keeps a failed scope's cursor when an older server omits error host and tracker", () => {
-    const held = {
-      entries: [entry({ key: "1" })],
-      nextCursors: { "github.com acme/app": "2" },
-      firstCursors: { "github.com acme/app": "2" },
-      firstKeys: new Set([issueEntryKey(entry({ key: "1" }))]),
-      errors: [],
-    };
+    const held = issueTestHeld(
+      [entry({ key: "1" })],
+      { "github.com acme/app": "2" },
+      { firstCursors: { "github.com acme/app": "2" } },
+    );
     const failed = {
       entries: [],
       nextCursors: {},
@@ -429,7 +427,7 @@ describe("issue list continuations", () => {
     const retried = continueIssueListPage(
       continued,
       continued.nextCursors,
-      { entries: [entry({ key: "2" })], nextCursors: {}, errors: [] },
+      issueTestPage([entry({ key: "2" })]),
       continued.firstCursors,
     );
     expect(retried.entries).toHaveLength(2);
@@ -448,13 +446,11 @@ describe("issue list continuations", () => {
     const gitlab = entry({ ...github, tracker: "gitlab" as IssueTrackerKind });
     const gh = "github shared.example acme/app";
     const gl = "gitlab shared.example acme/app";
-    const held = {
-      entries: [github, gitlab],
-      nextCursors: { [gh]: "gh2", [gl]: "gl2" },
-      firstCursors: { [gh]: "gh2", [gl]: "gl2" },
-      firstKeys: new Set([github, gitlab].map(issueEntryKey)),
-      errors: [] as IssueListResult["errors"],
-    };
+    const held = issueTestHeld(
+      [github, gitlab],
+      { [gh]: "gh2", [gl]: "gl2" },
+      { firstCursors: { [gh]: "gh2", [gl]: "gl2" } },
+    );
     expect(mergeIssueListPage([github], [gitlab])).toHaveLength(2);
     expect(issueListCursorsOn(held.nextCursors, "Shared.Example", "gitlab")).toEqual({
       [gl]: "gl2",
@@ -476,17 +472,13 @@ describe("issue list continuations", () => {
     const continued = continueIssueListPage(
       failed,
       { [gl]: "gl2" },
-      { entries: [entry({ ...gitlab, key: "2" })], nextCursors: { [gl]: "gl3" }, errors: [] },
+      issueTestPage([entry({ ...gitlab, key: "2" })], { [gl]: "gl3" }),
       held.firstCursors,
     );
     expect(continued.errors).toEqual([]);
     expect(continued.nextCursors).toEqual({ [gh]: "gh2", [gl]: "gl3" });
     expect(continued.entries).toHaveLength(3);
-    const refreshed = refreshIssueListPage(
-      continued,
-      { entries: [], nextCursors: {}, errors: [] },
-      { source: gitlab },
-    );
+    const refreshed = refreshIssueListPage(continued, issueTestPage([]), { source: gitlab });
     expect(refreshed.entries).toEqual([github]);
     expect(refreshed.nextCursors).toEqual({ [gh]: "gh2" });
     const narrowed = refreshIssueListPage(held, {
@@ -507,22 +499,12 @@ describe("issue list continuations", () => {
   });
 
   it("keeps other hosts' cursors when one host's page lands", () => {
-    const held = {
-      entries: [entry({ key: "1" })],
-      nextCursors: cursors,
-      firstCursors: cursors,
-      firstKeys: new Set<string>(),
-      errors: [],
-    };
+    const held = issueTestHeld([entry({ key: "1" })], cursors, { firstKeys: new Set<string>() });
     const sent = issueListCursorsOn(cursors, "github.com");
     const next = continueIssueListPage(
       held,
       sent,
-      {
-        entries: [entry({ key: "2" })],
-        nextCursors: { "github.com acme/app": "a2" },
-        errors: [],
-      },
+      issueTestPage([entry({ key: "2" })], { "github.com acme/app": "a2" }),
       held.firstCursors,
     );
     expect(next.nextCursors).toEqual({ "linear.app ENG": "c", "github.com acme/app": "a2" });
@@ -530,21 +512,15 @@ describe("issue list continuations", () => {
   });
 
   it("drops a continuation whose cursor a refresh has since moved", () => {
-    const held = {
-      entries: [entry({ key: "1" })],
-      nextCursors: { "github.com acme/app": "2" },
-      firstCursors: { "github.com acme/app": "2" },
-      firstKeys: new Set([issueEntryKey(entry({ key: "1" }))]),
-      errors: [],
-    };
+    const held = issueTestHeld(
+      [entry({ key: "1" })],
+      { "github.com acme/app": "2" },
+      { firstCursors: { "github.com acme/app": "2" } },
+    );
     const stale = continueIssueListPage(
       held,
       { "github.com acme/app": "4" },
-      {
-        entries: [entry({ key: "200" })],
-        nextCursors: { "github.com acme/app": "5" },
-        errors: [],
-      },
+      issueTestPage([entry({ key: "200" })], { "github.com acme/app": "5" }),
       held.firstCursors,
     );
     expect(stale).toBe(held);
@@ -554,33 +530,20 @@ describe("issue list continuations", () => {
     const at = (key: string, day: number, title = `Issue ${key}`) =>
       entry({ key, title, updatedAt: `2026-10-${String(day).padStart(2, "0")}T00:00:00.000Z` });
     const cursor = { "github.com acme/app": "2" };
-    const held = {
-      entries: [at("1", 9), at("2", 8)],
-      nextCursors: cursor,
-      firstCursors: cursor,
-      firstKeys: new Set([at("1", 9), at("2", 8)].map(issueEntryKey)),
-      errors: [],
-    };
-    const refreshed = refreshIssueListPage(held, {
-      entries: [at("4", 10, "Fresh"), at("1", 9)],
-      nextCursors: cursor,
-      errors: [],
-    });
+    const held = issueTestHeld([at("1", 9), at("2", 8)], cursor);
+    const refreshed = refreshIssueListPage(
+      held,
+      issueTestPage([at("4", 10, "Fresh"), at("1", 9)], cursor),
+    );
     expect(refreshed.nextCursors).toEqual(cursor);
-    const oldPage = {
-      entries: [at("3", 7), at("4", 6, "Stale")],
-      nextCursors: { "github.com acme/app": "3" },
-      errors: [],
-    };
+    const oldPage = issueTestPage([at("3", 7), at("4", 6, "Stale")], {
+      "github.com acme/app": "3",
+    });
     expect(continueIssueListPage(refreshed, cursor, oldPage, held.firstCursors)).toBe(refreshed);
     const continued = continueIssueListPage(
       refreshed,
       cursor,
-      {
-        entries: [at("2", 8), at("3", 7)],
-        nextCursors: { "github.com acme/app": "3" },
-        errors: [],
-      },
+      issueTestPage([at("2", 8), at("3", 7)], { "github.com acme/app": "3" }),
       refreshed.firstCursors,
     );
     expect(continued.entries.map((row) => row.title)).toEqual([
@@ -601,14 +564,15 @@ describe("issue list continuations", () => {
       scope: "acme/empty",
       capabilities: {} as IssueCapabilities,
     };
-    const held = {
-      entries: [] as ReadonlyArray<IssueListEntry>,
-      nextCursors: { "github.com acme/empty": "e2" },
-      firstCursors: { "github.com acme/empty": "e2" },
-      firstKeys: new Set<string>(),
-      errors: [],
-      sources: [source],
-    };
+    const held = issueTestHeld(
+      [] as ReadonlyArray<IssueListEntry>,
+      { "github.com acme/empty": "e2" },
+      {
+        sources: [source],
+        firstCursors: { "github.com acme/empty": "e2" },
+        firstKeys: new Set<string>(),
+      },
+    );
     const sent = { "github.com acme/empty": "e2" };
     const down = {
       projectId: source.projectId,
@@ -627,11 +591,7 @@ describe("issue list continuations", () => {
     const recovered = continueIssueListPage(
       failed,
       sent,
-      {
-        entries: [entry({ key: "7", scope: "acme/empty", projectId: source.projectId })],
-        nextCursors: {},
-        errors: [],
-      },
+      issueTestPage([entry({ key: "7", scope: "acme/empty", projectId: source.projectId })]),
       held.firstCursors,
     );
     expect(recovered.errors).toEqual([]);
@@ -646,16 +606,17 @@ describe("issue list continuations", () => {
       host,
       message,
     });
-    const held = {
-      entries: [entry({ key: "1" }), entry({ key: "ENG-1", host: "linear.app", scope: "ENG" })],
-      nextCursors: cursors,
-      firstCursors: cursors,
-      firstKeys: new Set<string>(),
-      errors: [
-        failure("project-1", "github.com", "old"),
-        failure("project-2", "linear.app", "kept"),
-      ],
-    };
+    const held = issueTestHeld(
+      [entry({ key: "1" }), entry({ key: "ENG-1", host: "linear.app", scope: "ENG" })],
+      cursors,
+      {
+        errors: [
+          failure("project-1", "github.com", "old"),
+          failure("project-2", "linear.app", "kept"),
+        ],
+        firstKeys: new Set<string>(),
+      },
+    );
     const failed = continueIssueListPage(
       held,
       { "github.com acme/app": "a" },
@@ -671,11 +632,7 @@ describe("issue list continuations", () => {
     const recovered = continueIssueListPage(
       failed,
       { "github.com acme/app": "a" },
-      {
-        entries: [entry({ key: "2" })],
-        nextCursors: {},
-        errors: [],
-      },
+      issueTestPage([entry({ key: "2" })]),
       held.firstCursors,
     );
     expect(recovered.errors.map((error) => error.message)).toEqual(["kept"]);
@@ -712,17 +669,18 @@ describe("issue representative changes", () => {
       host: other.host,
       message: "Other tracker is unavailable",
     };
-    const held = {
-      entries: [old, repeated, other],
-      sources: [
-        { ...old, capabilities: {} as IssueCapabilities },
-        { ...other, capabilities: {} as IssueCapabilities },
-      ],
-      firstKeys: new Set([old, repeated, other].map(issueEntryKey)),
-      firstCursors: { [cursor]: "2", [otherCursor]: "o2" },
-      nextCursors: { [cursor]: "2", [otherCursor]: "o2" },
-      errors: [otherError],
-    };
+    const held = issueTestHeld(
+      [old, repeated, other],
+      { [cursor]: "2", [otherCursor]: "o2" },
+      {
+        errors: [otherError],
+        sources: [
+          { ...old, capabilities: {} as IssueCapabilities },
+          { ...other, capabilities: {} as IssueCapabilities },
+        ],
+        firstCursors: { [cursor]: "2", [otherCursor]: "o2" },
+      },
+    );
     const page = {
       entries: [replacement, entry({ ...replacement, key: "3" })],
       ...(sources ? { sources: [{ ...replacement, capabilities: {} as IssueCapabilities }] } : {}),
@@ -774,11 +732,7 @@ describe("issue representative changes", () => {
     const next = continueIssueListPage(
       fresh,
       { [cursor]: "3" },
-      {
-        entries: [entry({ ...replacement, key: "3" }), entry({ ...replacement, key: "4" })],
-        nextCursors: {},
-        errors: [],
-      },
+      issueTestPage([entry({ ...replacement, key: "3" }), entry({ ...replacement, key: "4" })]),
       fresh.firstCursors,
     );
     expect(
@@ -799,14 +753,10 @@ describe("issue representative changes", () => {
       projectTitle: "Current checkout",
     });
     const cursor = { "github github.com acme/app": "2" };
-    const held = {
-      entries: [old, replacement],
+    const held = issueTestHeld([old, replacement], cursor, {
       sources: [{ ...old, capabilities: {} as IssueCapabilities }],
       firstKeys: new Set([issueEntryKey(old)]),
-      firstCursors: cursor,
-      nextCursors: cursor,
-      errors: [],
-    };
+    });
     const page = {
       entries: [],
       sources: [{ ...replacement, capabilities: {} as IssueCapabilities }],
@@ -854,7 +804,7 @@ describe("issue representative changes", () => {
     const withoutMetadata = continueIssueListPage(
       held,
       cursor,
-      { entries: [], nextCursors: {}, errors: [] },
+      issueTestPage([]),
       held.firstCursors,
     );
     expect(withoutMetadata.entries).toEqual(held.entries);
@@ -867,13 +817,14 @@ describe("issue representative changes", () => {
     const replacement = entry({ key: "1", projectId: "replacement" as ProjectId });
     const scope = "github github.com acme/app";
     const otherScope = "github github.com acme/other";
-    const held = {
-      entries: [old, tail, other],
-      firstKeys: new Set([old, other].map(issueEntryKey)),
-      firstCursors: { [scope]: "2", [otherScope]: "o2" },
-      nextCursors: { [scope]: "3", [otherScope]: "o2" },
-      errors: [],
-    };
+    const held = issueTestHeld(
+      [old, tail, other],
+      { [scope]: "3", [otherScope]: "o2" },
+      {
+        firstCursors: { [scope]: "2", [otherScope]: "o2" },
+        firstKeys: new Set([old, other].map(issueEntryKey)),
+      },
+    );
     const fresh = {
       entries: [replacement],
       sources: [
@@ -898,7 +849,7 @@ describe("issue representative changes", () => {
     const continued = continueIssueListPage(
       refreshed,
       { [scope]: "2" },
-      { entries: [entry({ ...replacement, key: "2" })], nextCursors: {}, errors: [] },
+      issueTestPage([entry({ ...replacement, key: "2" })]),
       refreshed.firstCursors,
     );
     expect(continued.entries.map(({ projectId, key }) => [projectId, key]).toSorted()).toEqual([
@@ -935,22 +886,19 @@ describe("refreshIssueListPage", () => {
         updatedAt: `2026-10-01T00:00:00.${String(999 - from - index).padStart(3, "0")}Z`,
       }),
     );
-  const loaded = {
-    entries: [...rows(1, 100), ...rows(201, 250, "acme/other")],
-    nextCursors: { "github.com acme/app": "3", "github.com acme/other": "o2" },
-    firstCursors: { "github.com acme/app": "2", "github.com acme/other": "o2" },
-    firstKeys: new Set([...rows(1, 50), ...rows(201, 250, "acme/other")].map(issueEntryKey)),
-    errors: [] as IssueListResult["errors"],
-  };
+  const loaded = issueTestHeld(
+    [...rows(1, 100), ...rows(201, 250, "acme/other")],
+    { "github.com acme/app": "3", "github.com acme/other": "o2" },
+    {
+      firstCursors: { "github.com acme/app": "2", "github.com acme/other": "o2" },
+      firstKeys: new Set([...rows(1, 50), ...rows(201, 250, "acme/other")].map(issueEntryKey)),
+    },
+  );
 
   it("removes every changed tail row when source writes share one trailing refresh", () => {
     const next = refreshIssueListPage(
       loaded,
-      {
-        entries: rows(1, 50),
-        nextCursors: { "github.com acme/app": "2" },
-        errors: [],
-      },
+      issueTestPage(rows(1, 50), { "github.com acme/app": "2" }),
       {
         source: {
           tracker: "github",
@@ -967,11 +915,13 @@ describe("refreshIssueListPage", () => {
   });
 
   it("keeps a continued scope's tail and cursor under a fresh first page", () => {
-    const next = refreshIssueListPage(loaded, {
-      entries: [...rows(1, 50), ...rows(202, 251, "acme/other")],
-      nextCursors: { "github.com acme/app": "2", "github.com acme/other": "o2" },
-      errors: [],
-    });
+    const next = refreshIssueListPage(
+      loaded,
+      issueTestPage([...rows(1, 50), ...rows(202, 251, "acme/other")], {
+        "github.com acme/app": "2",
+        "github.com acme/other": "o2",
+      }),
+    );
     expect(next.entries.filter((row) => row.scope === "acme/app")).toHaveLength(100);
     expect(next.entries.some((row) => row.key === "201")).toBe(false);
     expect(next.entries.some((row) => row.key === "251")).toBe(true);
@@ -982,30 +932,19 @@ describe("refreshIssueListPage", () => {
   it.each(["github.com acme/app", "github github.com acme/app"])(
     "restores an exhausted cursor when its first-page token changes: %s",
     (scope) => {
-      const first = {
-        entries: rows(1, 2),
-        nextCursors: { [scope]: "2" },
-        firstCursors: { [scope]: "2" },
-        firstKeys: new Set(rows(1, 2).map(issueEntryKey)),
-        errors: [],
-      };
+      const first = issueTestHeld(rows(1, 2), { [scope]: "2" }, { firstCursors: { [scope]: "2" } });
       const completed = continueIssueListPage(
         first,
         first.nextCursors,
-        {
-          entries: rows(3, 4),
-          nextCursors: {},
-          errors: [],
-        },
+        issueTestPage(rows(3, 4)),
         first.firstCursors,
       );
       expect(completed.entries).toEqual(rows(1, 4));
       expect(completed.nextCursors).toEqual({});
-      const fresh = refreshIssueListPage(completed, {
-        entries: rows(1, 2),
-        nextCursors: { [scope]: "fresh-2" },
-        errors: [],
-      });
+      const fresh = refreshIssueListPage(
+        completed,
+        issueTestPage(rows(1, 2), { [scope]: "fresh-2" }),
+      );
       expect(fresh.entries).toEqual(rows(1, 4));
       expect(fresh.nextCursors).toEqual({ [scope]: "fresh-2" });
       expect(fresh.firstKeys).toEqual(first.firstKeys);
@@ -1019,21 +958,13 @@ describe("refreshIssueListPage", () => {
       const next = continueIssueListPage(
         failed,
         { [scope]: "fresh-2" },
-        {
-          entries: rows(3, 5),
-          nextCursors: {},
-          errors: [],
-        },
+        issueTestPage(rows(3, 5)),
         failed.firstCursors,
       );
       expect(next.entries).toEqual(rows(1, 5));
       expect(next.nextCursors).toEqual({});
       expect(next.errors).toEqual([]);
-      const terminal = refreshIssueListPage(completed, {
-        entries: rows(1, 2),
-        nextCursors: {},
-        errors: [],
-      });
+      const terminal = refreshIssueListPage(completed, issueTestPage(rows(1, 2)));
       expect(terminal.entries).toEqual(rows(1, 2));
       expect(terminal.nextCursors).toEqual({});
     },
@@ -1042,11 +973,12 @@ describe("refreshIssueListPage", () => {
   it.each([40, 50])(
     "drops a continued scope's tail when a fresh first page of %i rows ends the listing",
     (count) => {
-      const next = refreshIssueListPage(loaded, {
-        entries: [...rows(1, count), ...rows(201, 250, "acme/other")],
-        nextCursors: { "github.com acme/other": "o2" },
-        errors: [],
-      });
+      const next = refreshIssueListPage(
+        loaded,
+        issueTestPage([...rows(1, count), ...rows(201, 250, "acme/other")], {
+          "github.com acme/other": "o2",
+        }),
+      );
       expect(next.entries.filter((row) => row.scope === "acme/app")).toEqual(rows(1, count));
       expect(next.nextCursors).toEqual({ "github.com acme/other": "o2" });
       expect(next.firstCursors).toEqual({ "github.com acme/other": "o2" });
@@ -1055,18 +987,20 @@ describe("refreshIssueListPage", () => {
 
   it("replaces the old first page and keeps the loaded tail", () => {
     const [one, two, three] = rows(1, 3);
-    const held = {
-      entries: [one!, two!, three!],
-      nextCursors: { "github.com acme/app": "3" },
-      firstCursors: { "github.com acme/app": "2" },
-      firstKeys: new Set([one!, two!].map(issueEntryKey)),
-      errors: [],
-    };
-    const next = refreshIssueListPage(held, {
-      entries: [{ ...two!, title: "Renamed" }, entry({ key: "4" })],
-      nextCursors: { "github.com acme/app": "2" },
-      errors: [],
-    });
+    const held = issueTestHeld(
+      [one!, two!, three!],
+      { "github.com acme/app": "3" },
+      {
+        firstCursors: { "github.com acme/app": "2" },
+        firstKeys: new Set([one!, two!].map(issueEntryKey)),
+      },
+    );
+    const next = refreshIssueListPage(
+      held,
+      issueTestPage([{ ...two!, title: "Renamed" }, entry({ key: "4" })], {
+        "github.com acme/app": "2",
+      }),
+    );
     expect(next.entries.map((row) => [row.key, row.title]).toSorted()).toEqual([
       ["2", "Renamed"],
       ["3", "Issue 3"],
@@ -1079,18 +1013,18 @@ describe("refreshIssueListPage", () => {
   it("reopens a finished scope when a new row shifts its first page", () => {
     const [one, two, three] = rows(1, 3);
     const zero = entry({ key: "0", updatedAt: "2026-10-02T00:00:00.000Z" });
-    const held = {
-      entries: [one!, two!, three!],
-      nextCursors: {},
-      firstCursors: { "github.com acme/app": "2" },
-      firstKeys: new Set([one!, two!].map(issueEntryKey)),
-      errors: [],
-    };
-    const refreshed = refreshIssueListPage(held, {
-      entries: [zero, one!],
-      nextCursors: { "github.com acme/app": "2" },
-      errors: [],
-    });
+    const held = issueTestHeld(
+      [one!, two!, three!],
+      {},
+      {
+        firstCursors: { "github.com acme/app": "2" },
+        firstKeys: new Set([one!, two!].map(issueEntryKey)),
+      },
+    );
+    const refreshed = refreshIssueListPage(
+      held,
+      issueTestPage([zero, one!], { "github.com acme/app": "2" }),
+    );
     expect(refreshed.entries.map((row) => row.key)).toEqual(["0", "1", "3"]);
     expect(issueListCursorsOn(refreshed.nextCursors, "github.com")).toEqual({
       "github.com acme/app": "2",
@@ -1098,7 +1032,7 @@ describe("refreshIssueListPage", () => {
     const continued = continueIssueListPage(
       refreshed,
       refreshed.nextCursors,
-      { entries: [two!, three!], nextCursors: {}, errors: [] },
+      issueTestPage([two!, three!]),
       refreshed.firstCursors,
     );
     expect(continued.entries.map((row) => row.key)).toEqual(["0", "1", "2", "3"]);
@@ -1106,14 +1040,8 @@ describe("refreshIssueListPage", () => {
 
   it("takes a finished first page's end when nothing was continued", () => {
     const next = refreshIssueListPage(
-      {
-        entries: rows(1, 50),
-        nextCursors: {},
-        firstCursors: {},
-        firstKeys: new Set(rows(1, 50).map(issueEntryKey)),
-        errors: [],
-      },
-      { entries: rows(1, 50), nextCursors: { "github.com acme/app": "2" }, errors: [] },
+      issueTestHeld(rows(1, 50), {}, { firstCursors: {} }),
+      issueTestPage(rows(1, 50), { "github.com acme/app": "2" }),
     );
     expect(next.nextCursors).toEqual({ "github.com acme/app": "2" });
     expect(next.firstCursors).toEqual({ "github.com acme/app": "2" });
@@ -1122,7 +1050,7 @@ describe("refreshIssueListPage", () => {
   it("drops a mutated row the fresh page of its source no longer lists", () => {
     const next = refreshIssueListPage(
       loaded,
-      { entries: rows(2, 51), nextCursors: { "github.com acme/app": "2" }, errors: [] },
+      issueTestPage(rows(2, 51), { "github.com acme/app": "2" }),
       {
         source: {
           tracker: "github",
@@ -1188,16 +1116,14 @@ describe("refreshIssueListPage", () => {
   });
 
   it("refreshes only the named source's rows and cursors", () => {
-    const held = {
-      entries: [...rows(1, 50), ...rows(201, 250, "acme/other")],
-      nextCursors: { "github.com acme/app": "2", "github.com acme/other": "o2" },
-      firstCursors: { "github.com acme/app": "2", "github.com acme/other": "o2" },
-      firstKeys: new Set([...rows(1, 50), ...rows(201, 250, "acme/other")].map(issueEntryKey)),
-      errors: [],
-    };
+    const held = issueTestHeld(
+      [...rows(1, 50), ...rows(201, 250, "acme/other")],
+      { "github.com acme/app": "2", "github.com acme/other": "o2" },
+      { firstCursors: { "github.com acme/app": "2", "github.com acme/other": "o2" } },
+    );
     const next = refreshIssueListPage(
       held,
-      { entries: [entry({ key: "1", title: "Retitled" })], nextCursors: {}, errors: [] },
+      issueTestPage([entry({ key: "1", title: "Retitled" })]),
       {
         source: {
           tracker: "github",

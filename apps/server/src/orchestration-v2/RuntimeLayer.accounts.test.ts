@@ -1,4 +1,3 @@
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
   CommandId,
@@ -7,77 +6,23 @@ import {
   ProviderInstanceId,
   ThreadId,
 } from "@t3tools/contracts";
-import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as Effect from "effect/Effect";
-import * as Crypto from "effect/Crypto";
 import * as Context from "effect/Context";
 import type { IssueDetail } from "@t3tools/contracts";
 import * as IssueService from "../issue/IssueService.ts";
+import { issueCryptoLayer } from "../issue/IssueService.testkit.ts";
 import * as ThreadIssueService from "./ThreadIssueService.ts";
-import { emptyIssueDetailFields } from "./ThreadIssueService.testkit.ts";
+import {
+  emptyIssueDetailFields,
+  issueRuntimeLayer,
+  issueThreadCommand,
+} from "./ThreadIssueService.testkit.ts";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
-import * as Stream from "effect/Stream";
 
-import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
-import * as ServerConfig from "../config.ts";
-import * as GitWorkflow from "../git/GitWorkflowService.ts";
-import * as McpSessionRegistryTestkit from "../mcp/McpSessionRegistry.testkit.ts";
-import * as SqlitePersistence from "../persistence/Sqlite.ts";
-import * as ProjectService from "../project/ProjectService.ts";
-import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
-import * as ServerSettings from "../serverSettings.ts";
-import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
-import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
-import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as EffectWorker from "./EffectWorker.ts";
 import * as Orchestrator from "./Orchestrator.ts";
-import * as RuntimeLayer from "./runtimeLayer.ts";
 
-const platform = Layer.merge(
-  NodeServices.layer,
-  Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
-    resolveLink: () => Effect.die("No source-control reads expected"),
-  }),
-);
-const config = ServerConfig.layerTest(process.cwd(), { prefix: "t3-issue-accounts-" });
-const checkpoints = CheckpointStore.layer.pipe(
-  Layer.provide(
-    VcsDriverRegistry.layer.pipe(
-      Layer.provide(VcsProcess.layer),
-      Layer.provide(config),
-      Layer.provide(platform),
-    ),
-  ),
-);
-const layerTest = RuntimeLayer.layer.pipe(
-  Layer.provide(McpSessionRegistryTestkit.layer),
-  Layer.provide(McpProviderSessions.layer),
-  Layer.provide(SqlitePersistence.layerMemory),
-  Layer.provide(checkpoints),
-  Layer.provide(config),
-  Layer.provide(ServerSettings.layerTest()),
-  Layer.provide(
-    Layer.succeed(ProviderInstanceRegistry.ProviderInstanceRegistry, {
-      getInstance: () => Effect.succeed(undefined),
-      listInstances: Effect.succeed([]),
-      listUnavailable: Effect.succeed([]),
-      streamChanges: Stream.empty,
-      subscribeChanges: Effect.never,
-    }),
-  ),
-  Layer.provide(
-    Layer.mock(GitWorkflow.GitWorkflowService)({
-      pruneWorktrees: () => Effect.void,
-    }),
-  ),
-  Layer.provide(
-    Layer.mock(ProjectService.ProjectService)({
-      getById: () => Effect.succeed(Option.none()),
-    }),
-  ),
-  Layer.provide(platform),
-);
+const layerTest = issueRuntimeLayer("t3-issue-accounts-");
 
 const projectId = ProjectId.make("account-project");
 const ref = {
@@ -101,20 +46,15 @@ it.layer(layerTest)("account-qualified issue commands", (it) => {
         const orchestrator = yield* Orchestrator.OrchestratorV2;
         const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
         const threadId = ThreadId.make("account-thread");
-        yield* orchestrator.dispatch({
-          type: "thread.create",
-          commandId: CommandId.make("create"),
-          threadId,
-          projectId,
-          title: "Accounts",
-          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
-          runtimeMode: "full-access",
-          interactionMode: "default",
-          branch: null,
-          worktreePath: null,
-          createdBy: "user",
-          creationSource: "web",
-        });
+        yield* orchestrator.dispatch(
+          issueThreadCommand({
+            commandId: CommandId.make("create"),
+            threadId,
+            projectId,
+            title: "Accounts",
+            modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+          }),
+        );
         for (const connectionId of [undefined, "Account", "account"]) {
           yield* orchestrator.dispatch({
             type: "thread.issue.link",
@@ -192,13 +132,7 @@ it.layer(layerTest)("account-qualified issue commands", (it) => {
         let serial = 0;
         const dependencies = Layer.mergeAll(
           Layer.succeed(Orchestrator.OrchestratorV2, orchestrator),
-          Layer.succeed(
-            Crypto.Crypto,
-            Crypto.make({
-              randomBytes: (size) => new Uint8Array(size).fill(++serial),
-              digest: (_algorithm, data) => Effect.succeed(data),
-            }),
-          ),
+          issueCryptoLayer((size) => new Uint8Array(size).fill(++serial)),
           Layer.mock(IssueService.IssueService)({
             detail: (input) =>
               Effect.sync((): IssueDetail => {

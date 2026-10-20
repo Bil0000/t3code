@@ -42,7 +42,6 @@ import {
 import * as Effect from "effect/Effect";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
-import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -92,8 +91,9 @@ import { PULL_REQUEST_WATCH_WAKE_LIMIT } from "./pullRequestWatch.ts";
 import { PullRequestProviderError } from "@t3tools/source-control-core/server/PullRequestProvider";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as IssueService from "../issue/IssueService.ts";
+import { issueCryptoLayer } from "../issue/IssueService.testkit.ts";
 import * as ThreadIssueService from "./ThreadIssueService.ts";
-import { emptyIssueDetailFields } from "./ThreadIssueService.testkit.ts";
+import { emptyIssueDetailFields, issueThreadCommand } from "./ThreadIssueService.testkit.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as RuntimeLayer from "./runtimeLayer.ts";
@@ -2422,20 +2422,15 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         const orchestrator = yield* Orchestrator.OrchestratorV2;
         const threadId = ThreadId.make(`issue-refresh-${issueOperation}`);
         const projectId = ProjectId.make("issue-refresh-project");
-        yield* orchestrator.dispatch({
-          type: "thread.create",
-          commandId: CommandId.make(`issue-refresh-create-${issueOperation}`),
-          createdBy: "user",
-          creationSource: "web",
-          threadId,
-          projectId,
-          title: "Issue refresh",
-          modelSelection,
-          runtimeMode: "full-access",
-          interactionMode: "default",
-          branch: null,
-          worktreePath: null,
-        });
+        yield* orchestrator.dispatch(
+          issueThreadCommand({
+            commandId: CommandId.make(`issue-refresh-create-${issueOperation}`),
+            threadId,
+            projectId,
+            title: "Issue refresh",
+            modelSelection,
+          }),
+        );
         yield* orchestrator.dispatch({
           type: "thread.issue.link",
           commandId: CommandId.make(`issue-refresh-link-${issueOperation}`),
@@ -2484,13 +2479,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
                 ),
               ),
           }),
-          Layer.succeed(
-            Crypto.Crypto,
-            Crypto.make({
-              randomBytes: (size) => new Uint8Array(size).fill(1),
-              digest: (_algorithm, data) => Effect.succeed(data),
-            }),
-          ),
+          issueCryptoLayer((size) => new Uint8Array(size).fill(1)),
         );
         yield* Effect.scoped(
           Effect.gen(function* () {
@@ -2521,20 +2510,15 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           defaultModelSelection: modelSelection,
           createdAt: DateTime.formatIso(yield* DateTime.now),
         });
-        yield* orchestrator.dispatch({
-          type: "thread.create",
-          commandId: CommandId.make(`issue-mcp-create-${target}`),
-          createdBy: "user",
-          creationSource: "web",
-          threadId,
-          projectId,
-          title: "Issue link budget",
-          modelSelection,
-          runtimeMode: "full-access",
-          interactionMode: "default",
-          branch: null,
-          worktreePath: null,
-        });
+        yield* orchestrator.dispatch(
+          issueThreadCommand({
+            commandId: CommandId.make(`issue-mcp-create-${target}`),
+            threadId,
+            projectId,
+            title: "Issue link budget",
+            modelSelection,
+          }),
+        );
         const ref = {
           projectId,
           tracker: IssueTrackerKind.make("github"),
@@ -2636,13 +2620,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
               ),
           }),
           McpToolAccessTestkit.liveThreadsLayer,
-          Layer.succeed(
-            Crypto.Crypto,
-            Crypto.make({
-              randomBytes: (size) => new Uint8Array(size).fill(++nonce),
-              digest: (_algorithm, data) => Effect.succeed(data),
-            }),
-          ),
+          issueCryptoLayer((size) => new Uint8Array(size).fill(++nonce)),
         );
         yield* Effect.scoped(
           Effect.gen(function* () {
@@ -2765,20 +2743,15 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
       const threadId = ThreadId.make("runtime-jira-mount-links");
       const projectId = ProjectId.make("jira-mount-project");
-      yield* orchestrator.dispatch({
-        type: "thread.create",
-        createdBy: "user",
-        creationSource: "web",
-        commandId: CommandId.make("jira-mount-create"),
-        threadId,
-        projectId,
-        title: "Jira mounts",
-        modelSelection,
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        branch: null,
-        worktreePath: null,
-      });
+      yield* orchestrator.dispatch(
+        issueThreadCommand({
+          commandId: CommandId.make("jira-mount-create"),
+          threadId,
+          projectId,
+          title: "Jira mounts",
+          modelSelection,
+        }),
+      );
       const key = { tracker: IssueTrackerKind.make("jira"), scope: "ENG", key: "ENG-42" };
       for (const [index, host] of [
         "jira.example/Jira",
@@ -2823,20 +2796,15 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
       const threadId = ThreadId.make("runtime-issue-links");
       const projectId = ProjectId.make("issue-link-project");
-      yield* orchestrator.dispatch({
-        type: "thread.create",
-        createdBy: "user",
-        creationSource: "web",
-        commandId: CommandId.make("issue-link-create"),
-        threadId,
-        projectId,
-        title: "Issue links",
-        modelSelection,
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        branch: null,
-        worktreePath: null,
-      });
+      yield* orchestrator.dispatch(
+        issueThreadCommand({
+          commandId: CommandId.make("issue-link-create"),
+          threadId,
+          projectId,
+          title: "Issue links",
+          modelSelection,
+        }),
+      );
       const key = {
         tracker: IssueTrackerKind.make("github"),
         host: "GitHub.com",
@@ -2941,13 +2909,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
                     ),
                   ),
               }),
-              Layer.succeed(
-                Crypto.Crypto,
-                Crypto.make({
-                  randomBytes: (size) => new Uint8Array(size).fill(++nonce),
-                  digest: (_algorithm, data) => Effect.succeed(data),
-                }),
-              ),
+              issueCryptoLayer((size) => new Uint8Array(size).fill(++nonce)),
             ),
           );
           const serviceContext = yield* Layer.build(ThreadIssueService.layer).pipe(
@@ -3152,20 +3114,15 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         key: testCase.key ?? "ENG-1",
         projectId,
       };
-      yield* orchestrator.dispatch({
-        type: "thread.create",
-        createdBy: "user",
-        creationSource: "web",
-        commandId: CommandId.make(`linear-link-create-${testCase.name}`),
-        threadId,
-        projectId,
-        title: "Linear issue links",
-        modelSelection,
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        branch: null,
-        worktreePath: null,
-      });
+      yield* orchestrator.dispatch(
+        issueThreadCommand({
+          commandId: CommandId.make(`linear-link-create-${testCase.name}`),
+          threadId,
+          projectId,
+          title: "Linear issue links",
+          modelSelection,
+        }),
+      );
       yield* orchestrator.dispatch({
         type: "thread.issue.link",
         commandId: CommandId.make(`linear-link-${testCase.name}`),
@@ -3212,13 +3169,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
                     };
                   }),
               }),
-              Layer.succeed(
-                Crypto.Crypto,
-                Crypto.make({
-                  randomBytes: (size) => new Uint8Array(size).fill(1),
-                  digest: (_algorithm, data) => Effect.succeed(data),
-                }),
-              ),
+              issueCryptoLayer((size) => new Uint8Array(size).fill(1)),
             ),
           );
           const serviceContext = yield* Layer.build(ThreadIssueService.layer).pipe(

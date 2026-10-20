@@ -56,10 +56,36 @@ const createdIssueFixture = (identifier: string) => ({
   },
 });
 
-const teamResponseFixture = <T, L>(team: T, issueLabels: L) => ({
-  organization: ORGANIZATION,
+const teamResponseFixture = <T, L>(
+  team: T,
+  issueLabels: L,
+  organization: unknown = ORGANIZATION,
+) => ({
+  organization,
   teams: { nodes: [team] },
   issueLabels,
+});
+
+function templateFixture<T extends object>(overrides: T) {
+  const defaults = {
+    name: "Bug",
+    description: null,
+    content: "Steps",
+    type: "issue",
+    hasFormFields: false,
+    templateData: {},
+  };
+  return { ...defaults, ...overrides } as Omit<typeof defaults, keyof T> & T;
+}
+
+const parentTeamFixture = <T extends object>(overrides: T) => ({
+  id: "parent",
+  key: "PARENT",
+  name: "Parent",
+  private: false,
+  visibility: "public",
+  restrictedBy: null,
+  ...overrides,
 });
 
 const state = (name: string, type: string, position = 0) => ({
@@ -225,6 +251,14 @@ function fakeLinear(
 const compactQuery = (query: string | undefined) => stripIgnoredCharacters(query ?? "");
 
 const target = { cwd: "/w/web", host: "linear.app", scope: "ENG" };
+const createInput = <T extends object>(overrides: T) => ({
+  ...target,
+  title: "New",
+  body: "",
+  labels: [],
+  assignees: [],
+  ...overrides,
+});
 const decodeIssueSummary = Schema.decodeEffect(IssueSummary);
 const decodeScopePage = Schema.decodeEffect(IssueTrackerScopePage);
 
@@ -374,31 +408,21 @@ it.effect.each([
   ({ template, assignee }) =>
     Effect.gen(function* () {
       const empty = connectionFixture();
-      const preset = {
+      const preset = templateFixture({
         id: "preset-assignee",
         name: "Assigned template",
-        description: null,
-        content: "Steps",
-        type: "issue",
-        hasFormFields: false,
         templateData: { assigneeId: THEO.id },
-      };
+      });
       let appliedAssignee: unknown = "no-write";
       const test = fakeLinear({
-        T3Team: () => ({
-          organization: ORGANIZATION,
-          issueLabels: empty,
-          teams: {
-            nodes: [
-              teamFixture({
-                states: empty,
-                labels: empty,
-                members: { ...empty, nodes: [THEO, JULIUS] },
-                templates: { ...empty, nodes: [preset] },
-              }),
-            ],
-          },
-        }),
+        T3Team: () =>
+          teamResponseFixture(
+            teamFixture({
+              members: { ...empty, nodes: [THEO, JULIUS] },
+              templates: { ...empty, nodes: [preset] },
+            }),
+            empty,
+          ),
         T3IssueCreate: (variables) => {
           const input = variables.input as Record<string, unknown>;
           appliedAssignee = Object.hasOwn(input, "assigneeId")
@@ -410,15 +434,14 @@ it.effect.each([
         },
       });
       const api = yield* test.tracker;
-      const created = yield* api.create({
-        ...target,
-        scope: "acme/ENG",
-        title: "New",
-        body: "Steps",
-        labels: [],
-        assignees: assignee === null ? [] : [assignee],
-        ...(template ? { templateKey: preset.id } : {}),
-      });
+      const created = yield* api.create(
+        createInput({
+          scope: "acme/ENG",
+          body: "Steps",
+          assignees: assignee === null ? [] : [assignee],
+          ...(template ? { templateKey: preset.id } : {}),
+        }),
+      );
       expect(appliedAssignee).toBe(assignee);
       expect(created.key).toBe("ENG-8");
       expect(test.requests.map(({ operation }) => operation)).toEqual(["T3Team", "T3IssueCreate"]);
@@ -694,13 +717,7 @@ describe("LinearIssueTracker", () => {
         T3IssueReference: () => ({ issue: native }),
         T3Comments: () => ({ issue: native }),
         T3CommentTarget: () => ({ issue: native, comment: { id: "comment", issue: native } }),
-        T3Team: () => ({
-          organization: other,
-          teams: {
-            nodes: [teamFixture({})],
-          },
-          issueLabels: connectionFixture(),
-        }),
+        T3Team: () => teamResponseFixture(teamFixture({}), connectionFixture(), other),
       });
       const api = yield* test.tracker;
       const scoped = { ...target, scope: "acme/ENG" };
@@ -1726,52 +1743,42 @@ describe("LinearIssueTracker", () => {
         const now = 1_750_000_000_000;
         yield* TestClock.setTime(now);
         const empty = connectionFixture();
-        const template = {
+        const template = templateFixture({
           id: "template",
           name: "Template",
-          description: null,
           content: null,
-          type: "issue",
-          hasFormFields: false,
           templateData: invalid === "template-data" ? "{" : {},
-        };
+        });
         const test = fakeLinear({
           T3Viewer: () => new Response(null, { status: 429 }),
-          T3Team: () => ({
-            organization: ORGANIZATION,
-            issueLabels: empty,
-            teams: {
-              nodes: [
-                teamFixture({
-                  id: "team",
-                  private: false,
-                  visibility: "public",
-                  states: empty,
-                  labels: empty,
-                  members: empty,
-                  templates: {
-                    ...empty,
-                    nodes: Array.from(
-                      { length: invalid === "template-count" ? 101 : 1 },
-                      () => template,
-                    ),
-                  },
-                  ancestors:
-                    invalid === "ancestor-count"
-                      ? Array.from({ length: 6 }, (_, index) => ({
-                          id: `ancestor-${index}`,
-                          key: `A${index}`,
-                          name: "Ancestor",
-                          private: false,
-                          visibility: "public",
-                          restrictedBy: null,
-                          templates: empty,
-                        }))
-                      : [],
-                }),
-              ],
-            },
-          }),
+          T3Team: () =>
+            teamResponseFixture(
+              teamFixture({
+                id: "team",
+                private: false,
+                visibility: "public",
+                templates: {
+                  ...empty,
+                  nodes: Array.from(
+                    { length: invalid === "template-count" ? 101 : 1 },
+                    () => template,
+                  ),
+                },
+                ancestors:
+                  invalid === "ancestor-count"
+                    ? Array.from({ length: 6 }, (_, index) => ({
+                        id: `ancestor-${index}`,
+                        key: `A${index}`,
+                        name: "Ancestor",
+                        private: false,
+                        visibility: "public",
+                        restrictedBy: null,
+                        templates: empty,
+                      }))
+                    : [],
+              }),
+              empty,
+            ),
         });
         const api = yield* test.api;
         yield* api.viewer().pipe(Effect.flip);
@@ -2405,15 +2412,13 @@ describe("LinearIssueTracker", () => {
 
   it("offers plain templates as drafts and form or rich ones as links into Linear", () => {
     const plain = LinearIssueTracker.toTemplate(
-      {
+      templateFixture({
         id: "tpl_1",
         name: "Bug report",
         description: "For bugs",
         content: "## Steps",
-        type: "issue",
-        hasFormFields: false,
         templateData: { title: "Bug: ", labelIds: ["lbl_bug", "lbl_unknown"], assigneeId: null },
-      },
+      }),
       "ENG",
     );
     expect(plain).toEqual({
@@ -2428,15 +2433,7 @@ describe("LinearIssueTracker", () => {
       },
     });
     const form = LinearIssueTracker.toTemplate(
-      {
-        id: "tpl_2",
-        name: "Intake",
-        description: null,
-        content: null,
-        type: "issue",
-        hasFormFields: true,
-        templateData: {},
-      },
+      templateFixture({ id: "tpl_2", name: "Intake", content: null, hasFormFields: true }),
       "ENG",
     );
     expect(form).toEqual({
@@ -2448,15 +2445,7 @@ describe("LinearIssueTracker", () => {
     ]) {
       expect(
         LinearIssueTracker.toTemplate(
-          {
-            id: "tpl_rich",
-            name: "Rich",
-            description: null,
-            content: null,
-            type: "issue",
-            hasFormFields: false,
-            templateData,
-          },
+          templateFixture({ id: "tpl_rich", name: "Rich", content: null, templateData }),
           "ENG",
         ),
       ).toEqual({
@@ -2771,13 +2760,7 @@ it.effect("pages label and member candidates with native cursors and workspace c
     const pageInfo = { hasNextPage: true, endCursor: "more" };
     const empty = connectionFixture();
     const test = fakeLinear({
-      T3Team: () => ({
-        organization: ORGANIZATION,
-        issueLabels: empty,
-        teams: {
-          nodes: [teamFixture({ id: "team-1", states: empty, labels: empty, members: empty })],
-        },
-      }),
+      T3Team: () => teamResponseFixture(teamFixture({ id: "team-1" }), empty),
       T3LabelCandidates: () =>
         teamResponseFixture(
           { id: "team-1", key: "ENG", name: "Engineering" },
@@ -2859,22 +2842,9 @@ it.effect("creates an issue with a checked parent and a plain native template", 
         teamResponseFixture(
           teamFixture({
             id: "team-1",
-            states: empty,
-            labels: empty,
-            members: empty,
             templates: {
               pageInfo: empty.pageInfo,
-              nodes: [
-                {
-                  id: "template-1",
-                  name: "Bug",
-                  description: "Report a bug",
-                  content: "Steps",
-                  type: "issue",
-                  hasFormFields: false,
-                  templateData: {},
-                },
-              ],
+              nodes: [templateFixture({ id: "template-1", description: "Report a bug" })],
             },
           }),
           empty,
@@ -3068,7 +3038,6 @@ it.effect.each(["create", "update"] as const)(
       }));
       const members = Array.from({ length: 250 }, (_, n) => user(`member-${n}`, "Same"));
       const team = teamFixture({
-        states: empty,
         labels: connectionFixture(labels, { hasNextPage: true, endCursor: "labels-250" }),
         members: connectionFixture(members, { hasNextPage: true, endCursor: "members-250" }),
       });
@@ -3158,42 +3127,41 @@ it.effect.each([
   Effect.gen(function* () {
     const empty = connectionFixture();
     const team = teamFixture({
-      states: empty,
       labels: { ...empty, pageInfo: { hasNextPage: true, endCursor: "more" } },
-      members: empty,
     });
     const test = fakeLinear({
       T3IssueReference: () => ({ issue: issue("ENG-7") }),
       T3Team: () => teamResponseFixture(team, empty),
-      T3LabelCandidates: () => ({
-        organization: failure === "foreign" ? { ...ORGANIZATION, id: "org_other" } : ORGANIZATION,
-        teams: { nodes: [team] },
-        issueLabels: connectionFixture(
-          failure === "missing"
-            ? []
-            : [
-                labelFixture({
-                  id: failure === "wrong-id" ? "other" : "chosen",
-                  name: "Same",
-                  color: "#000",
-                  isGroup: failure === "group",
-                }),
-                ...(failure === "duplicate"
-                  ? [labelFixture({ id: "chosen", name: "Same", color: "#000" })]
-                  : []),
-              ],
-          {
-            hasNextPage: failure === "partial",
-            endCursor: failure === "partial" ? "more" : null,
-          },
+      T3LabelCandidates: () =>
+        teamResponseFixture(
+          team,
+          connectionFixture(
+            failure === "missing"
+              ? []
+              : [
+                  labelFixture({
+                    id: failure === "wrong-id" ? "other" : "chosen",
+                    name: "Same",
+                    color: "#000",
+                    isGroup: failure === "group",
+                  }),
+                  ...(failure === "duplicate"
+                    ? [labelFixture({ id: "chosen", name: "Same", color: "#000" })]
+                    : []),
+                ],
+            {
+              hasNextPage: failure === "partial",
+              endCursor: failure === "partial" ? "more" : null,
+            },
+          ),
+          failure === "foreign" ? { ...ORGANIZATION, id: "org_other" } : ORGANIZATION,
         ),
-      }),
     });
     const api = yield* test.tracker;
     const labels =
       failure === "too-many" ? Array.from({ length: 201 }, (_, n) => `label-${n}`) : ["chosen"];
     for (const action of [
-      api.create({ ...target, title: "New", body: "", labels, assignees: [] }),
+      api.create(createInput({ labels })),
       api.update({ ...target, key: "ENG-7", labels }),
     ]) {
       test.requests.length = 0;
@@ -3222,8 +3190,6 @@ it.effect.each(["foreign", "partial", "inactive", "wrong-id"] as const)(
     Effect.gen(function* () {
       const empty = connectionFixture();
       const team = teamFixture({
-        states: empty,
-        labels: empty,
         members: { ...empty, pageInfo: { hasNextPage: true, endCursor: "more" } },
       });
       const test = fakeLinear({
@@ -3252,7 +3218,7 @@ it.effect.each(["foreign", "partial", "inactive", "wrong-id"] as const)(
       });
       const api = yield* test.tracker;
       for (const action of [
-        api.create({ ...target, title: "New", body: "", labels: [], assignees: ["chosen"] }),
+        api.create(createInput({ assignees: ["chosen"] })),
         api.update({ ...target, key: "ENG-7", assignees: ["chosen"] }),
       ]) {
         test.requests.length = 0;
@@ -3355,23 +3321,16 @@ it.effect.each([false, true])(
       const other = labelFixture({ id: "other", name: "Other", color: "#000" });
       const written: unknown[] = [];
       const team = teamFixture({
-        states: empty,
-        members: empty,
         labels: { ...empty, nodes: [childLabel, other] },
         ancestors: [
-          {
+          parentTeamFixture({
             id: "team_parent",
-            key: "PARENT",
-            name: "Parent",
-            private: false,
-            visibility: "public",
-            restrictedBy: null,
             templates: empty,
             labels: connectionFixture([parentLabel], {
               hasNextPage: partial,
               endCursor: "parent-more",
             }),
-          },
+          }),
         ],
       });
       const test = fakeLinear({
@@ -3455,13 +3414,7 @@ it.effect.each([false, true])(
         "T3IssueUpdate",
       ]);
       test.requests.length = 0;
-      yield* api.create({
-        ...target,
-        title: "New",
-        body: "",
-        labels: [parentLabel.id],
-        assignees: [],
-      });
+      yield* api.create(createInput({ labels: [parentLabel.id] }));
       expect(test.requests.map(({ operation }) => operation)).toEqual(["T3Team", "T3IssueCreate"]);
       expect(test.requests[0]?.variables.includeAncestorLabels).toBe(true);
       expect(
@@ -3499,29 +3452,22 @@ it.effect.each([5, 6])("bounds native Linear ancestor catalogs at five teams: %s
   Effect.gen(function* () {
     const empty = connectionFixture();
     const test = fakeLinear({
-      T3Team: () => ({
-        organization: ORGANIZATION,
-        issueLabels: empty,
-        teams: {
-          nodes: [
-            teamFixture({
-              states: empty,
+      T3Team: () =>
+        teamResponseFixture(
+          teamFixture({
+            ancestors: Array.from({ length: count }, (_, n) => ({
+              id: `parent-${n}`,
+              key: `P${n}`,
+              name: "Parent",
+              private: false,
+              visibility: "public",
+              restrictedBy: null,
+              templates: empty,
               labels: empty,
-              members: empty,
-              ancestors: Array.from({ length: count }, (_, n) => ({
-                id: `parent-${n}`,
-                key: `P${n}`,
-                name: "Parent",
-                private: false,
-                visibility: "public",
-                restrictedBy: null,
-                templates: empty,
-                labels: empty,
-              })),
-            }),
-          ],
-        },
-      }),
+            })),
+          }),
+          empty,
+        ),
     });
     const api = yield* test.tracker;
     if (count === 5) expect((yield* api.listCandidates(target)).truncated).toBe(false);
@@ -3535,48 +3481,23 @@ it.effect.each(["workspace", "ancestor"] as const)(
   (source) =>
     Effect.gen(function* () {
       const empty = connectionFixture();
-      const plain = {
+      const plain = templateFixture({
         id: "inherited-plain",
-        name: "Bug",
         description: "Report a bug",
-        content: "Steps",
-        type: "issue",
-        hasFormFields: false,
         templateData: { labelIds: ["native-label"] },
-      };
+      });
       const form = { ...plain, id: "inherited-form", hasFormFields: true };
       const catalog = { ...empty, nodes: [plain, form] };
       const test = fakeLinear({
         T3Team: (variables) => {
           expect(variables.includeAncestorLabels).toBe(false);
-          return {
-            organization: { ...ORGANIZATION, templates: source === "workspace" ? catalog : empty },
-            issueLabels: empty,
-            teams: {
-              nodes: [
-                teamFixture({
-                  states: empty,
-                  labels: empty,
-                  members: empty,
-                  templates: empty,
-                  ancestors:
-                    source === "ancestor"
-                      ? [
-                          {
-                            id: "parent",
-                            key: "PARENT",
-                            name: "Parent",
-                            private: false,
-                            visibility: "public",
-                            restrictedBy: null,
-                            templates: catalog,
-                          },
-                        ]
-                      : [],
-                }),
-              ],
-            },
-          };
+          return teamResponseFixture(
+            teamFixture({
+              ancestors: source === "ancestor" ? [parentTeamFixture({ templates: catalog })] : [],
+            }),
+            empty,
+            { ...ORGANIZATION, templates: source === "workspace" ? catalog : empty },
+          );
         },
         T3IssueCreate: (variables) => {
           expect(variables.input).toMatchObject({ teamId: "team_eng", templateId: plain.id });
@@ -3592,28 +3513,12 @@ it.effect.each(["workspace", "ancestor"] as const)(
       });
       expect(test.requests.map(({ operation }) => operation)).toEqual(["T3Team"]);
       test.requests.length = 0;
-      yield* api.create({
-        ...target,
-        title: "New",
-        body: "Steps",
-        labels: [],
-        assignees: [],
-        templateKey: plain.id,
-      });
+      yield* api.create(createInput({ body: "Steps", templateKey: plain.id }));
       expect(test.requests.map(({ operation }) => operation)).toEqual(["T3Team", "T3IssueCreate"]);
       for (const key of [form.id, "foreign-template"]) {
         test.requests.length = 0;
         expect(
-          (yield* api
-            .create({
-              ...target,
-              title: "New",
-              body: "",
-              labels: [],
-              assignees: [],
-              templateKey: key,
-            })
-            .pipe(Effect.flip)).reason,
+          (yield* api.create(createInput({ templateKey: key })).pipe(Effect.flip)).reason,
         ).toBe("failed");
         expect(test.requests.map(({ operation }) => operation)).toEqual(["T3Team"]);
       }
@@ -3627,32 +3532,20 @@ it.effect.each(["workspace", "team", "ancestor"] as const)(
       const empty = connectionFixture();
       const catalog = connectionFixture([], { hasNextPage: true, endCursor: "more-native" });
       const test = fakeLinear({
-        T3Team: () => ({
-          organization: { ...ORGANIZATION, templates: partial === "workspace" ? catalog : empty },
-          issueLabels: empty,
-          teams: {
-            nodes: [
-              teamFixture({
-                states: empty,
-                labels: empty,
-                members: empty,
-                templates: partial === "team" ? catalog : empty,
-                ancestors: [
-                  {
-                    id: "parent",
-                    key: "PARENT",
-                    name: "Parent",
-                    private: false,
-                    visibility: "public",
-                    restrictedBy: null,
-                    labels: empty,
-                    templates: partial === "ancestor" ? catalog : empty,
-                  },
-                ],
-              }),
-            ],
-          },
-        }),
+        T3Team: () =>
+          teamResponseFixture(
+            teamFixture({
+              templates: partial === "team" ? catalog : empty,
+              ancestors: [
+                parentTeamFixture({
+                  labels: empty,
+                  templates: partial === "ancestor" ? catalog : empty,
+                }),
+              ],
+            }),
+            empty,
+            { ...ORGANIZATION, templates: partial === "workspace" ? catalog : empty },
+          ),
       });
       const api = yield* test.tracker;
       expect((yield* api.listTemplates(target).pipe(Effect.flip)).reason).toBe("failed");
@@ -3664,27 +3557,16 @@ it.effect.each([100, 101])("bounds native workspace template catalogs: %s", (cou
   Effect.gen(function* () {
     const empty = connectionFixture();
     const test = fakeLinear({
-      T3Team: () => ({
-        organization: {
+      T3Team: () =>
+        teamResponseFixture(teamFixture({}), empty, {
           ...ORGANIZATION,
           templates: {
             ...empty,
-            nodes: Array.from({ length: count }, (_, n) => ({
-              id: `template-${n}`,
-              name: "Bug",
-              description: null,
-              content: "Steps",
-              type: "issue",
-              hasFormFields: false,
-              templateData: {},
-            })),
+            nodes: Array.from({ length: count }, (_, n) =>
+              templateFixture({ id: `template-${n}` }),
+            ),
           },
-        },
-        issueLabels: empty,
-        teams: {
-          nodes: [teamFixture({ states: empty, labels: empty, members: empty, templates: empty })],
-        },
-      }),
+        }),
     });
     const api = yield* test.tracker;
     if (count === 100) expect((yield* api.listTemplates(target)).templates).toHaveLength(100);
@@ -3696,16 +3578,7 @@ it.effect.each([100, 101])("bounds native workspace template catalogs: %s", (cou
 it.effect("uses workspace-scoped native templates without accepting another team's template", () =>
   Effect.gen(function* () {
     const empty = connectionFixture();
-    const template = {
-      id: "workspace-template",
-      name: "Bug",
-      description: null,
-      content: "Steps",
-      type: "issue",
-      hasFormFields: false,
-      templateData: {},
-      teamId: null,
-    };
+    const template = templateFixture({ id: "workspace-template", teamId: null });
     const nativeTemplates = [template, { ...template, id: "foreign-template", teamId: "team_ops" }];
     const test = fakeLinear({
       T3Team: (variables) => {
@@ -3718,21 +3591,13 @@ it.effect("uses workspace-scoped native templates without accepting another team
         expect(compactQuery(test.requests.at(-1)?.query)).toContain(
           compactQuery("teams(first: 1, filter: { key: { eq: $key } })"),
         );
-        return {
-          organization: {
-            ...ORGANIZATION,
-            templates: {
-              ...empty,
-              nodes: nativeTemplates.filter((entry) => entry.teamId === null),
-            },
+        return teamResponseFixture(teamFixture({}), empty, {
+          ...ORGANIZATION,
+          templates: {
+            ...empty,
+            nodes: nativeTemplates.filter((entry) => entry.teamId === null),
           },
-          issueLabels: empty,
-          teams: {
-            nodes: [
-              teamFixture({ states: empty, labels: empty, members: empty, templates: empty }),
-            ],
-          },
-        };
+        });
       },
     });
     const api = yield* test.tracker;
@@ -3742,16 +3607,8 @@ it.effect("uses workspace-scoped native templates without accepting another team
     expect(test.requests.map(({ operation }) => operation)).toEqual(["T3Team"]);
     test.requests.length = 0;
     expect(
-      (yield* api
-        .create({
-          ...target,
-          title: "New",
-          body: "",
-          labels: [],
-          assignees: [],
-          templateKey: "foreign-template",
-        })
-        .pipe(Effect.flip)).reason,
+      (yield* api.create(createInput({ templateKey: "foreign-template" })).pipe(Effect.flip))
+        .reason,
     ).toBe("failed");
     expect(test.requests.map(({ operation }) => operation)).toEqual(["T3Team"]);
   }),
@@ -3774,31 +3631,14 @@ it.effect.each(["create", "assignee", "clearLabels", "labelPage", "missingLabels
               "labels(first: 250, includeArchived: true) @include(if: $includeAncestorLabels)",
             ),
           );
-          return {
-            organization: { ...ORGANIZATION, templates: empty },
-            issueLabels: empty,
-            teams: {
-              nodes: [
-                teamFixture({
-                  states: empty,
-                  labels: empty,
-                  members: { ...empty, nodes: [THEO] },
-                  templates: empty,
-                  ancestors: [
-                    {
-                      id: "parent",
-                      key: "PARENT",
-                      name: "Parent",
-                      private: false,
-                      visibility: "public",
-                      restrictedBy: null,
-                      templates: empty,
-                    },
-                  ],
-                }),
-              ],
-            },
-          };
+          return teamResponseFixture(
+            teamFixture({
+              members: { ...empty, nodes: [THEO] },
+              ancestors: [parentTeamFixture({ templates: empty })],
+            }),
+            empty,
+            { ...ORGANIZATION, templates: empty },
+          );
         },
         T3IssueReference: () => ({ issue: issue("ENG-7") }),
         T3IssueCreate: (variables) => {
@@ -3831,7 +3671,7 @@ it.effect.each(["create", "assignee", "clearLabels", "labelPage", "missingLabels
           { id: parentLabel.id },
         ]);
       } else if (operation === "create") {
-        yield* api.create({ ...target, title: "New", body: "", labels: [], assignees: [] });
+        yield* api.create(createInput({}));
       } else {
         yield* api.update({
           ...target,
@@ -3863,20 +3703,14 @@ it.effect.each([false, true])(
       const team = teamFixture({
         private: privateTeam,
         visibility: privateTeam ? "private" : "public",
-        states: empty,
-        labels: empty,
-        templates: empty,
         members: { ...empty, nodes: [JULIUS] },
       });
-      const template = {
+      const template = templateFixture({
         id: "outsider-template",
         name: "Assigned",
-        description: null,
         content: "",
-        hasFormFields: false,
-        type: "issue",
         templateData: { assigneeId: THEO.id },
-      };
+      });
       const test = fakeLinear({
         T3Team: () =>
           teamResponseFixture({ ...team, templates: { ...empty, nodes: [template] } }, empty),
@@ -3953,22 +3787,8 @@ it.effect.each(["ENG", "acme/ENG"])(
                   id === "OTHER-8" ? { url: "https://linear.app/other/issue/OTHER-8" } : {},
                 ),
         }),
-        T3Team: () => ({
-          organization: ORGANIZATION,
-          issueLabels: empty,
-          teams: {
-            nodes: [
-              teamFixture({
-                private: false,
-                visibility: "public",
-                states: empty,
-                labels: empty,
-                members: empty,
-                templates: empty,
-              }),
-            ],
-          },
-        }),
+        T3Team: () =>
+          teamResponseFixture(teamFixture({ private: false, visibility: "public" }), empty),
         T3IssueUpdate: () => ({ issueUpdate: { success: true } }),
         T3IssueCreate: () => createdIssueFixture("ENG-9"),
       });
@@ -4033,20 +3853,9 @@ it.effect.each(["create", "update"] as const)(
   (operation) =>
     Effect.gen(function* () {
       const empty = connectionFixture();
-      const team = teamFixture({
-        private: false,
-        visibility: "public",
-        states: empty,
-        labels: empty,
-        templates: empty,
-        members: empty,
-      });
+      const team = teamFixture({ private: false, visibility: "public" });
       const test = fakeLinear({
-        T3Team: () => ({
-          organization: ORGANIZATION,
-          issueLabels: empty,
-          teams: { nodes: [team] },
-        }),
+        T3Team: () => teamResponseFixture(team, empty),
         T3IssueReference: () => ({ issue: issue("ENG-7") }),
         T3AssigneeCandidates: ({ first }) => ({
           organization: ORGANIZATION,
@@ -4103,11 +3912,7 @@ it.effect.each(["inactive", "missing-privacy", "foreign-organization", "privacy-
       };
       const test = fakeLinear({
         T3IssueReference: () => ({ issue: issue("ENG-7") }),
-        T3Team: () => ({
-          organization: ORGANIZATION,
-          issueLabels: empty,
-          teams: { nodes: [team] },
-        }),
+        T3Team: () => teamResponseFixture(team, empty),
         T3AssigneeCandidates: ({ publicTeam }) => ({
           organization:
             failure === "foreign-organization" && publicTeam
@@ -4135,7 +3940,7 @@ it.effect.each(["inactive", "missing-privacy", "foreign-organization", "privacy-
         yield* api.listAssigneeCandidates(target).pipe(Effect.flip);
       }
       for (const action of [
-        api.create({ ...target, title: "New", body: "", labels: [], assignees: [THEO.id] }),
+        api.create(createInput({ assignees: [THEO.id] })),
         api.update({ ...target, key: "ENG-7", assignees: [THEO.id] }),
       ]) {
         test.requests.length = 0;
@@ -4208,26 +4013,13 @@ it.effect.each([401, 429])(
   (status) =>
     Effect.gen(function* () {
       const empty = connectionFixture();
-      const team = teamFixture({
-        private: false,
-        visibility: "public",
-        states: empty,
-        labels: empty,
-        templates: empty,
-        members: empty,
-      });
+      const team = teamFixture({ private: false, visibility: "public" });
       const test = fakeLinear({
-        T3Team: () => ({
-          organization: ORGANIZATION,
-          issueLabels: empty,
-          teams: { nodes: [team] },
-        }),
+        T3Team: () => teamResponseFixture(team, empty),
         T3AssigneeCandidates: () => new Response("{}", { status }),
       });
       const api = yield* test.tracker;
-      const error = yield* api
-        .create({ ...target, title: "New", body: "", labels: [], assignees: [THEO.id] })
-        .pipe(Effect.flip);
+      const error = yield* api.create(createInput({ assignees: [THEO.id] })).pipe(Effect.flip);
       expect(error.reason).toBe(status === 401 ? "unauthenticated" : "rate-limited");
       expect(test.requests.map(({ operation }) => operation)).toEqual([
         "T3Team",
@@ -4296,22 +4088,17 @@ it.effect.each(["boundary", "child-guest", "parent-guest"] as const)(
           : membership === "parent-guest"
             ? middle.id
             : "team_eng";
-      const template = {
+      const template = templateFixture({
         id: "restricted-template",
         name: "Assigned",
-        description: null,
         content: "",
-        hasFormFields: false,
-        type: "issue",
         templateData: { assigneeId: selected.id },
-      };
+      });
       const team = teamFixture({
         private: false,
         visibility: "restricted",
         restrictedBy: { id: boundary.id },
         ancestors: [outer, boundary, middle],
-        states: empty,
-        labels: empty,
         templates: { ...empty, nodes: [template] },
         members: { ...empty, nodes: membership === "child-guest" ? [selected] : [] },
       });
@@ -4329,11 +4116,7 @@ it.effect.each(["boundary", "child-guest", "parent-guest"] as const)(
           : {}),
       });
       const test = fakeLinear({
-        T3Team: () => ({
-          organization: ORGANIZATION,
-          issueLabels: empty,
-          teams: { nodes: [nativeTeam()] },
-        }),
+        T3Team: () => teamResponseFixture(nativeTeam(), empty),
         T3IssueReference: () => ({ issue: issue("ENG-7") }),
         T3AssigneeCandidates: ({ publicTeam, membershipTeamIds, filter, after, first }) => {
           if (publicTeam) expect(membershipTeamIds).toEqual([boundary.id, middle.id, team.id]);
@@ -4391,14 +4174,7 @@ it.effect.each(["boundary", "child-guest", "parent-guest"] as const)(
       expect((yield* api.listTemplates(target)).templates[0]?.assignees).toEqual([selected.id]);
       for (const assignee of [selected.id, THEO.id]) {
         for (const action of [
-          api.create({
-            ...target,
-            title: "New",
-            body: "",
-            labels: [],
-            assignees: [assignee],
-            templateKey: template.id,
-          }),
+          api.create(createInput({ assignees: [assignee], templateKey: template.id })),
           api.update({ ...target, key: "ENG-7", assignees: [assignee] }),
         ]) {
           test.requests.length = 0;
@@ -4415,7 +4191,7 @@ it.effect.each(["boundary", "child-guest", "parent-guest"] as const)(
         }
       }
       for (const action of [
-        api.create({ ...target, title: "Blank", body: "", labels: [], assignees: [] }),
+        api.create(createInput({ title: "Blank" })),
         api.update({ ...target, key: "ENG-7", assignees: [] }),
       ]) {
         test.requests.length = 0;
@@ -4436,7 +4212,7 @@ it.effect.each(["boundary", "child-guest", "parent-guest"] as const)(
       expect(next.items.map(({ id }) => id)).toEqual([selected.id]);
       expect(next.nextCursor).toBeNull();
       for (const action of [
-        api.create({ ...target, title: "New", body: "", labels: [], assignees: [selected.id] }),
+        api.create(createInput({ assignees: [selected.id] })),
         api.update({ ...target, key: "ENG-7", assignees: [selected.id] }),
       ]) {
         test.requests.length = 0;
@@ -4461,7 +4237,7 @@ it.effect.each(["boundary", "child-guest", "parent-guest"] as const)(
         "suspended",
       ]) {
         for (const action of [
-          api.create({ ...target, title: "New", body: "", labels: [], assignees: [selected.id] }),
+          api.create(createInput({ assignees: [selected.id] })),
           api.update({ ...target, key: "ENG-7", assignees: [selected.id] }),
         ]) {
           test.requests.length = 0;

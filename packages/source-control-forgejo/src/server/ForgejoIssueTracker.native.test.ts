@@ -7,6 +7,10 @@ import { IssueCommentsPage, IssueHistoryPage, IssueLabel } from "@t3tools/contra
 import * as HttpClient from "effect/http/HttpClient";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSourceControlHost";
+import type {
+  SourceControlProcessInput,
+  SourceControlProcessOutput,
+} from "@t3tools/source-control-core/server/SourceControlHost";
 
 import * as ForgejoCli from "./ForgejoCli.ts";
 import * as ForgejoIssueTracker from "./ForgejoIssueTracker.ts";
@@ -14,6 +18,76 @@ import * as ForgejoIssueTracker from "./ForgejoIssueTracker.ts";
 const decodeCommentsPage = Schema.decodeEffect(IssueCommentsPage);
 const decodeLabels = Schema.decodeEffect(Schema.Array(IssueLabel));
 const encodeHistoryPage = Schema.encodeEffect(IssueHistoryPage);
+
+function mountedNativeLayer(
+  onApi: (
+    input: SourceControlProcessInput,
+    url: URL,
+    path: string,
+  ) => Effect.Effect<SourceControlProcessOutput>,
+) {
+  const baseUrl = "https://forgejo.test:3000/Mount";
+  return Layer.mergeAll(
+    Layer.succeed(HostProcess.Platform, "linux"),
+    Layer.succeed(
+      FileSystem.FileSystem,
+      FileSystem.makeNoop({ exists: () => Effect.succeed(false) }),
+    ),
+    Layer.succeed(
+      HttpClient.HttpClient,
+      HttpClient.make(() => Effect.die("Unexpected HTTP transport")),
+    ),
+    TestSourceControlHost.layer({
+      process: {
+        run: (input) => {
+          if (input.command === "git")
+            return Effect.succeed(
+              TestSourceControlHost.processOutput(`origin\t${baseUrl}/acme/web.git (fetch)\n`),
+            );
+          if (input.command !== "tea") return Effect.die("Unexpected command " + input.command);
+          if (input.args[0] === "login")
+            return Effect.succeed(
+              TestSourceControlHost.processOutput(
+                JSON.stringify([
+                  { name: "fixture", url: baseUrl, user: "viewer", default: "true" },
+                ]),
+              ),
+            );
+          const url = new URL(input.args.at(-1)!);
+          expect(url.origin + "/Mount").toBe(baseUrl);
+          return onApi(input, url, url.pathname.slice("/Mount/api/v1/".length));
+        },
+      },
+    }),
+  );
+}
+
+function nativeHistory(entry: unknown, onRead: (input: ForgejoCli.ForgejoApiInput) => void) {
+  return Effect.gen(function* () {
+    const tracker = yield* ForgejoIssueTracker.make;
+    const page = yield* tracker.getHistory!({
+      cwd: "/fixture",
+      host: "forgejo.test",
+      scope: "acme/web",
+      key: "42",
+      order: "asc",
+    });
+    return yield* encodeHistoryPage(page);
+  }).pipe(
+    Effect.provide(
+      Layer.mock(ForgejoCli.ForgejoCli)({
+        api: (input) => {
+          onRead(input);
+          return Effect.succeed(
+            TestSourceControlHost.processOutput(JSON.stringify([entry]), {
+              stderr: "X-Total-Count: 1",
+            }),
+          );
+        },
+      }),
+    ),
+  );
+}
 
 it.effect.each([
   { field: "event", length: 8192 },
@@ -27,15 +101,26 @@ it.effect.each([
     const nativeUrl = prefix + "x".repeat(length - prefix.length);
     let reads = 0;
     return Effect.gen(function* () {
-      const tracker = yield* ForgejoIssueTracker.make;
-      const page = yield* tracker.getHistory!({
-        cwd: "/fixture",
-        host: "forgejo.test",
-        scope: "acme/web",
-        key: "42",
-        order: "asc",
-      });
-      const encoded = yield* encodeHistoryPage(page);
+      const encoded = yield* nativeHistory(
+        {
+          id: 7,
+          type: "pull_ref",
+          created_at: "2026-10-16T00:00:00Z",
+          html_url:
+            field === "event"
+              ? nativeUrl
+              : "https://forgejo.test/acme/web/issues/42#issuecomment-7",
+          ref_issue: {
+            number: 50,
+            title: "Source",
+            html_url: field === "reference" ? nativeUrl : "https://forgejo.test/acme/web/pulls/50",
+          },
+        },
+        (input) => {
+          reads++;
+          expect(input.path).toBe("repos/acme/web/issues/42/timeline?limit=50&page=1");
+        },
+      );
       expect(encoded.items).toHaveLength(1);
       expect(encoded.items[0]).toMatchObject({ id: "7", kind: "referenced" });
       expect(encoded.items[0]?.reference?.identifier).toBe(
@@ -51,40 +136,7 @@ it.effect.each([
         );
       }
       expect(reads).toBe(1);
-    }).pipe(
-      Effect.provide(
-        Layer.mock(ForgejoCli.ForgejoCli)({
-          api: (input) => {
-            reads++;
-            expect(input.path).toBe("repos/acme/web/issues/42/timeline?limit=50&page=1");
-            return Effect.succeed(
-              TestSourceControlHost.processOutput(
-                JSON.stringify([
-                  {
-                    id: 7,
-                    type: "pull_ref",
-                    created_at: "2026-10-16T00:00:00Z",
-                    html_url:
-                      field === "event"
-                        ? nativeUrl
-                        : "https://forgejo.test/acme/web/issues/42#issuecomment-7",
-                    ref_issue: {
-                      number: 50,
-                      title: "Source",
-                      html_url:
-                        field === "reference"
-                          ? nativeUrl
-                          : "https://forgejo.test/acme/web/pulls/50",
-                    },
-                  },
-                ]),
-                { stderr: "X-Total-Count: 1" },
-              ),
-            );
-          },
-        }),
-      ),
-    );
+    });
   },
 );
 
@@ -98,15 +150,21 @@ it.effect.each([
   ({ title, retained, type }) => {
     let reads = 0;
     return Effect.gen(function* () {
-      const tracker = yield* ForgejoIssueTracker.make;
-      const page = yield* tracker.getHistory!({
-        cwd: "/fixture",
-        host: "forgejo.test",
-        scope: "acme/web",
-        key: "42",
-        order: "asc",
-      });
-      const encoded = yield* encodeHistoryPage(page);
+      const encoded = yield* nativeHistory(
+        {
+          id: 7,
+          type,
+          created_at: "2026-10-16T00:00:00Z",
+          ref_issue: {
+            number: Number.MAX_SAFE_INTEGER,
+            title,
+            html_url: "https://forgejo.test/acme/web/pulls/50",
+          },
+        },
+        () => {
+          reads++;
+        },
+      );
       expect(encoded.items).toHaveLength(1);
       expect(encoded.items[0]).toMatchObject({
         id: "7",
@@ -118,32 +176,7 @@ it.effect.each([
       });
       expect(encoded.items[0]?.reference?.title).toBe(retained ? title : undefined);
       expect(reads).toBe(1);
-    }).pipe(
-      Effect.provide(
-        Layer.mock(ForgejoCli.ForgejoCli)({
-          api: () => {
-            reads++;
-            return Effect.succeed(
-              TestSourceControlHost.processOutput(
-                JSON.stringify([
-                  {
-                    id: 7,
-                    type,
-                    created_at: "2026-10-16T00:00:00Z",
-                    ref_issue: {
-                      number: Number.MAX_SAFE_INTEGER,
-                      title,
-                      html_url: "https://forgejo.test/acme/web/pulls/50",
-                    },
-                  },
-                ]),
-                { stderr: "X-Total-Count: 1" },
-              ),
-            );
-          },
-        }),
-      ),
-    );
+    });
   },
 );
 
@@ -335,75 +368,44 @@ it.effect.each([
       ]);
     }
   }).pipe(
-    Effect.provideService(HostProcess.Platform, "linux"),
-    Effect.provideService(
-      FileSystem.FileSystem,
-      FileSystem.makeNoop({ exists: () => Effect.succeed(false) }),
-    ),
-    Effect.provideService(
-      HttpClient.HttpClient,
-      HttpClient.make(() => Effect.die("Unexpected HTTP transport")),
-    ),
     Effect.provide(
-      TestSourceControlHost.layer({
-        process: {
-          run: (input) => {
-            if (input.command === "git")
-              return Effect.succeed(
-                TestSourceControlHost.processOutput(
-                  "origin\t" + baseUrl + "/acme/web.git (fetch)\n",
-                ),
-              );
-            if (input.command !== "tea") return Effect.die("Unexpected command " + input.command);
-            if (input.args[0] === "login")
-              return Effect.succeed(
-                TestSourceControlHost.processOutput(
-                  JSON.stringify([
-                    { name: "fixture", url: baseUrl, user: "viewer", default: "true" },
-                  ]),
-                ),
-              );
-            const url = new URL(input.args.at(-1)!);
-            expect(url.origin + "/Mount").toBe(baseUrl);
-            const path = url.pathname.slice("/Mount/api/v1/".length);
-            native.push(path + url.search);
-            if (input.args[input.args.indexOf("--method") + 1] === "PATCH") {
-              expect(JSON.parse(input.stdin!)).toEqual({ body: "Draft text" });
-              if (!push && !author)
-                return Effect.succeed(
-                  TestSourceControlHost.processOutput("{}", { stderr: "HTTP/1.1 403 Forbidden\n" }),
-                );
-              nativeBody = "Draft text";
-            }
-            const payload =
-              path === "user"
-                ? { login: "viewer" }
-                : path === "repos/acme/web"
-                  ? { full_name: "acme/web", permissions: { push, admin: push }, archived }
-                  : path === "repos/acme/web/issues/42"
-                    ? {
-                        number: 42,
-                        title: "Issue",
-                        body: "",
-                        html_url: baseUrl + "/acme/web/issues/42",
-                        user: { login: "other" },
-                        state: "open",
-                        created_at: "2026-10-01T00:00:00Z",
-                        updated_at: "2026-10-01T00:00:00Z",
-                        comments: 60,
-                      }
-                    : path === "repos/acme/web/issues/42/comments"
-                      ? comments
-                      : path === "repos/acme/web/issues/comments/51"
-                        ? { id: 51, issue_url: baseUrl + "/api/v1/repos/acme/web/issues/42" }
-                        : [];
+      mountedNativeLayer((input, url, path) => {
+        native.push(path + url.search);
+        if (input.args[input.args.indexOf("--method") + 1] === "PATCH") {
+          expect(JSON.parse(input.stdin!)).toEqual({ body: "Draft text" });
+          if (!push && !author)
             return Effect.succeed(
-              TestSourceControlHost.processOutput(JSON.stringify(payload), {
-                stderr: "HTTP/1.1 200\n",
-              }),
+              TestSourceControlHost.processOutput("{}", { stderr: "HTTP/1.1 403 Forbidden\n" }),
             );
-          },
-        },
+          nativeBody = "Draft text";
+        }
+        const payload =
+          path === "user"
+            ? { login: "viewer" }
+            : path === "repos/acme/web"
+              ? { full_name: "acme/web", permissions: { push, admin: push }, archived }
+              : path === "repos/acme/web/issues/42"
+                ? {
+                    number: 42,
+                    title: "Issue",
+                    body: "",
+                    html_url: baseUrl + "/acme/web/issues/42",
+                    user: { login: "other" },
+                    state: "open",
+                    created_at: "2026-10-01T00:00:00Z",
+                    updated_at: "2026-10-01T00:00:00Z",
+                    comments: 60,
+                  }
+                : path === "repos/acme/web/issues/42/comments"
+                  ? comments
+                  : path === "repos/acme/web/issues/comments/51"
+                    ? { id: 51, issue_url: baseUrl + "/api/v1/repos/acme/web/issues/42" }
+                    : [];
+        return Effect.succeed(
+          TestSourceControlHost.processOutput(JSON.stringify(payload), {
+            stderr: "HTTP/1.1 200\n",
+          }),
+        );
       }),
     ),
   );
@@ -483,70 +485,39 @@ it.effect("retains native label selections through a rename and replacement", ()
       truncated: false,
     });
   }).pipe(
-    Effect.provideService(HostProcess.Platform, "linux"),
-    Effect.provideService(
-      FileSystem.FileSystem,
-      FileSystem.makeNoop({ exists: () => Effect.succeed(false) }),
-    ),
-    Effect.provideService(
-      HttpClient.HttpClient,
-      HttpClient.make(() => Effect.die("Unexpected HTTP transport")),
-    ),
     Effect.provide(
-      TestSourceControlHost.layer({
-        process: {
-          run: (input) => {
-            if (input.command === "git")
-              return Effect.succeed(
-                TestSourceControlHost.processOutput(
-                  "origin\t" + baseUrl + "/acme/web.git (fetch)\n",
-                ),
-              );
-            if (input.command !== "tea") return Effect.die("Unexpected command " + input.command);
-            if (input.args[0] === "login")
-              return Effect.succeed(
-                TestSourceControlHost.processOutput(
-                  JSON.stringify([
-                    { name: "fixture", url: baseUrl, user: "viewer", default: "true" },
-                  ]),
-                ),
-              );
-            const url = new URL(input.args.at(-1)!);
-            expect(url.origin + "/Mount").toBe(baseUrl);
-            const path = url.pathname.slice("/Mount/api/v1/".length);
-            const method = input.args[input.args.indexOf("--method") + 1]!;
-            native.push({ method, path });
-            if (method === "PUT") written = JSON.parse(input.stdin!);
-            if (path.endsWith("/labels/bug"))
-              return Effect.succeed(
-                TestSourceControlHost.processOutput("{}", { stderr: "HTTP/1.1 404 Not Found\n" }),
-              );
-            const payload =
-              path === "user"
-                ? { login: "viewer" }
-                : path === "repos/acme/web"
-                  ? { full_name: "acme/web", permissions: { push: true, admin: true } }
-                  : path === "repos/acme/web/issues"
-                    ? [issue()]
-                    : path === "repos/acme/web/issues/42"
-                      ? issue()
-                      : path === "repos/acme/web/labels"
-                        ? url.searchParams.get("page") === "1"
-                          ? labels()
-                          : []
-                        : path === "orgs/acme/labels"
-                          ? [{ id: 90, name: "extra" }]
-                          : [];
-            return Effect.succeed(
-              TestSourceControlHost.processOutput(JSON.stringify(payload), {
-                stderr:
-                  path === "repos/acme/web/labels" && url.searchParams.get("page") === "1"
-                    ? 'HTTP/1.1 200\nLink: </next>; rel="next"'
-                    : 'HTTP/1.1 200\nLink: </last>; rel="last"',
-              }),
-            );
-          },
-        },
+      mountedNativeLayer((input, url, path) => {
+        const method = input.args[input.args.indexOf("--method") + 1]!;
+        native.push({ method, path });
+        if (method === "PUT") written = JSON.parse(input.stdin!);
+        if (path.endsWith("/labels/bug"))
+          return Effect.succeed(
+            TestSourceControlHost.processOutput("{}", { stderr: "HTTP/1.1 404 Not Found\n" }),
+          );
+        const payload =
+          path === "user"
+            ? { login: "viewer" }
+            : path === "repos/acme/web"
+              ? { full_name: "acme/web", permissions: { push: true, admin: true } }
+              : path === "repos/acme/web/issues"
+                ? [issue()]
+                : path === "repos/acme/web/issues/42"
+                  ? issue()
+                  : path === "repos/acme/web/labels"
+                    ? url.searchParams.get("page") === "1"
+                      ? labels()
+                      : []
+                    : path === "orgs/acme/labels"
+                      ? [{ id: 90, name: "extra" }]
+                      : [];
+        return Effect.succeed(
+          TestSourceControlHost.processOutput(JSON.stringify(payload), {
+            stderr:
+              path === "repos/acme/web/labels" && url.searchParams.get("page") === "1"
+                ? 'HTTP/1.1 200\nLink: </next>; rel="next"'
+                : 'HTTP/1.1 200\nLink: </last>; rel="last"',
+          }),
+        );
       }),
     ),
   );

@@ -3,7 +3,6 @@ import * as Schema from "effect/Schema";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Crypto from "effect/Crypto";
 import * as FileSystem from "effect/FileSystem";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -41,11 +40,9 @@ import {
   type TrackerIssueDetail,
 } from "@t3tools/issue-tracker-core/server/IssueTracker";
 
-import * as IssueTrackerBindings from "../persistence/IssueTrackerBindings.ts";
-import * as ProjectService from "../project/ProjectService.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as IssueService from "./IssueService.ts";
-import * as IssueTrackerRegistry from "./IssueTrackerRegistry.ts";
+import { issueCryptoLayer, makeIssueService } from "./IssueService.testkit.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { IssuesToolkit } from "../mcp/toolkits/issues/tools.ts";
 
@@ -103,6 +100,12 @@ function nativeGitHubTracker(input: {
 const GITHUB = IssueTrackerKind.make("github");
 const LINEAR = IssueTrackerKind.make("linear");
 const JIRA = IssueTrackerKind.make("jira");
+const webIssueRef = (key = "1") => ({
+  projectId: ProjectId.make("web"),
+  tracker: GITHUB,
+  scope: "acme/web",
+  key,
+});
 const decodeUpdate = Schema.decodeEffect(IssueUpdateInput);
 const decodeDependencyPermissions = Schema.decodeUnknownSync(IssueViewerPermissions);
 const encodeDependencyPermissions = Schema.encodeUnknownSync(IssueViewerPermissions);
@@ -229,47 +232,22 @@ function fakeTracker(overrides: Partial<IssueTrackerApi> = {}): IssueTrackerApi 
 }
 
 function makeService(input: {
-  readonly projects: ReadonlyArray<OrchestrationProjectShell>;
+  readonly projects?: ReadonlyArray<OrchestrationProjectShell>;
   readonly trackers: ReadonlyArray<IssueTrackerApi>;
   readonly bindings?: Record<string, IssueTrackerProjectBinding>;
   readonly onBindingsRead?: () => void;
   readonly resolveRepository?: RepositoryIdentityResolver.RepositoryIdentityResolver["Service"]["resolve"];
 }) {
-  return IssueService.make.pipe(
-    Effect.provide(
-      Layer.mergeAll(
-        Layer.mock(IssueTrackerBindings.IssueTrackerBindingsRepository)({
-          list: Effect.sync(() => {
-            input.onBindingsRead?.();
-            return new Map(
-              Object.entries(input.bindings ?? {}).map(([id, binding]) => [
-                id as ProjectId,
-                [binding],
-              ]),
-            );
-          }),
-        }),
-        Layer.succeed(
-          IssueTrackerRegistry.IssueTrackerRegistry,
-          IssueTrackerRegistry.fromTrackers(input.trackers),
-        ),
-        Layer.mock(ProjectService.ProjectService)({
-          listShells: () => Effect.succeed(input.projects),
-          getShell: (projectId) =>
-            Effect.succeed(Option.fromNullishOr(input.projects.find((p) => p.id === projectId))),
-        }),
-        Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
-          resolve:
-            input.resolveRepository ??
-            ((cwd) =>
-              Effect.succeed(
-                input.projects.find((project) => project.workspaceRoot === cwd)
-                  ?.repositoryIdentity ?? null,
-              )),
-        }),
-      ),
-    ),
-  );
+  return makeIssueService({
+    ...input,
+    projects: input.projects ?? [project({ id: "web", repository: "acme/web" })],
+    bindings: Effect.sync(() => {
+      input.onBindingsRead?.();
+      return new Map(
+        Object.entries(input.bindings ?? {}).map(([id, binding]) => [id as ProjectId, [binding]]),
+      );
+    }),
+  });
 }
 
 describe("resolveGitHostBinding", () => {
@@ -893,7 +871,6 @@ describe("IssueService", () => {
       const labels = Array.from({ length: 121 }, (_, index) => `label-${index}`);
       let written: ReadonlyArray<string> | undefined;
       const service = yield* makeService({
-        projects: [project({ id: "web", repository: "acme/web" })],
         trackers: [
           fakeTracker({
             update: (input) =>
@@ -903,14 +880,7 @@ describe("IssueService", () => {
           }),
         ],
       });
-      const input = yield* decodeUpdate({
-        projectId: ProjectId.make("web"),
-        tracker: GITHUB,
-        host: "github.com",
-        scope: "acme/web",
-        key: "1",
-        labels,
-      });
+      const input = yield* decodeUpdate({ ...webIssueRef(), host: "github.com", labels });
       yield* service.update(input);
       expect(written).toEqual(labels);
     }),
@@ -920,7 +890,6 @@ describe("IssueService", () => {
     Effect.gen(function* () {
       const writes: string[] = [];
       const service = yield* makeService({
-        projects: [project({ id: "web", repository: "acme/web" })],
         trackers: [
           fakeTracker({
             comment: (input) =>
@@ -930,7 +899,7 @@ describe("IssueService", () => {
           }),
         ],
       });
-      const own = { projectId: "web" as ProjectId, tracker: GITHUB, scope: "acme/web", key: "1" };
+      const own = webIssueRef();
       const external = { ...own, scope: "other/backend", key: "7" };
 
       expect((yield* service.detail(own)).writable).toBe(true);
@@ -956,7 +925,6 @@ describe("IssueService", () => {
     Effect.gen(function* () {
       let calls = 0;
       const service = yield* makeService({
-        projects: [project({ id: "web", repository: "acme/web" })],
         trackers: [
           fakeTracker({
             setState: () =>
@@ -970,7 +938,7 @@ describe("IssueService", () => {
           }),
         ],
       });
-      const ref = { projectId: "web" as ProjectId, tracker: GITHUB, scope: "acme/web", key: "1" };
+      const ref = webIssueRef();
 
       yield* service.setState({ ...ref, state: "closed", closeReason: "completed" });
       const unknownReason = yield* Effect.flip(
@@ -1272,14 +1240,10 @@ describe("IssueService write permissions", () => {
           ),
       });
       const service = yield* makeService({
-        projects: [project({ id: "web", repository: "acme/web" })],
         trackers: [driver],
       });
       const update = service.update({
-        projectId: ProjectId.make("web"),
-        tracker: GITHUB,
-        scope: "acme/web",
-        key: "42",
+        ...webIssueRef("42"),
         labels: ["bug"],
         assignees: ["octocat"],
       });
@@ -1313,7 +1277,6 @@ describe("IssueService write permissions", () => {
       let reads = 0;
       let writes = 0;
       const service = yield* makeService({
-        projects: [project({ id: "web", repository: "acme/web" })],
         trackers: [
           fakeTracker({
             getViewerPermissions: () =>
@@ -1328,7 +1291,7 @@ describe("IssueService write permissions", () => {
           }),
         ],
       });
-      const ref = { projectId: "web" as ProjectId, tracker: GITHUB, scope: "acme/web", key: "1" };
+      const ref = webIssueRef();
       expect((yield* service.detail(ref)).viewerPermissions[field]).toBe(true);
       const denied = yield* Effect.flip(service.update({ ...ref, ...input }));
       expect(denied._tag).toBe("IssueOperationError");
@@ -1348,7 +1311,6 @@ describe("IssueService write permissions", () => {
             writes++;
           });
         const service = yield* makeService({
-          projects: [project({ id: "web", repository: "acme/web" })],
           trackers: [
             fakeTracker({
               getViewerPermissions: () =>
@@ -1361,7 +1323,7 @@ describe("IssueService write permissions", () => {
             }),
           ],
         });
-        const ref = { projectId: "web" as ProjectId, tracker: GITHUB, scope: "acme/web", key: "1" };
+        const ref = webIssueRef();
         const denied = yield* Effect.flip(
           operation === "comment"
             ? service.comment({ ...ref, body: "Hello" })
@@ -1378,7 +1340,6 @@ describe("IssueService write permissions", () => {
       let reads = 0;
       let writes = 0;
       const service = yield* makeService({
-        projects: [project({ id: "web", repository: "acme/web" })],
         trackers: [
           fakeTracker({
             getViewerPermissions: () =>
@@ -1393,14 +1354,7 @@ describe("IssueService write permissions", () => {
           }),
         ],
       });
-      yield* service.update({
-        projectId: "web" as ProjectId,
-        tracker: GITHUB,
-        scope: "acme/web",
-        key: "1",
-        labels: [],
-        assignees: [],
-      });
+      yield* service.update({ ...webIssueRef(), labels: [], assignees: [] });
       expect(reads).toBe(1);
       expect(writes).toBe(1);
     }),
@@ -1417,7 +1371,6 @@ describe("IssueService write permissions", () => {
         retryAt: 1234,
       });
       const service = yield* makeService({
-        projects: [project({ id: "web", repository: "acme/web" })],
         trackers: [
           fakeTracker({
             getViewerPermissions: () => Effect.fail(error),
@@ -1428,15 +1381,7 @@ describe("IssueService write permissions", () => {
           }),
         ],
       });
-      const denied = yield* Effect.flip(
-        service.update({
-          projectId: "web" as ProjectId,
-          tracker: GITHUB,
-          scope: "acme/web",
-          key: "1",
-          title: "Changed",
-        }),
-      );
+      const denied = yield* Effect.flip(service.update({ ...webIssueRef(), title: "Changed" }));
       expect(denied).toMatchObject({
         _tag: "IssueOperationError",
         reason: "rate-limited",
@@ -1573,7 +1518,6 @@ it.effect("returns project sources without reading a tracker API", () =>
   Effect.gen(function* () {
     const unused = () => Effect.die("Sources must not probe providers");
     const service = yield* makeService({
-      projects: [project({ id: "web", repository: "acme/web" })],
       bindings: { web: { tracker: LINEAR, scope: "ENG" } },
       trackers: [fakeTracker({ getViewer: unused }), fakeStandaloneTracker({ getViewer: unused })],
     });
@@ -1589,7 +1533,6 @@ it.effect("refreshes a cached repository identity before a permitted write", () 
     let refreshes = 0;
     let writes = 0;
     const service = yield* makeService({
-      projects: [project({ id: "web", repository: "acme/web" })],
       resolveRepository: (_cwd, options) =>
         Effect.sync(() => {
           expect(options?.refresh).toBe(true);
@@ -1605,15 +1548,7 @@ it.effect("refreshes a cached repository identity before a permitted write", () 
         }),
       ],
     });
-    const denied = yield* Effect.flip(
-      service.update({
-        projectId: "web" as ProjectId,
-        tracker: GITHUB,
-        scope: "acme/web",
-        key: "1",
-        title: "Changed",
-      }),
-    );
+    const denied = yield* Effect.flip(service.update({ ...webIssueRef(), title: "Changed" }));
     expect(denied).toMatchObject({ _tag: "IssueOperationError", reason: "read-only" });
     expect(refreshes).toBe(1);
     expect(writes).toBe(0);
@@ -1669,7 +1604,6 @@ it.effect(
       const base = fakeTracker();
       let selected: string | undefined;
       const service = yield* makeService({
-        projects: [project({ id: "web", repository: "acme/web" })],
         trackers: [
           fakeTracker({
             capabilities: {
@@ -1710,7 +1644,6 @@ it.effect(
 it.effect("refuses a selected issue type when the tracker does not support it", () =>
   Effect.gen(function* () {
     const service = yield* makeService({
-      projects: [project({ id: "web", repository: "acme/web" })],
       trackers: [
         fakeTracker({ create: () => Effect.die("Unsupported type must not reach create") }),
       ],
@@ -1798,7 +1731,6 @@ it.effect(
         let reads = 0;
         const base = fakeTracker();
         const service = yield* makeService({
-          projects: [project({ id: "web", repository: "acme/web" })],
           trackers: [
             fakeTracker({
               capabilities: {
@@ -1960,7 +1892,6 @@ it.effect.each(["create", "react"] as const)(
       let refreshes = 0;
       const base = fakeTracker();
       const service = yield* makeService({
-        projects: [project({ id: "web", repository: "acme/web" })],
         resolveRepository: (_cwd, options) =>
           Effect.sync(() => {
             expect(options?.refresh).toBe(true);
@@ -1982,7 +1913,7 @@ it.effect.each(["create", "react"] as const)(
           }),
         ],
       });
-      const ref = { projectId: "web" as ProjectId, tracker: GITHUB, scope: "acme/web", key: "1" };
+      const ref = webIssueRef();
       const denied = yield* Effect.flip(
         operation === "create"
           ? service.create({ ...ref, title: "New", body: "", labels: [], assignees: [] })
@@ -2002,7 +1933,6 @@ it.effect.each(["create", "update"] as const)(
       let writes = 0;
       const base = fakeTracker();
       const service = yield* makeService({
-        projects: [project({ id: "web", repository: "acme/web" })],
         trackers: [
           fakeTracker({
             capabilities: { ...base.capabilities, maxAssignees: 1 },
@@ -2023,7 +1953,7 @@ it.effect.each(["create", "update"] as const)(
           }),
         ],
       });
-      const ref = { projectId: "web" as ProjectId, tracker: GITHUB, scope: "acme/web", key: "1" };
+      const ref = webIssueRef();
       const denied = yield* Effect.flip(
         operation === "create"
           ? service.create({
@@ -2048,7 +1978,6 @@ it.effect.each([{ assignees: [] }, { assignees: ["alice"] }])(
       const written: ReadonlyArray<string>[] = [];
       const base = fakeTracker();
       const service = yield* makeService({
-        projects: [project({ id: "web", repository: "acme/web" })],
         trackers: [
           fakeTracker({
             capabilities: { ...base.capabilities, maxAssignees: 1 },
@@ -2064,7 +1993,7 @@ it.effect.each([{ assignees: [] }, { assignees: ["alice"] }])(
           }),
         ],
       });
-      const ref = { projectId: "web" as ProjectId, tracker: GITHUB, scope: "acme/web", key: "1" };
+      const ref = webIssueRef();
       yield* service.create({ ...ref, title: "New", body: "", labels: [], assignees });
       yield* service.update({ ...ref, assignees });
       expect(written).toEqual([assignees, assignees]);
@@ -2827,7 +2756,6 @@ it.effect("pages issue data with native cursors and no additional viewer read", 
         record("assignees", input).pipe(Effect.as({ items: [], nextCursor: null })),
     });
     const service = yield* makeService({
-      projects: [project({ id: "web", repository: "acme/web" })],
       trackers: [api],
     });
     const ref = {
@@ -2874,15 +2802,9 @@ it.effect(
           }),
       });
       const service = yield* makeService({
-        projects: [project({ id: "web", repository: "acme/web" })],
         trackers: [api],
       });
-      const ref = {
-        projectId: ProjectId.make("web"),
-        tracker: GITHUB,
-        scope: "acme/web",
-        key: "1",
-      };
+      const ref = webIssueRef();
       yield* service.editComment({ ...ref, commentId: "comment-own", body: "edited" });
       const foreign = { ...ref, scope: "acme/foreign" };
       for (const mutation of [
@@ -2925,7 +2847,6 @@ it.effect("creates a sub-issue with its native template and preserves partial pa
         }),
     });
     const service = yield* makeService({
-      projects: [project({ id: "web", repository: "acme/web" })],
       trackers: [api],
     });
     const input = {
@@ -2954,7 +2875,6 @@ it.effect.each([{ sort: "comments" as const }, { order: "asc" as const }])(
     Effect.gen(function* () {
       const base = fakeTracker();
       const service = yield* makeService({
-        projects: [project({ id: "web", repository: "acme/web" })],
         trackers: [
           fakeTracker({
             capabilities: { ...base.capabilities, listSorts: ["created"], listOrders: ["desc"] },
@@ -3036,13 +2956,7 @@ it.effect(
                     credentials: { get: () => Effect.succeed(Option.some("fake-token")) },
                   }),
                 ),
-                Layer.succeed(
-                  Crypto.Crypto,
-                  Crypto.make({
-                    randomBytes: (size) => new Uint8Array(size).fill(1),
-                    digest: (_algorithm, data) => Effect.succeed(data),
-                  }),
-                ),
+                issueCryptoLayer((size) => new Uint8Array(size).fill(1)),
               ),
             ),
           ),
@@ -3361,7 +3275,6 @@ it.effect(
           }),
       });
       const service = yield* makeService({
-        projects: [project({ id: "web", repository: "acme/web" })],
         trackers: [driver],
         onBindingsRead: () => {
           bindingReads++;
@@ -3473,15 +3386,9 @@ it.effect(
         getViewerPermissions: () => Effect.succeed({ ...permissions, edit: allowed }),
       });
       const service = yield* makeService({
-        projects: [project({ id: "web", repository: "acme/web" })],
         trackers: [api],
       });
-      const ref = {
-        projectId: ProjectId.make("web"),
-        tracker: GITHUB,
-        scope: "acme/web",
-        key: "1",
-      };
+      const ref = webIssueRef();
       const fieldValues = { custom: "value" };
       const richBody = {
         format: "adf" as const,
@@ -3509,7 +3416,6 @@ it.effect(
       allowed = false;
       yield* service.update({ ...ref, richBody }).pipe(Effect.flip);
       const unsupported = yield* makeService({
-        projects: [project({ id: "web", repository: "acme/web" })],
         trackers: [{ ...api, capabilities: { ...base.capabilities, editComment: true } }],
       });
       for (const request of [
@@ -3556,16 +3462,9 @@ it.effect.each([
           }),
       });
       const service = yield* makeService({
-        projects: [project({ id: "web", repository: "acme/web" })],
         trackers: [api],
       });
-      const request = service.setParent({
-        projectId: ProjectId.make("web"),
-        tracker: GITHUB,
-        scope: "acme/web",
-        key: "1",
-        parentKey: null,
-      });
+      const request = service.setParent({ ...webIssueRef(), parentKey: null });
       if (allowed) yield* request;
       else expect((yield* Effect.flip(request))._tag).toBe("IssueOperationError");
       expect(writes).toBe(allowed ? 1 : 0);
@@ -3661,18 +3560,11 @@ it.effect(
       });
       expect(calls.at(-1)?.account).toBeUndefined();
       const unsupported = yield* makeService({
-        projects: [project({ id: "web", repository: "acme/web" })],
         trackers: [
           fakeTracker({ capabilities: { ...fakeTracker().capabilities, dependencies: true } }),
         ],
       });
-      const missing = {
-        projectId: ProjectId.make("web"),
-        tracker: GITHUB,
-        scope: "acme/web",
-        key: "1",
-        direction: "blocks" as const,
-      };
+      const missing = { ...webIssueRef(), direction: "blocks" as const };
       expect((yield* Effect.flip(unsupported.dependencies(missing)))._tag).toBe(
         "IssueOperationError",
       );
@@ -3889,7 +3781,6 @@ it.effect(
       const base = fakeTracker();
       const native = { ...base.capabilities, updateParent: false };
       const service = yield* makeService({
-        projects: [project({ id: "web", repository: "acme/web" })],
         trackers: [
           fakeTracker({
             capabilities: { ...base.capabilities, updateParent: true },

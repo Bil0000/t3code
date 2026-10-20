@@ -13,7 +13,6 @@ import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import * as Crypto from "effect/Crypto";
 import * as Option from "effect/Option";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
@@ -21,6 +20,7 @@ import * as IssueTrackerBindings from "../persistence/IssueTrackerBindings.ts";
 import * as IssueTrackerAccounts from "../persistence/IssueTrackerAccounts.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as IssueTrackerConnections from "./IssueTrackerConnections.ts";
+import { issueCryptoLayer } from "./IssueService.testkit.ts";
 import * as IssueTrackerRegistry from "./IssueTrackerRegistry.ts";
 
 const tracker = IssueTrackerKind.make("custom-tracker");
@@ -147,13 +147,7 @@ const makeFixture = (input: {
                     }
                   }),
               }),
-              Layer.succeed(
-                Crypto.Crypto,
-                Crypto.make({
-                  randomBytes: (size) => new Uint8Array(size).fill(1),
-                  digest: (_algorithm, data) => Effect.succeed(data),
-                }),
-              ),
+              issueCryptoLayer((size) => new Uint8Array(size).fill(1)),
               Layer.mock(IssueTrackerAccounts.IssueTrackerAccountsRepository)({
                 list: Effect.succeed([]),
                 set: () => Effect.void,

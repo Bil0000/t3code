@@ -11,7 +11,6 @@ import {
   type OrchestrationProjectShell,
   type Project,
 } from "@t3tools/contracts";
-import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -34,6 +33,7 @@ import * as IssueTrackerBindings from "../persistence/IssueTrackerBindings.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as IssueService from "./IssueService.ts";
+import { issueCryptoLayer, makeIssueService } from "./IssueService.testkit.ts";
 import * as IssueTrackerConnections from "./IssueTrackerConnections.ts";
 import * as IssueTrackerHostLive from "./IssueTrackerHostLive.ts";
 import * as IssueTrackerRegistry from "./IssueTrackerRegistry.ts";
@@ -155,31 +155,7 @@ const azureFixture = (sources: ReadonlyArray<{ id: string; host: string; reposit
         }),
       ),
     );
-    const service = yield* IssueService.make.pipe(
-      Effect.provide(
-        Layer.mergeAll(
-          Layer.mock(IssueTrackerBindings.IssueTrackerBindingsRepository)({
-            list: Effect.succeed(new Map()),
-          }),
-          Layer.succeed(
-            IssueTrackerRegistry.IssueTrackerRegistry,
-            IssueTrackerRegistry.fromTrackers([api]),
-          ),
-          Layer.mock(ProjectService.ProjectService)({
-            listShells: () => Effect.succeed(projects),
-            getShell: (id) =>
-              Effect.succeed(Option.fromNullishOr(projects.find((project) => project.id === id))),
-          }),
-          Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
-            resolve: (cwd) =>
-              Effect.succeed(
-                projects.find((project) => project.workspaceRoot === cwd)?.repositoryIdentity ??
-                  null,
-              ),
-          }),
-        ),
-      ),
-    );
+    const service = yield* makeIssueService({ projects, trackers: [api] });
     return { service, identities, requests };
   }).pipe(Effect.provide(NodeFileSystem.layer));
 
@@ -312,13 +288,7 @@ const fixture = Effect.gen(function* () {
         stored.delete(name);
       }),
   });
-  const crypto = Layer.succeed(
-    Crypto.Crypto,
-    Crypto.make({
-      randomBytes: (size) => new Uint8Array(size).fill(++serial),
-      digest: (_algorithm, data) => Effect.succeed(data),
-    }),
-  );
+  const crypto = issueCryptoLayer((size) => new Uint8Array(size).fill(++serial));
   const http = Layer.succeed(
     HttpClient.HttpClient,
     HttpClient.make((request) =>
@@ -882,13 +852,7 @@ it.effect(
       const dependencies = Layer.mergeAll(
         IssueTrackerHostLive.layer.pipe(Layer.provide(stores)),
         RateLimit.layer,
-        Layer.succeed(
-          Crypto.Crypto,
-          Crypto.make({
-            randomBytes: (size) => new Uint8Array(size),
-            digest: (_algorithm, data) => Effect.succeed(data),
-          }),
-        ),
+        issueCryptoLayer((size) => new Uint8Array(size)),
         Layer.succeed(
           HttpClient.HttpClient,
           HttpClient.make((request) =>

@@ -16,7 +16,6 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
-import * as Crypto from "effect/Crypto";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -40,9 +39,8 @@ import {
   toIssueSearch,
 } from "@t3tools/source-control-github/server/gitHubIssueJson";
 import * as IssueService from "../../../issue/IssueService.ts";
-import * as IssueTrackerRegistry from "../../../issue/IssueTrackerRegistry.ts";
-import * as IssueTrackerBindings from "../../../persistence/IssueTrackerBindings.ts";
-import * as RepositoryIdentityResolver from "../../../project/RepositoryIdentityResolver.ts";
+import { issueCryptoLayer, makeIssueService } from "../../../issue/IssueService.testkit.ts";
+
 import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
 import * as ThreadIssueService from "../../../orchestration-v2/ThreadIssueService.ts";
 import { v2PullRequestThread } from "../../../orchestration-v2/testkit/pullRequestFixtures.ts";
@@ -215,52 +213,37 @@ const makeResolutionService = (
   sources: ReadonlyArray<IssueService.ProjectTrackerBinding>,
   onBindingsRead = Effect.void,
 ) =>
-  IssueService.make.pipe(
-    Effect.provide(
-      Layer.mergeAll(
-        Layer.mock(ProjectService.ProjectService)({
-          getShell: (id) =>
-            Effect.succeed(id === PROJECT_ID ? Option.some(currentProject) : Option.none()),
-          listShells: () => Effect.succeed([currentProject]),
-        }),
-        Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
-          resolve: () => Effect.succeed(currentProject.repositoryIdentity ?? null),
-        }),
-        Layer.mock(IssueTrackerBindings.IssueTrackerBindingsRepository)({
-          list: onBindingsRead.pipe(
-            Effect.as(
-              new Map([[currentProject.id, sources.filter((source) => source.tracker !== GITHUB)]]),
-            ),
-          ),
-        }),
-        Layer.succeed(
-          IssueTrackerRegistry.IssueTrackerRegistry,
-          IssueTrackerRegistry.fromTrackers(
-            sources.map((source): IssueTrackerApi => ({
-              kind: source.tracker,
-              capabilities: detail.capabilities,
-              getViewer: () => Effect.succeed("viewer"),
-              getViewerPermissions: () => Effect.succeed(detail.viewerPermissions),
-              listIssues: () => Effect.succeed({ items: [], nextCursor: null }),
-              getIssue: () => Effect.die("Unexpected issue read during source resolution"),
-              getComments: () => Effect.succeed({ comments: [], nextCursor: null }),
-              ...(source.tracker === GITHUB
-                ? {}
-                : {
-                    standalone: {
-                      tracker: source.tracker,
-                      displayName: source.tracker,
-                      host: source.host,
-                      scopeNoun: "scope",
-                      credential: { label: "Token", helpUrl: null },
-                    },
-                  }),
-            })),
-          ),
-        ),
+  makeIssueService({
+    projects: [currentProject],
+    getShell: (id) =>
+      Effect.succeed(id === PROJECT_ID ? Option.some(currentProject) : Option.none()),
+    resolveRepository: () => Effect.succeed(currentProject.repositoryIdentity ?? null),
+    bindings: onBindingsRead.pipe(
+      Effect.as(
+        new Map([[currentProject.id, sources.filter((source) => source.tracker !== GITHUB)]]),
       ),
     ),
-  );
+    trackers: sources.map((source): IssueTrackerApi => ({
+      kind: source.tracker,
+      capabilities: detail.capabilities,
+      getViewer: () => Effect.succeed("viewer"),
+      getViewerPermissions: () => Effect.succeed(detail.viewerPermissions),
+      listIssues: () => Effect.succeed({ items: [], nextCursor: null }),
+      getIssue: () => Effect.die("Unexpected issue read during source resolution"),
+      getComments: () => Effect.succeed({ comments: [], nextCursor: null }),
+      ...(source.tracker === GITHUB
+        ? {}
+        : {
+            standalone: {
+              tracker: source.tracker,
+              displayName: source.tracker,
+              host: source.host,
+              scopeNoun: "scope",
+              credential: { label: "Token", helpUrl: null },
+            },
+          }),
+    })),
+  });
 
 const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
   issues: ReadonlyArray<ThreadIssueLink> = [],
@@ -399,13 +382,7 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
       comment: (input) => record("comment", input, undefined),
       setState: (input) => record("setState", input, undefined),
     }),
-    Layer.succeed(
-      Crypto.Crypto,
-      Crypto.make({
-        randomBytes: (size) => new Uint8Array(size).fill(++nonce),
-        digest: (_algorithm, data) => Effect.succeed(data),
-      }),
-    ),
+    issueCryptoLayer((size) => new Uint8Array(size).fill(++nonce)),
     McpToolAccessTestkit.liveThreadsLayer,
   );
   const threadService = yield* ThreadIssueService.ThreadIssueService.pipe(
@@ -1171,13 +1148,7 @@ describe("issue toolkit handlers", () => {
         : `https://example.atlassian.net/browse/${canonical}`;
       const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
       const nativeReads: string[] = [];
-      const crypto = Layer.succeed(
-        Crypto.Crypto,
-        Crypto.make({
-          randomBytes: (size) => new Uint8Array(size).fill(1),
-          digest: (_algorithm, data) => Effect.succeed(data),
-        }),
-      );
+      const crypto = issueCryptoLayer((size) => new Uint8Array(size).fill(1));
       const nativeDependencies = Layer.mergeAll(
         Layer.succeed(
           HttpClient.HttpClient,

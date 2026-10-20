@@ -9,20 +9,13 @@ import type {
 import { IssueListResult, issueListCursorKey } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import * as Stream from "effect/Stream";
-import * as SubscriptionRef from "effect/SubscriptionRef";
-import { Atom, AtomRegistry } from "effect/reactivity";
 
-import * as EnvironmentRegistry from "../connection/registry.ts";
-import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as RpcClient from "../rpc/client.ts";
+import { createIssueTestContext, makeIssueTestRuntime } from "./issues.testkit.ts";
 import { executeAtomQuery } from "./runtime.ts";
 import {
   continueIssueListPage,
-  createIssueEnvironmentAtoms,
   issueEntryKey,
   issueScopeKey,
   refreshIssueListPage,
@@ -88,22 +81,7 @@ describe("held issue list viewers", () => {
   it.each(["gitlab gitlab.example group/app", "gitlab.example group/app"])(
     "keeps a completed 75-row scope terminal after an unchanged first refresh: %s",
     async (cursor) => {
-      const supervisor = {} as EnvironmentSupervisor.EnvironmentSupervisor["Service"];
-      const runtime = Atom.runtime(
-        Layer.succeed(
-          EnvironmentRegistry.EnvironmentRegistry,
-          EnvironmentRegistry.EnvironmentRegistry.of({
-            run: (_environmentId, effect) =>
-              Effect.provideService(
-                effect,
-                EnvironmentSupervisor.EnvironmentSupervisor,
-                supervisor,
-              ),
-          } as EnvironmentRegistry.EnvironmentRegistry["Service"]),
-        ),
-      );
-      const registry = AtomRegistry.make();
-      const atoms = createIssueEnvironmentAtoms(runtime);
+      const { registry, readListPage } = createIssueTestContext();
       const nativeRows = (from: number, to: number) =>
         Array.from({ length: to - from + 1 }, (_, index) => row(String(from + index))).map(
           (row) => ({
@@ -126,14 +104,7 @@ describe("held issue list viewers", () => {
       request.mockImplementation((() => Effect.succeed(replies.shift()!)) as unknown as Parameters<
         typeof request.mockImplementation
       >[0]);
-      const read = async (input: IssueListInput) => {
-        const result = await atoms.listPage.run(registry, {
-          environmentId: "environment" as EnvironmentId,
-          input,
-        });
-        if (result._tag !== "Success") throw new Error("list read failed");
-        return result.value;
-      };
+      const read = (input: IssueListInput) => readListPage("environment" as EnvironmentId, input);
       try {
         const input = { state: "all" as const, involvement: "assigned" as const, limit: 50 };
         const answer = await read(input);
@@ -368,161 +339,139 @@ describe("held issue list viewers", () => {
     },
   );
 
-  it.each(["bob", "charlie"])(
+  it.effect.each(["bob", "charlie"])(
     "uses scoped native viewers through the actual list query and continuation: %s",
-    async (viewer) => {
-      const runtime = Atom.runtime(
-        Layer.effect(
-          EnvironmentRegistry.EnvironmentRegistry,
-          Effect.gen(function* () {
-            const state = yield* SubscriptionRef.make({ phase: "connected" } as const);
-            const session = yield* SubscriptionRef.make(Option.some({}));
-            const supervisor = {
-              state,
-              session,
-            } as unknown as EnvironmentSupervisor.EnvironmentSupervisor["Service"];
-            return EnvironmentRegistry.EnvironmentRegistry.of({
-              run: (_id, effect) =>
-                Effect.provideService(
-                  effect,
-                  EnvironmentSupervisor.EnvironmentSupervisor,
-                  supervisor,
-                ),
-              followStream: (_id, stream) =>
-                Stream.provideService(
-                  stream,
-                  EnvironmentSupervisor.EnvironmentSupervisor,
-                  supervisor,
-                ),
-            } as EnvironmentRegistry.EnvironmentRegistry["Service"]);
-          }),
-        ),
-      );
-      const registry = AtomRegistry.make();
-      const atoms = createIssueEnvironmentAtoms(runtime);
-      const capabilities: IssueCapabilities = {
-        create: false,
-        edit: false,
-        comment: false,
-        labels: false,
-        assignees: false,
-        reactions: false,
-        templates: false,
-        linkedPullRequests: false,
-        events: false,
-        search: true,
-        states: [],
-        closeReasons: [],
-      };
-      const nativeSource = (entry: IssueListEntry) => ({
-        projectId: entry.projectId,
-        projectTitle: entry.projectTitle,
-        tracker: entry.tracker,
-        host: entry.host,
-        scope: entry.scope,
-        capabilities,
-      });
-      const upper = row("upper-first", {
-        tracker: "forgejo" as IssueTrackerKind,
-        host: "forge.example",
-        scope: "Mount/acme/web",
-      });
-      const lower = row("lower-first", { ...upper, scope: "mount/acme/web" });
-      const upperCursor = issueListCursorKey(upper);
-      const lowerCursor = issueListCursorKey(lower);
-      const initial = {
-        ...answer([upper, lower], { [upperCursor]: "2", [lowerCursor]: "2" }),
-        sources: [nativeSource(upper), nativeSource(lower)],
-        viewers: { [upperCursor]: "alice", [lowerCursor]: "bob" },
-      };
-      const pageTwo = {
-        ...initial,
-        entries: [],
-        sources: [nativeSource(lower)],
-        viewers: { [lowerCursor]: viewer, "forgejo forge.example": viewer },
-        nextCursors: {},
-      };
-      const replies = [
-        initial,
-        {
-          ...initial,
-          entries: [row("upper-tail", upper), row("lower-tail", lower)],
-          nextCursors: { [upperCursor]: "3", [lowerCursor]: "3" },
-        },
-        pageTwo,
-        ...(viewer === "charlie" ? [{ ...pageTwo, entries: [row("charlie-first", lower)] }] : []),
-      ];
-      const reads: Array<{ tag: string; input: unknown }> = [];
-      const request = vi.spyOn(RpcClient, "request");
-      const respond = ((tag: string, input: unknown) =>
-        Effect.sync(() => {
-          reads.push({ tag, input });
-          const reply = replies.shift();
-          if (reply === undefined) throw new Error("Unexpected native list read");
-          return decodeIssueList(reply);
-        })) as unknown as Parameters<typeof request.mockImplementation>[0];
-      request.mockImplementation(respond);
-      const guarded = vi.spyOn(RpcClient, "requestGuarded");
-      guarded.mockImplementation(
-        respond as unknown as Parameters<typeof guarded.mockImplementation>[0],
-      );
-      const input = { state: "open" as const, involvement: "assigned" as const, limit: 50 };
-      const environmentId = "environment" as EnvironmentId;
-      const read = async (input: IssueListInput) => {
-        const result = await atoms.listPage.run(registry, { environmentId, input });
-        if (result._tag !== "Success") throw new Error("Native page read failed");
-        return result.value;
-      };
-      try {
-        const firstRead = await executeAtomQuery(registry, atoms.list({ environmentId, input }), {
-          reportFailure: false,
-        });
-        if (firstRead._tag !== "Success") throw new Error("Native first query failed");
-        const held = first(firstRead.value);
-        const tailed = continueIssueListPage(
-          held,
-          held.nextCursors,
-          await read({ ...input, cursors: held.nextCursors }),
-          held.firstCursors,
-        );
-        const next = continueIssueListPage(
-          tailed,
-          { [lowerCursor]: "3" },
-          await read({ ...input, cursors: { [lowerCursor]: "3" } }),
-          tailed.firstCursors,
-        );
-        expect(next.restartSources).toEqual(viewer === "charlie" ? [nativeSource(lower)] : []);
-        let completed = next;
-        for (const restart of next.restartSources ?? [])
-          completed = refreshIssueListPage(
-            completed,
-            await read({ ...input, projectId: restart.projectId, host: restart.host }),
-            { source: lower },
-          );
-        expect(keys(completed).toSorted()).toEqual(
-          viewer === "charlie"
-            ? ["charlie-first", "upper-first", "upper-tail"]
-            : ["lower-first", "lower-tail", "upper-first", "upper-tail"],
-        );
-        expect(completed.nextCursors).toEqual({ [upperCursor]: "3" });
-        expect(reads.map(({ tag }) => tag)).toEqual(
-          Array(viewer === "charlie" ? 4 : 3).fill("issues.list"),
-        );
-        expect(reads[0]!.input).toEqual(input);
-        expect(reads[2]!.input).toEqual({ ...input, cursors: { [lowerCursor]: "3" } });
-        if (viewer === "charlie")
-          expect(reads[3]!.input).toEqual({
-            ...input,
-            projectId: lower.projectId,
-            host: lower.host,
+    (viewer) =>
+      Effect.gen(function* () {
+        const runtime = yield* makeIssueTestRuntime;
+        yield* Effect.promise(async () => {
+          const { registry, atoms, readListPage } = createIssueTestContext(runtime);
+          const capabilities: IssueCapabilities = {
+            create: false,
+            edit: false,
+            comment: false,
+            labels: false,
+            assignees: false,
+            reactions: false,
+            templates: false,
+            linkedPullRequests: false,
+            events: false,
+            search: true,
+            states: [],
+            closeReasons: [],
+          };
+          const nativeSource = (entry: IssueListEntry) => ({
+            projectId: entry.projectId,
+            projectTitle: entry.projectTitle,
+            tracker: entry.tracker,
+            host: entry.host,
+            scope: entry.scope,
+            capabilities,
           });
-        expect(replies).toEqual([]);
-      } finally {
-        registry.dispose();
-        request.mockRestore();
-        guarded.mockRestore();
-      }
-    },
+          const upper = row("upper-first", {
+            tracker: "forgejo" as IssueTrackerKind,
+            host: "forge.example",
+            scope: "Mount/acme/web",
+          });
+          const lower = row("lower-first", { ...upper, scope: "mount/acme/web" });
+          const upperCursor = issueListCursorKey(upper);
+          const lowerCursor = issueListCursorKey(lower);
+          const initial = {
+            ...answer([upper, lower], { [upperCursor]: "2", [lowerCursor]: "2" }),
+            sources: [nativeSource(upper), nativeSource(lower)],
+            viewers: { [upperCursor]: "alice", [lowerCursor]: "bob" },
+          };
+          const pageTwo = {
+            ...initial,
+            entries: [],
+            sources: [nativeSource(lower)],
+            viewers: { [lowerCursor]: viewer, "forgejo forge.example": viewer },
+            nextCursors: {},
+          };
+          const replies = [
+            initial,
+            {
+              ...initial,
+              entries: [row("upper-tail", upper), row("lower-tail", lower)],
+              nextCursors: { [upperCursor]: "3", [lowerCursor]: "3" },
+            },
+            pageTwo,
+            ...(viewer === "charlie"
+              ? [{ ...pageTwo, entries: [row("charlie-first", lower)] }]
+              : []),
+          ];
+          const reads: Array<{ tag: string; input: unknown }> = [];
+          const request = vi.spyOn(RpcClient, "request");
+          const respond = ((tag: string, input: unknown) =>
+            Effect.sync(() => {
+              reads.push({ tag, input });
+              const reply = replies.shift();
+              if (reply === undefined) throw new Error("Unexpected native list read");
+              return decodeIssueList(reply);
+            })) as unknown as Parameters<typeof request.mockImplementation>[0];
+          request.mockImplementation(respond);
+          const guarded = vi.spyOn(RpcClient, "requestGuarded");
+          guarded.mockImplementation(
+            respond as unknown as Parameters<typeof guarded.mockImplementation>[0],
+          );
+          const input = { state: "open" as const, involvement: "assigned" as const, limit: 50 };
+          const environmentId = "environment" as EnvironmentId;
+          const read = (input: IssueListInput) => readListPage(environmentId, input);
+          try {
+            const firstRead = await executeAtomQuery(
+              registry,
+              atoms.list({ environmentId, input }),
+              {
+                reportFailure: false,
+              },
+            );
+            if (firstRead._tag !== "Success") throw new Error("Native first query failed");
+            const held = first(firstRead.value);
+            const tailed = continueIssueListPage(
+              held,
+              held.nextCursors,
+              await read({ ...input, cursors: held.nextCursors }),
+              held.firstCursors,
+            );
+            const next = continueIssueListPage(
+              tailed,
+              { [lowerCursor]: "3" },
+              await read({ ...input, cursors: { [lowerCursor]: "3" } }),
+              tailed.firstCursors,
+            );
+            expect(next.restartSources).toEqual(viewer === "charlie" ? [nativeSource(lower)] : []);
+            let completed = next;
+            for (const restart of next.restartSources ?? [])
+              completed = refreshIssueListPage(
+                completed,
+                await read({ ...input, projectId: restart.projectId, host: restart.host }),
+                { source: lower },
+              );
+            expect(keys(completed).toSorted()).toEqual(
+              viewer === "charlie"
+                ? ["charlie-first", "upper-first", "upper-tail"]
+                : ["lower-first", "lower-tail", "upper-first", "upper-tail"],
+            );
+            expect(completed.nextCursors).toEqual({ [upperCursor]: "3" });
+            expect(reads.map(({ tag }) => tag)).toEqual(
+              Array(viewer === "charlie" ? 4 : 3).fill("issues.list"),
+            );
+            expect(reads[0]!.input).toEqual(input);
+            expect(reads[2]!.input).toEqual({ ...input, cursors: { [lowerCursor]: "3" } });
+            if (viewer === "charlie")
+              expect(reads[3]!.input).toEqual({
+                ...input,
+                projectId: lower.projectId,
+                host: lower.host,
+              });
+            expect(replies).toEqual([]);
+          } finally {
+            registry.dispose();
+            request.mockRestore();
+            guarded.mockRestore();
+          }
+        });
+      }),
   );
 
   it.each([false, true])(
@@ -777,21 +726,7 @@ describe("held issue list viewers", () => {
     { cursor: "gitlab shared.example acme/app", viewer: "A" },
     { cursor: "shared.example acme/app", viewer: "A" },
   ])("restarts a changed viewer from page one once: %j", async ({ cursor, viewer }) => {
-    const runtime = Atom.runtime(
-      Layer.succeed(
-        EnvironmentRegistry.EnvironmentRegistry,
-        EnvironmentRegistry.EnvironmentRegistry.of({
-          run: (_id, effect) =>
-            Effect.provideService(
-              effect,
-              EnvironmentSupervisor.EnvironmentSupervisor,
-              {} as EnvironmentSupervisor.EnvironmentSupervisor["Service"],
-            ),
-        } as EnvironmentRegistry.EnvironmentRegistry["Service"]),
-      ),
-    );
-    const atoms = createIssueEnvironmentAtoms(runtime);
-    const registry = AtomRegistry.make();
+    const { registry, readListPage } = createIssueTestContext();
     const native = row("A-first", {
       tracker: "gitlab" as IssueTrackerKind,
       host: "shared.example",
@@ -844,14 +779,7 @@ describe("held issue list viewers", () => {
     request.mockImplementation((() => Effect.succeed(replies.shift()!)) as unknown as Parameters<
       typeof request.mockImplementation
     >[0]);
-    const read = async (input: IssueListInput) => {
-      const result = await atoms.listPage.run(registry, {
-        environmentId: "environment" as EnvironmentId,
-        input,
-      });
-      if (result._tag !== "Success") throw new Error("list read failed");
-      return result.value;
-    };
+    const read = (input: IssueListInput) => readListPage("environment" as EnvironmentId, input);
     try {
       const input = { state: "all" as const, involvement: "assigned" as const, limit: 50 };
       const held = first(await read(input));
@@ -1243,22 +1171,7 @@ describe("held issue list viewers", () => {
   it.each(["assigned", "all"] as const)(
     "resets %s rows using only the requested list reads",
     async (involvement) => {
-      const supervisor = {} as EnvironmentSupervisor.EnvironmentSupervisor["Service"];
-      const runtime = Atom.runtime(
-        Layer.succeed(
-          EnvironmentRegistry.EnvironmentRegistry,
-          EnvironmentRegistry.EnvironmentRegistry.of({
-            run: (_environmentId, effect) =>
-              Effect.provideService(
-                effect,
-                EnvironmentSupervisor.EnvironmentSupervisor,
-                supervisor,
-              ),
-          } as EnvironmentRegistry.EnvironmentRegistry["Service"]),
-        ),
-      );
-      const registry = AtomRegistry.make();
-      const atoms = createIssueEnvironmentAtoms(runtime);
+      const { registry, readListPage } = createIssueTestContext();
       const replies = [
         answer([row("A-first")], { [cursor]: "A2" }),
         answer([row("A-tail")], { [cursor]: "A3" }),
@@ -1273,14 +1186,8 @@ describe("held issue list viewers", () => {
         input: { state: "all" as const, involvement },
       };
       try {
-        const read = async (cursors = {}) => {
-          const result = await atoms.listPage.run(registry, {
-            ...target,
-            input: { ...target.input, cursors },
-          });
-          if (result._tag !== "Success") throw new Error("list read failed");
-          return result.value;
-        };
+        const read = (cursors = {}) =>
+          readListPage(target.environmentId, { ...target.input, cursors });
         const held = first(await read());
         const continued = continueIssueListPage(
           held,
