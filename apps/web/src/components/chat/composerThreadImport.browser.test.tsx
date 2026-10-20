@@ -1,7 +1,8 @@
 import { EnvironmentId, PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@t3tools/contracts";
-import { act, useLayoutEffect, useRef } from "react";
-import { createRoot } from "react-dom/client";
-import { describe, expect, it, vi } from "vite-plus/test";
+import { useLayoutEffect, useRef } from "react";
+import { describe, expect, it } from "vite-plus/test";
+
+import { act, render } from "../../../test/render";
 
 import {
   composerThreadImportBlockReason,
@@ -72,48 +73,39 @@ describe.each(["mention", "drop"])("importComposerThreadAttachment from a thread
         targetKey: "draft",
         expanded: false,
       };
-      vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-      const root = createRoot(document.createElement("div"));
-      try {
-        act(() => root.render(<Composer {...props} />));
-        const begin = () =>
-          source === "mention"
-            ? importMention()
-            : target.dispatchEvent(new CustomEvent(THREAD_CONTEXT_DROP_EVENT, { detail: [] }));
-        act(begin);
-        expect(pendingImports.get("draft")).toBe(1);
-        if (change === "unmount") {
-          act(() => root.unmount());
-        } else {
-          act(() =>
-            root.render(
-              <Composer
-                {...props}
-                expanded
-                {...(change === "draft switch" ? { targetKey: "another-draft" } : {})}
-                {...(change === "environment switch"
-                  ? { environmentId: EnvironmentId.make("another-environment") }
-                  : {})}
-              />,
-            ),
-          );
-          if (change !== "expand") {
-            act(() => root.render(<Composer {...props} />));
-          }
+      await using screen = await render(<Composer {...props} />);
+      const begin = () =>
+        source === "mention"
+          ? importMention()
+          : target.dispatchEvent(new CustomEvent(THREAD_CONTEXT_DROP_EVENT, { detail: [] }));
+      await act(begin);
+      expect(pendingImports.get("draft")).toBe(1);
+      if (change === "unmount") {
+        await screen.unmount();
+      } else {
+        await screen.rerender(
+          <Composer
+            {...props}
+            expanded
+            {...(change === "draft switch" ? { targetKey: "another-draft" } : {})}
+            {...(change === "environment switch"
+              ? { environmentId: EnvironmentId.make("another-environment") }
+              : {})}
+          />,
+        );
+        if (change !== "expand") {
+          await screen.rerender(<Composer {...props} />);
         }
-        transcript.resolve(new File(["transcript"], "thread.txt"));
-        await act(async () => importing);
-        expect(attached).toEqual(change === "expand" ? ["thread.txt"] : []);
-        expect(pendingImports.size).toBe(0);
-        if (change === "expand") {
-          act(begin);
-          await act(async () => importing);
-          expect(expandedAtDrop).toEqual([false, true]);
-          expect(attached).toEqual(["thread.txt", "thread.txt"]);
-        }
-      } finally {
-        if (change !== "unmount") act(() => root.unmount());
-        vi.unstubAllGlobals();
+      }
+      transcript.resolve(new File(["transcript"], "thread.txt"));
+      await act(() => importing);
+      expect(attached).toEqual(change === "expand" ? ["thread.txt"] : []);
+      expect(pendingImports.size).toBe(0);
+      if (change === "expand") {
+        await act(begin);
+        await act(() => importing);
+        expect(expandedAtDrop).toEqual([false, true]);
+        expect(attached).toEqual(["thread.txt", "thread.txt"]);
       }
     },
   );
