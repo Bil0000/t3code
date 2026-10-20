@@ -19,7 +19,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vite-plus/test";
-import { cdp } from "vite-plus/test/browser";
+import { cdp, page } from "vite-plus/test/browser";
 import type { CDPSession } from "vite-plus/test/browser-playwright";
 
 const assets = vi.hoisted(() => ({
@@ -186,6 +186,7 @@ beforeEach(() => {
 });
 afterEach(async () => {
   await act(async () => {
+    await settleImages();
     await Promise.all(imageResponses.splice(0));
     root.unmount();
   });
@@ -198,9 +199,25 @@ async function flush() {
     for (let index = 0; index < 5; index += 1) await Promise.resolve();
   });
 }
+async function settleImages() {
+  await Promise.all(
+    [...document.images].map((image) => {
+      if (image.complete) return;
+      image.loading = "eager";
+      return new Promise<void>((resolve) => {
+        image.addEventListener("load", () => resolve(), { once: true });
+        image.addEventListener("error", () => resolve(), { once: true });
+      });
+    }),
+  );
+}
 async function render(node: React.ReactNode) {
   await act(async () => root.render(<RegistryContext value={registry}>{node}</RegistryContext>));
   await flush();
+  await expect
+    .element(page.getByRole("status", { name: "Loading image" }).first())
+    .not.toBeInTheDocument();
+  await act(settleImages);
 }
 const sources = () => [...container.querySelectorAll("img")].map((image) => image.src);
 const linearResource = { _tag: "linear-media", issue, url: upload };
