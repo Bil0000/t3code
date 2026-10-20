@@ -32,7 +32,7 @@ const SearchRequest = Schema.Struct({
   cursor: Schema.Int,
   projectId: Schema.NullOr(ProjectId),
   archived: Schema.String,
-  includeTitles: Schema.Boolean,
+  includeTitles: Schema.Int,
 });
 const SearchRow = Schema.Struct({
   threadId: ThreadId,
@@ -163,7 +163,7 @@ export const make = Effect.gen(function* () {
             cursor: input.cursor ?? 0,
             projectId: input.projectId ?? null,
             archived: input.archived ?? "exclude",
-            includeTitles: input.includeTitles === true,
+            includeTitles: input.includeTitles === true ? 1 : 0,
           }),
         )
         .pipe(
