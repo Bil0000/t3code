@@ -16,6 +16,7 @@ import {
   type IssuePageRef,
   type IssueHierarchyPage,
   type IssueScopeRef,
+  type IssueSetParentInput,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -854,40 +855,42 @@ export function createIssueEnvironmentAtoms<R, E>(
       tag: WS_METHODS.issuesSetParent,
       scheduler: commandScheduler,
       concurrency: serialPerEnvironment,
-      onSuccess: (target, registry) =>
-        Effect.gen(function* () {
-          const held = registry
-            .getNodes()
-            .get(hierarchy({ environmentId: target.environmentId, input: detailRef(target.input) }))
-            ?.valueOption() as
-            | Option.Option<AsyncResult.AsyncResult<IssueHierarchyPage, unknown>>
-            | undefined;
-          const oldParent =
-            Option.getOrNull(Option.flatMap(held ?? Option.none(), AsyncResult.value))?.parent ??
-            null;
-          yield* refreshDetailAndHistory(target, registry);
-          yield* refreshHierarchy(target, registry);
-          if (target.input.parentKey !== null)
-            yield* refreshHistory(
-              {
-                environmentId: target.environmentId,
-                input: { ...target.input, key: target.input.parentKey },
-              },
-              registry,
-            );
-          if (
-            oldParent !== null &&
-            (oldParent.scope.toLowerCase() !== target.input.scope.toLowerCase() ||
-              oldParent.key !== target.input.parentKey)
-          )
-            yield* refreshHistory(
-              {
-                environmentId: target.environmentId,
-                input: { ...target.input, scope: oldParent.scope, key: oldParent.key },
-              },
-              registry,
-            );
-        }),
+      onSuccess: Effect.fn("issues.setParentOnSuccess")(function* (
+        target: { readonly environmentId: EnvironmentId; readonly input: IssueSetParentInput },
+        registry: AtomRegistry.AtomRegistry,
+      ) {
+        const held = registry
+          .getNodes()
+          .get(hierarchy({ environmentId: target.environmentId, input: detailRef(target.input) }))
+          ?.valueOption() as
+          | Option.Option<AsyncResult.AsyncResult<IssueHierarchyPage, unknown>>
+          | undefined;
+        const oldParent =
+          Option.getOrNull(Option.flatMap(held ?? Option.none(), AsyncResult.value))?.parent ??
+          null;
+        yield* refreshDetailAndHistory(target, registry);
+        yield* refreshHierarchy(target, registry);
+        if (target.input.parentKey !== null)
+          yield* refreshHistory(
+            {
+              environmentId: target.environmentId,
+              input: { ...target.input, key: target.input.parentKey },
+            },
+            registry,
+          );
+        if (
+          oldParent !== null &&
+          (oldParent.scope.toLowerCase() !== target.input.scope.toLowerCase() ||
+            oldParent.key !== target.input.parentKey)
+        )
+          yield* refreshHistory(
+            {
+              environmentId: target.environmentId,
+              input: { ...target.input, scope: oldParent.scope, key: oldParent.key },
+            },
+            registry,
+          );
+      }),
     }),
     update: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:issues:update",

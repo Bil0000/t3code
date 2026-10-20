@@ -394,143 +394,144 @@ export const make = Effect.gen(function* () {
     );
   };
 
-  const deploymentFor = (requestedHost: string) =>
-    Effect.gen(function* () {
-      const packed = yield* host.credentials.get(KIND).pipe(
-        Effect.flatMap(
-          Effect.fromOption(
-            () =>
-              new IssueTrackerError({
-                tracker: KIND,
-                operation: "deploymentFor",
-                reason: "unauthenticated",
-                detail: "Jira is not connected on this server.",
-              }),
-          ),
+  const deploymentFor = Effect.fn("JiraApi.deploymentFor")(function* (requestedHost: string) {
+    const packed = yield* host.credentials.get(KIND).pipe(
+      Effect.flatMap(
+        Effect.fromOption(
+          () =>
+            new IssueTrackerError({
+              tracker: KIND,
+              operation: "deploymentFor",
+              reason: "unauthenticated",
+              detail: "Jira is not connected on this server.",
+            }),
         ),
-      );
-      const credential = yield* Effect.try({
-        try: () => parseJiraCredential(packed),
-        catch: () =>
-          new IssueTrackerError({
-            tracker: KIND,
-            operation: "deploymentFor",
-            reason: "unauthenticated",
-            detail: "The Jira credential is invalid.",
-          }),
-      });
-      const normalized = yield* Effect.try({
-        try: () =>
-          credential.deployment === "cloud"
-            ? normalizeJiraHost(requestedHost)
-            : normalizeJiraInstanceHost(requestedHost),
-        catch: () =>
-          new IssueTrackerError({
-            tracker: KIND,
-            operation: "deploymentFor",
-            reason: "unauthenticated",
-            detail: "This Jira credential belongs to another site.",
-          }),
-      });
-      if (normalized !== credential.host)
-        return yield* new IssueTrackerError({
+      ),
+    );
+    const credential = yield* Effect.try({
+      try: () => parseJiraCredential(packed),
+      catch: () =>
+        new IssueTrackerError({
+          tracker: KIND,
+          operation: "deploymentFor",
+          reason: "unauthenticated",
+          detail: "The Jira credential is invalid.",
+        }),
+    });
+    const normalized = yield* Effect.try({
+      try: () =>
+        credential.deployment === "cloud"
+          ? normalizeJiraHost(requestedHost)
+          : normalizeJiraInstanceHost(requestedHost),
+      catch: () =>
+        new IssueTrackerError({
           tracker: KIND,
           operation: "deploymentFor",
           reason: "unauthenticated",
           detail: "This Jira credential belongs to another site.",
-        });
-      return credential.deployment;
+        }),
     });
-
-  const listScopes = (packed: string, input: IssuePageInput, operation = "listScopes") =>
-    Effect.gen(function* () {
-      const limit = input.limit ?? 100;
-      const cursor = input.cursor ?? "0";
-      const startAt = Number(cursor);
-      if (
-        !Number.isInteger(limit) ||
-        limit < 1 ||
-        limit > 100 ||
-        !/^(0|[1-9][0-9]*)$/.test(cursor) ||
-        cursor.length > 4096 ||
-        !Number.isSafeInteger(startAt)
-      )
-        return yield* new IssueTrackerError({
-          tracker: KIND,
-          operation,
-          reason: "failed",
-          detail: "Invalid Jira scope page.",
-        });
-      const credential = yield* Effect.try({
-        try: () => parseJiraCredential(packed),
-        catch: () =>
-          new IssueTrackerError({
-            tracker: KIND,
-            operation,
-            reason: "unauthenticated",
-            detail: "Enter a Jira Cloud site, account email and a standard site API token.",
-          }),
+    if (normalized !== credential.host)
+      return yield* new IssueTrackerError({
+        tracker: KIND,
+        operation: "deploymentFor",
+        reason: "unauthenticated",
+        detail: "This Jira credential belongs to another site.",
       });
-      const projects = yield* request({
-        host: credential.host,
-        credential: packed,
+    return credential.deployment;
+  });
+
+  const listScopes = Effect.fn("JiraApi.listScopes")(function* (
+    packed: string,
+    input: IssuePageInput,
+    operation = "listScopes",
+  ) {
+    const limit = input.limit ?? 100;
+    const cursor = input.cursor ?? "0";
+    const startAt = Number(cursor);
+    if (
+      !Number.isInteger(limit) ||
+      limit < 1 ||
+      limit > 100 ||
+      !/^(0|[1-9][0-9]*)$/.test(cursor) ||
+      cursor.length > 4096 ||
+      !Number.isSafeInteger(startAt)
+    )
+      return yield* new IssueTrackerError({
+        tracker: KIND,
         operation,
-        method: "GET",
-        path: "/project/search?startAt=" + startAt + "&maxResults=" + limit,
-        schema: Projects,
+        reason: "failed",
+        detail: "Invalid Jira scope page.",
       });
-      const next = projects.startAt + projects.values.length;
-      if (
-        projects.startAt !== startAt ||
-        projects.total < next ||
-        projects.values.length > limit ||
-        !Number.isSafeInteger(next) ||
-        (projects.values.length === 0 && next < projects.total)
-      )
-        return yield* new IssueTrackerError({
+    const credential = yield* Effect.try({
+      try: () => parseJiraCredential(packed),
+      catch: () =>
+        new IssueTrackerError({
           tracker: KIND,
           operation,
-          reason: "failed",
-          detail: "Jira returned an inconsistent project page.",
-        });
-      return {
-        items: projects.values.map((project) => ({ key: project.key, name: project.name })),
-        nextCursor: next < projects.total ? String(next) : null,
-      };
+          reason: "unauthenticated",
+          detail: "Enter a Jira Cloud site, account email and a standard site API token.",
+        }),
     });
+    const projects = yield* request({
+      host: credential.host,
+      credential: packed,
+      operation,
+      method: "GET",
+      path: "/project/search?startAt=" + startAt + "&maxResults=" + limit,
+      schema: Projects,
+    });
+    const next = projects.startAt + projects.values.length;
+    if (
+      projects.startAt !== startAt ||
+      projects.total < next ||
+      projects.values.length > limit ||
+      !Number.isSafeInteger(next) ||
+      (projects.values.length === 0 && next < projects.total)
+    )
+      return yield* new IssueTrackerError({
+        tracker: KIND,
+        operation,
+        reason: "failed",
+        detail: "Jira returned an inconsistent project page.",
+      });
+    return {
+      items: projects.values.map((project) => ({ key: project.key, name: project.name })),
+      nextCursor: next < projects.total ? String(next) : null,
+    };
+  });
 
-  const probeCredential = (packed: string) =>
-    Effect.gen(function* () {
-      const credential = yield* Effect.try({
-        try: () => parseJiraCredential(packed),
-        catch: () =>
-          new IssueTrackerError({
-            tracker: KIND,
-            operation: "probeCredential",
-            reason: "unauthenticated",
-            detail: "Enter a Jira Cloud site, account email and a standard site API token.",
-          }),
-      });
-      const viewer = yield* request({
-        host: credential.host,
-        credential: packed,
-        operation: "probeCredential",
-        method: "GET",
-        path: "/myself",
-        schema: JiraUser,
-      });
-      const projects = yield* listScopes(packed, {}, "probeCredential");
-      return {
-        account: viewer.displayName ?? viewer.accountId,
-        accountId: viewer.accountId,
-        host: credential.host,
-        scopes: projects.items,
-        scopesCursor: projects.nextCursor,
-        ...(projects.nextCursor === null ? {} : { scopesTruncated: true }),
-      };
+  const probeCredential = Effect.fn("JiraApi.probeCredential")(function* (packed: string) {
+    const credential = yield* Effect.try({
+      try: () => parseJiraCredential(packed),
+      catch: () =>
+        new IssueTrackerError({
+          tracker: KIND,
+          operation: "probeCredential",
+          reason: "unauthenticated",
+          detail: "Enter a Jira Cloud site, account email and a standard site API token.",
+        }),
     });
-  const getScope = (packed: string, scope: string) =>
-    Effect.gen(function* () {
+    const viewer = yield* request({
+      host: credential.host,
+      credential: packed,
+      operation: "probeCredential",
+      method: "GET",
+      path: "/myself",
+      schema: JiraUser,
+    });
+    const projects = yield* listScopes(packed, {}, "probeCredential");
+    return {
+      account: viewer.displayName ?? viewer.accountId,
+      accountId: viewer.accountId,
+      host: credential.host,
+      scopes: projects.items,
+      scopesCursor: projects.nextCursor,
+      ...(projects.nextCursor === null ? {} : { scopesTruncated: true }),
+    };
+  });
+  const getScope = Effect.fn("JiraApi.getScope")(
+    function* (packed: string, scope: string) {
       const credential = yield* Effect.try({
         try: () => parseJiraCredential(packed),
         catch: () =>
@@ -550,11 +551,11 @@ export const make = Effect.gen(function* () {
         schema: Schema.Struct({ key: Text, name: Text }),
       });
       return { key: project.key, name: project.name };
-    }).pipe(
-      Effect.catchIf(
-        (error) => error.reason === "not-found",
-        () => Effect.succeed(null),
-      ),
-    );
+    },
+    Effect.catchIf(
+      (error) => error.reason === "not-found",
+      () => Effect.succeed(null),
+    ),
+  );
   return JiraApi.of({ request, probeCredential, getScope, listScopes, deploymentFor });
 });

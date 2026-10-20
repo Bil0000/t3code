@@ -366,61 +366,59 @@ export const make = Effect.gen(function* () {
     order: input.order ?? "desc",
   });
 
-  const readTimelineCursor = (
+  const readTimelineCursor = Effect.fn("GitHubIssueTracker.readTimelineCursor")(function* (
     input: IssueTarget & { readonly order?: "asc" | "desc"; readonly cursor?: string | undefined },
     operation: "getComments" | "getHistory",
-  ) =>
-    Effect.gen(function* () {
-      if (input.order !== undefined && input.order !== "asc" && input.order !== "desc")
-        return yield* unreadable(operation, "invalid-order");
-      if (input.cursor === undefined) return undefined;
-      if (input.cursor.length > 8192 || !/^[A-Za-z0-9_-]+$/.test(input.cursor))
-        return yield* unreadable(operation, "invalid-cursor");
-      const decoded = decodeTimelineCursor(Buffer.from(input.cursor, "base64url").toString("utf8"));
-      if (Result.isFailure(decoded)) return yield* unreadable(operation, "invalid-cursor");
-      const cursor = decoded.success;
-      const identity = timelineIdentity(input, operation);
-      if (
-        Object.entries(identity).some(
-          ([key, value]) => cursor[key as keyof typeof identity] !== value,
-        ) ||
-        cursor.cursor.trim().length === 0 ||
-        cursor.cursor.length > 2048 ||
-        cursor.window !== (identity.order === "asc" ? "after" : "before") ||
-        cursor.cursor === cursor.previous ||
-        (cursor.previous !== null &&
-          (cursor.previous.trim().length === 0 || cursor.previous.length > 2048))
-      )
-        return yield* unreadable(operation, "invalid-cursor");
-      return cursor;
-    });
+  ) {
+    if (input.order !== undefined && input.order !== "asc" && input.order !== "desc")
+      return yield* unreadable(operation, "invalid-order");
+    if (input.cursor === undefined) return undefined;
+    if (input.cursor.length > 8192 || !/^[A-Za-z0-9_-]+$/.test(input.cursor))
+      return yield* unreadable(operation, "invalid-cursor");
+    const decoded = decodeTimelineCursor(Buffer.from(input.cursor, "base64url").toString("utf8"));
+    if (Result.isFailure(decoded)) return yield* unreadable(operation, "invalid-cursor");
+    const cursor = decoded.success;
+    const identity = timelineIdentity(input, operation);
+    if (
+      Object.entries(identity).some(
+        ([key, value]) => cursor[key as keyof typeof identity] !== value,
+      ) ||
+      cursor.cursor.trim().length === 0 ||
+      cursor.cursor.length > 2048 ||
+      cursor.window !== (identity.order === "asc" ? "after" : "before") ||
+      cursor.cursor === cursor.previous ||
+      (cursor.previous !== null &&
+        (cursor.previous.trim().length === 0 || cursor.previous.length > 2048))
+    )
+      return yield* unreadable(operation, "invalid-cursor");
+    return cursor;
+  });
 
-  const writeTimelineCursor = (
+  const writeTimelineCursor = Effect.fn("GitHubIssueTracker.writeTimelineCursor")(function* (
     input: IssueTarget & { readonly order?: "asc" | "desc" },
     operation: "getComments" | "getHistory",
     cursor: string | null,
     previous?: { readonly cursor: string; readonly previous: string | null },
-  ): Effect.Effect<string | null, IssueTrackerError> =>
-    Effect.gen(function* () {
-      if (cursor === null) return null;
-      if (
-        cursor.trim().length === 0 ||
-        cursor.length > 2048 ||
-        cursor === previous?.cursor ||
-        cursor === previous?.previous
-      )
-        return yield* unreadable(operation, "invalid-continuation");
-      const encoded = Buffer.from(
-        encodeTimelineCursor({
-          ...timelineIdentity(input, operation),
-          cursor,
-          window: input.order === "asc" ? "after" : "before",
-          previous: previous?.cursor ?? null,
-        }),
-      ).toString("base64url");
-      if (encoded.length > 8192) return yield* unreadable(operation, "invalid-continuation");
-      return encoded;
-    });
+  ): Effect.fn.Return<string | null, IssueTrackerError> {
+    if (cursor === null) return null;
+    if (
+      cursor.trim().length === 0 ||
+      cursor.length > 2048 ||
+      cursor === previous?.cursor ||
+      cursor === previous?.previous
+    )
+      return yield* unreadable(operation, "invalid-continuation");
+    const encoded = Buffer.from(
+      encodeTimelineCursor({
+        ...timelineIdentity(input, operation),
+        cursor,
+        window: input.order === "asc" ? "after" : "before",
+        previous: previous?.cursor ?? null,
+      }),
+    ).toString("base64url");
+    if (encoded.length > 8192) return yield* unreadable(operation, "invalid-continuation");
+    return encoded;
+  });
 
   /** Every write to an issue's own fields is one `PATCH`; only its body differs. */
   const patchIssue = (
@@ -793,38 +791,35 @@ export const make = Effect.gen(function* () {
         ),
       ),
 
-    getComments: (input) =>
-      Effect.gen(function* () {
-        const cursor = yield* readTimelineCursor(input, "getComments");
-        const { owner, name, number } = yield* restIssue(input, "getComments");
-        const asc = input.order === "asc";
-        const page = yield* graphqlRead({
-          host: input.host,
-          operation: "getComments",
-          query: client.IssueComments,
-          variables: {
-            owner,
-            name,
-            number,
-            ...(asc
-              ? { first: 100, after: cursor?.cursor }
-              : { last: 100, before: cursor?.cursor }),
-          },
-          decode: (data) => toIssueComments(data, input.order ?? "desc"),
-        });
-        if (page === null) return yield* notFound("getComments");
-        if (
-          !page.valid ||
-          page.rowCount > 100 ||
-          new Set(page.comments.map((row) => row.id)).size !== page.comments.length ||
-          (cursor === undefined ? page.oppositePage : page.rowCount === 0)
-        )
-          return yield* unreadable("getComments", "invalid-page");
-        return {
-          comments: page.comments,
-          nextCursor: yield* writeTimelineCursor(input, "getComments", page.nextCursor, cursor),
-        };
-      }),
+    getComments: Effect.fn("GitHubIssueTracker.getComments")(function* (input) {
+      const cursor = yield* readTimelineCursor(input, "getComments");
+      const { owner, name, number } = yield* restIssue(input, "getComments");
+      const asc = input.order === "asc";
+      const page = yield* graphqlRead({
+        host: input.host,
+        operation: "getComments",
+        query: client.IssueComments,
+        variables: {
+          owner,
+          name,
+          number,
+          ...(asc ? { first: 100, after: cursor?.cursor } : { last: 100, before: cursor?.cursor }),
+        },
+        decode: (data) => toIssueComments(data, input.order ?? "desc"),
+      });
+      if (page === null) return yield* notFound("getComments");
+      if (
+        !page.valid ||
+        page.rowCount > 100 ||
+        new Set(page.comments.map((row) => row.id)).size !== page.comments.length ||
+        (cursor === undefined ? page.oppositePage : page.rowCount === 0)
+      )
+        return yield* unreadable("getComments", "invalid-page");
+      return {
+        comments: page.comments,
+        nextCursor: yield* writeTimelineCursor(input, "getComments", page.nextCursor, cursor),
+      };
+    }),
 
     getViewerPermissions: (input) =>
       readViewerPermissions(input, "getViewerPermissions").pipe(
@@ -844,91 +839,90 @@ export const make = Effect.gen(function* () {
         Effect.provideService(SourceControlRateLimit.Interactive, true),
       ),
 
-    getDependencies: (input) =>
-      Effect.gen(function* () {
-        const operation = "getDependencies";
-        const number = parseNumber(input.key);
-        const page =
-          input.cursor === undefined
-            ? 1
-            : /^[1-9]\d{0,6}$/.test(input.cursor)
-              ? Number(input.cursor)
-              : null;
-        const requestedLimit = input.limit ?? 50;
-        const limit = Math.min(requestedLimit, 100);
+    getDependencies: Effect.fn("GitHubIssueTracker.getDependencies")(function* (input) {
+      const operation = "getDependencies";
+      const number = parseNumber(input.key);
+      const page =
+        input.cursor === undefined
+          ? 1
+          : /^[1-9]\d{0,6}$/.test(input.cursor)
+            ? Number(input.cursor)
+            : null;
+      const requestedLimit = input.limit ?? 50;
+      const limit = Math.min(requestedLimit, 100);
+      if (
+        !dependencyScope(input.scope) ||
+        number === null ||
+        !Number.isSafeInteger(number) ||
+        page === null ||
+        !Number.isInteger(requestedLimit) ||
+        requestedLimit < 1 ||
+        requestedLimit > 200
+      )
+        return yield* unreadable(operation, "invalid-dependency-page");
+      const { path } = yield* restIssue(input, operation);
+      const endpoint = `${path}/dependencies/${input.direction === "blocks" ? "blocking" : "blocked_by"}`;
+      const { value, headers } = yield* restRead(
+        input,
+        operation,
+        `${endpoint}?per_page=${limit}&page=${page}`,
+        Schema.Array(RelatedIssue),
+      );
+      if (value.length > limit) return yield* unreadable(operation, "oversized-dependency-page");
+      const nextLinks = [...(headers.link ?? "").matchAll(/<([^>]+)>;\s*rel="next"/g)];
+      if (
+        nextLinks.length > 1 ||
+        (/(?:^|[;\s])rel="next"/.test(headers.link ?? "") && nextLinks.length === 0)
+      )
+        return yield* unreadable(operation, "invalid-dependency-pagination");
+      if (nextLinks.length === 1) {
+        const apiRoot = new URL(GitHubRequestPolicy.gitHubApiUrls(input.host).rest);
+        const expected = new URL(`${apiRoot.href.replace(/\/$/, "")}/${endpoint}`);
+        const next = nextLinks[0]![1]!;
+        if (!URL.canParse(next))
+          return yield* unreadable(operation, "invalid-dependency-pagination");
+        const url = new URL(next);
+        const prefix = apiRoot.pathname.replace(/\/$/, "");
+        const canonical = url.pathname.startsWith(prefix)
+          ? /^\/repositories\/[1-9]\d*(\/issues\/[1-9]\d*\/dependencies\/(?:blocked_by|blocking))$/.exec(
+              url.pathname.slice(prefix.length),
+            )
+          : null;
         if (
-          !dependencyScope(input.scope) ||
-          number === null ||
-          !Number.isSafeInteger(number) ||
-          page === null ||
-          !Number.isInteger(requestedLimit) ||
-          requestedLimit < 1 ||
-          requestedLimit > 200
-        )
-          return yield* unreadable(operation, "invalid-dependency-page");
-        const { path } = yield* restIssue(input, operation);
-        const endpoint = `${path}/dependencies/${input.direction === "blocks" ? "blocking" : "blocked_by"}`;
-        const { value, headers } = yield* restRead(
-          input,
-          operation,
-          `${endpoint}?per_page=${limit}&page=${page}`,
-          Schema.Array(RelatedIssue),
-        );
-        if (value.length > limit) return yield* unreadable(operation, "oversized-dependency-page");
-        const nextLinks = [...(headers.link ?? "").matchAll(/<([^>]+)>;\s*rel="next"/g)];
-        if (
-          nextLinks.length > 1 ||
-          (/(?:^|[;\s])rel="next"/.test(headers.link ?? "") && nextLinks.length === 0)
+          url.origin !== expected.origin ||
+          (url.pathname !== expected.pathname &&
+            canonical?.[1] !==
+              `/issues/${number}/dependencies/${input.direction === "blocks" ? "blocking" : "blocked_by"}`) ||
+          url.username !== "" ||
+          url.password !== "" ||
+          url.hash !== "" ||
+          url.searchParams.size !== 2 ||
+          url.searchParams.get("page") !== String(page + 1) ||
+          url.searchParams.get("per_page") !== String(limit)
         )
           return yield* unreadable(operation, "invalid-dependency-pagination");
-        if (nextLinks.length === 1) {
-          const apiRoot = new URL(GitHubRequestPolicy.gitHubApiUrls(input.host).rest);
-          const expected = new URL(`${apiRoot.href.replace(/\/$/, "")}/${endpoint}`);
-          const next = nextLinks[0]![1]!;
-          if (!URL.canParse(next))
-            return yield* unreadable(operation, "invalid-dependency-pagination");
-          const url = new URL(next);
-          const prefix = apiRoot.pathname.replace(/\/$/, "");
-          const canonical = url.pathname.startsWith(prefix)
-            ? /^\/repositories\/[1-9]\d*(\/issues\/[1-9]\d*\/dependencies\/(?:blocked_by|blocking))$/.exec(
-                url.pathname.slice(prefix.length),
-              )
-            : null;
-          if (
-            url.origin !== expected.origin ||
-            (url.pathname !== expected.pathname &&
-              canonical?.[1] !==
-                `/issues/${number}/dependencies/${input.direction === "blocks" ? "blocking" : "blocked_by"}`) ||
-            url.username !== "" ||
-            url.password !== "" ||
-            url.hash !== "" ||
-            url.searchParams.size !== 2 ||
-            url.searchParams.get("page") !== String(page + 1) ||
-            url.searchParams.get("per_page") !== String(limit)
-          )
-            return yield* unreadable(operation, "invalid-dependency-pagination");
-        }
-        return {
-          items: yield* Effect.forEach(value, (row) =>
-            relatedIssue(input, row, operation).pipe(
-              Effect.filterOrFail(
-                (ref) =>
-                  dependencyScope(ref.scope) &&
-                  Number.isSafeInteger(row.id) &&
-                  row.id > 0 &&
-                  Number.isSafeInteger(row.number),
-                () => unreadable(operation, "invalid-dependency-issue"),
-              ),
-              Effect.map((ref) => ({ ...ref, kind: "issue" as const })),
+      }
+      return {
+        items: yield* Effect.forEach(value, (row) =>
+          relatedIssue(input, row, operation).pipe(
+            Effect.filterOrFail(
+              (ref) =>
+                dependencyScope(ref.scope) &&
+                Number.isSafeInteger(row.id) &&
+                row.id > 0 &&
+                Number.isSafeInteger(row.number),
+              () => unreadable(operation, "invalid-dependency-issue"),
             ),
+            Effect.map((ref) => ({ ...ref, kind: "issue" as const })),
           ),
-          nextCursor: nextLinks.length === 1 && page < 9_999_999 ? String(page + 1) : null,
-          ...(nextLinks.length === 1 && page === 9_999_999 ? { truncated: true } : {}),
-        };
-      }),
+        ),
+        nextCursor: nextLinks.length === 1 && page < 9_999_999 ? String(page + 1) : null,
+        ...(nextLinks.length === 1 && page === 9_999_999 ? { truncated: true } : {}),
+      };
+    }),
 
-    setDependency: (input) =>
-      Effect.gen(function* () {
+    setDependency: Effect.fn("GitHubIssueTracker.setDependency")(
+      function* (input) {
         const operation = "setDependency";
         let targetKey = input.targetKey;
         if (URL.canParse(targetKey)) {
@@ -985,26 +979,27 @@ export const make = Effect.gen(function* () {
             ...(input.linked ? { body: { issue_id: blocker.id } } : {}),
           })
           .pipe(Effect.mapError(fail(operation)));
-      }).pipe(Effect.provideService(SourceControlRateLimit.Interactive, true)),
+      },
+      Effect.provideService(SourceControlRateLimit.Interactive, true),
+    ),
 
-    getHierarchy: (input) =>
-      Effect.gen(function* () {
-        const { path } = yield* restIssue(input, "getHierarchy");
-        const [parent, children] = yield* Effect.all(
-          [parentIssue(input), restPage(input, "getHierarchy", `${path}/sub_issues`, RelatedIssue)],
-          { concurrency: 2 },
-        );
-        return {
-          parent: parent === null ? null : yield* relatedIssue(input, parent),
-          children: {
-            ...children,
-            items: yield* Effect.forEach(children.items, (child) => relatedIssue(input, child)),
-          },
-        };
-      }),
+    getHierarchy: Effect.fn("GitHubIssueTracker.getHierarchy")(function* (input) {
+      const { path } = yield* restIssue(input, "getHierarchy");
+      const [parent, children] = yield* Effect.all(
+        [parentIssue(input), restPage(input, "getHierarchy", `${path}/sub_issues`, RelatedIssue)],
+        { concurrency: 2 },
+      );
+      return {
+        parent: parent === null ? null : yield* relatedIssue(input, parent),
+        children: {
+          ...children,
+          items: yield* Effect.forEach(children.items, (child) => relatedIssue(input, child)),
+        },
+      };
+    }),
 
-    setParent: (input) =>
-      Effect.gen(function* () {
+    setParent: Effect.fn("GitHubIssueTracker.setParent")(
+      function* (input) {
         if (input.parentKey === input.key) return yield* unreadable("setParent", "self-parent");
         const child = yield* readRelatedIssue(input, "setParent");
         if (input.parentKey !== null) {
@@ -1022,43 +1017,44 @@ export const make = Effect.gen(function* () {
         yield* restRead(input, "setParent", `${path}/sub_issue`, Schema.Unknown, "DELETE", {
           sub_issue_id: child.id,
         });
-      }).pipe(Effect.provideService(SourceControlRateLimit.Interactive, true)),
+      },
+      Effect.provideService(SourceControlRateLimit.Interactive, true),
+    ),
 
-    getHistory: (input) =>
-      Effect.gen(function* () {
-        const cursor = yield* readTimelineCursor(input, "getHistory");
-        const limit = input.limit ?? 50;
-        if (!Number.isInteger(limit) || limit < 1 || limit > 100)
-          return yield* unreadable("getHistory", "invalid-limit");
-        const { owner, name, number } = yield* restIssue(input, "getHistory");
-        const asc = input.order === "asc";
-        const page = yield* graphqlRead({
-          host: input.host,
-          operation: "getHistory",
-          query: client.IssueHistory,
-          variables: {
-            owner,
-            name,
-            number,
-            ...(asc
-              ? { first: limit, after: cursor?.cursor }
-              : { last: limit, before: cursor?.cursor }),
-          },
-          decode: (data) => toIssueHistory(data, input.order ?? "desc"),
-        });
-        if (page === null) return yield* notFound("getHistory");
-        if (
-          !page.valid ||
-          page.rowCount > limit ||
-          new Set(page.items.map((row) => row.id)).size !== page.items.length ||
-          (cursor === undefined ? page.oppositePage : page.rowCount === 0)
-        )
-          return yield* unreadable("getHistory", "invalid-page");
-        return {
-          items: page.items,
-          nextCursor: yield* writeTimelineCursor(input, "getHistory", page.nextCursor, cursor),
-        };
-      }),
+    getHistory: Effect.fn("GitHubIssueTracker.getHistory")(function* (input) {
+      const cursor = yield* readTimelineCursor(input, "getHistory");
+      const limit = input.limit ?? 50;
+      if (!Number.isInteger(limit) || limit < 1 || limit > 100)
+        return yield* unreadable("getHistory", "invalid-limit");
+      const { owner, name, number } = yield* restIssue(input, "getHistory");
+      const asc = input.order === "asc";
+      const page = yield* graphqlRead({
+        host: input.host,
+        operation: "getHistory",
+        query: client.IssueHistory,
+        variables: {
+          owner,
+          name,
+          number,
+          ...(asc
+            ? { first: limit, after: cursor?.cursor }
+            : { last: limit, before: cursor?.cursor }),
+        },
+        decode: (data) => toIssueHistory(data, input.order ?? "desc"),
+      });
+      if (page === null) return yield* notFound("getHistory");
+      if (
+        !page.valid ||
+        page.rowCount > limit ||
+        new Set(page.items.map((row) => row.id)).size !== page.items.length ||
+        (cursor === undefined ? page.oppositePage : page.rowCount === 0)
+      )
+        return yield* unreadable("getHistory", "invalid-page");
+      return {
+        items: page.items,
+        nextCursor: yield* writeTimelineCursor(input, "getHistory", page.nextCursor, cursor),
+      };
+    }),
 
     listLabelCandidates: (input) => {
       const { owner, name } = parseRepository(input.scope);
@@ -1090,62 +1086,59 @@ export const make = Effect.gen(function* () {
       );
     },
 
-    getLinkedPullRequests: (input) =>
-      Effect.gen(function* () {
-        const match = /^(closing|related):(.*)$/.exec(input.cursor ?? "closing:");
-        if (match === null) return yield* unreadable("getLinkedPullRequests", "invalid-cursor");
-        const closing = match[1] === "closing";
-        const { owner, name, number } = yield* restIssue(input, "getLinkedPullRequests");
-        const variables = {
-          owner,
-          name,
-          number,
-          first: Math.min(input.limit ?? 50, 100),
-          after: match[2] || null,
-        };
-        const page = yield* (
-          closing
-            ? graphqlRead({
-                host: input.host,
-                operation: "getLinkedPullRequests",
-                query: client.IssueClosingPullRequests,
-                variables,
-                decode: (data) => toIssueLinkedPullRequests(data, true),
-              })
-            : graphqlRead({
-                host: input.host,
-                operation: "getLinkedPullRequests",
-                query: client.IssueRelatedPullRequests,
-                variables,
-                decode: (data) => toIssueLinkedPullRequests(data, false),
-              })
-        ).pipe(
-          Effect.filterOrFail(
-            (connection) => connection !== null,
-            () => unreadable("getLinkedPullRequests", "missing-issue"),
-          ),
-        );
-        if (page.pageInfo.hasNextPage && page.pageInfo.endCursor === null)
-          return yield* unreadable("getLinkedPullRequests", "missing-cursor");
-        const seen = new Set<string>();
-        return {
-          nextCursor: page.pageInfo.hasNextPage
-            ? `${closing ? "closing" : "related"}:${page.pageInfo.endCursor}`
-            : closing
-              ? "related:"
-              : null,
-          items: page.items.flatMap((pr): IssueLinkedPullRequest[] => {
-            if (seen.has(pr.url)) return [];
-            seen.add(pr.url);
-            return [
-              { ...pr, provider: SourceControlProviderKind.make("github"), host: input.host },
-            ];
-          }),
-        };
-      }),
+    getLinkedPullRequests: Effect.fn("GitHubIssueTracker.getLinkedPullRequests")(function* (input) {
+      const match = /^(closing|related):(.*)$/.exec(input.cursor ?? "closing:");
+      if (match === null) return yield* unreadable("getLinkedPullRequests", "invalid-cursor");
+      const closing = match[1] === "closing";
+      const { owner, name, number } = yield* restIssue(input, "getLinkedPullRequests");
+      const variables = {
+        owner,
+        name,
+        number,
+        first: Math.min(input.limit ?? 50, 100),
+        after: match[2] || null,
+      };
+      const page = yield* (
+        closing
+          ? graphqlRead({
+              host: input.host,
+              operation: "getLinkedPullRequests",
+              query: client.IssueClosingPullRequests,
+              variables,
+              decode: (data) => toIssueLinkedPullRequests(data, true),
+            })
+          : graphqlRead({
+              host: input.host,
+              operation: "getLinkedPullRequests",
+              query: client.IssueRelatedPullRequests,
+              variables,
+              decode: (data) => toIssueLinkedPullRequests(data, false),
+            })
+      ).pipe(
+        Effect.filterOrFail(
+          (connection) => connection !== null,
+          () => unreadable("getLinkedPullRequests", "missing-issue"),
+        ),
+      );
+      if (page.pageInfo.hasNextPage && page.pageInfo.endCursor === null)
+        return yield* unreadable("getLinkedPullRequests", "missing-cursor");
+      const seen = new Set<string>();
+      return {
+        nextCursor: page.pageInfo.hasNextPage
+          ? `${closing ? "closing" : "related"}:${page.pageInfo.endCursor}`
+          : closing
+            ? "related:"
+            : null,
+        items: page.items.flatMap((pr): IssueLinkedPullRequest[] => {
+          if (seen.has(pr.url)) return [];
+          seen.add(pr.url);
+          return [{ ...pr, provider: SourceControlProviderKind.make("github"), host: input.host }];
+        }),
+      };
+    }),
 
-    create: (input) =>
-      Effect.gen(function* () {
+    create: Effect.fn("GitHubIssueTracker.create")(
+      function* (input) {
         yield* validateAssignees(input.assignees, "create");
         if (input.parentKey !== undefined)
           yield* readRelatedIssue({ ...input, key: input.parentKey }, "create");
@@ -1189,7 +1182,9 @@ export const make = Effect.gen(function* () {
                 Effect.orElseSucceed(() => false),
               );
         return { ...created, parentLinked };
-      }).pipe(Effect.provideService(SourceControlRateLimit.Interactive, true)),
+      },
+      Effect.provideService(SourceControlRateLimit.Interactive, true),
+    ),
 
     comment: (input) =>
       restIssue(input, "comment").pipe(
@@ -1258,118 +1253,115 @@ export const make = Effect.gen(function* () {
         Effect.provideService(SourceControlRateLimit.Interactive, true),
       ),
 
-    listTemplates: (input) =>
-      Effect.gen(function* () {
-        if (
-          !SEARCH_REPOSITORY.test(input.scope) ||
-          (input.metadataOnly && input.templateKey !== undefined)
-        )
-          return yield* unreadable("listTemplates", "invalid-template-selection");
-        const { owner, name } = parseRepository(input.scope);
-        const prefix = `github-default:${owner.toLowerCase()}/.github:`;
-        if (
-          input.templateKey?.startsWith("github-default:") &&
-          (!input.templateKey.startsWith(prefix) ||
-            !/^[0-9a-f]{40}:[^/\\\p{Cc}]+$/u.test(input.templateKey.slice(prefix.length)))
-        )
-          return yield* unreadable("listTemplates", "invalid-default-template");
-        const read = (repository: string) =>
-          graphqlRead({
-            host: input.host,
-            operation: "listTemplates",
-            query: client.IssueTemplates,
-            variables: {
-              owner,
-              name: repository,
-              includeBody: !input.metadataOnly,
-            },
-            decode: (data) => {
-              const templates = toIssueTemplates(data);
-              const files = toIssueTemplateFiles(data);
-              if (files === null) return null;
-              const parsed = readGitHubIssueTemplateFiles(files.entries);
-              return {
-                ...files,
-                markdown: templates.filter((template) => !/\.ya?ml$/i.test(template.key)),
-                parsed,
-                markdownNames: [
-                  ...parsed.markdownNames,
-                  ...readGitHubIssueTemplateFiles(files.legacyEntries).markdownNames,
-                ],
-              };
-            },
-          }).pipe(
-            Effect.filterOrFail(
-              (value) => value !== null,
-              () => notFound("listTemplates"),
-            ),
-          );
-        const local = yield* read(name);
-        if (
-          local.repository !== undefined &&
-          local.repository.toLowerCase() !== input.scope.toLowerCase()
-        )
-          return yield* unreadable("listTemplates", "different-repository");
-        const localMarkdown = local.markdown.some((template) =>
-          local.markdownNames.includes(template.key.split("/").at(-1) ?? ""),
+    listTemplates: Effect.fn("GitHubIssueTracker.listTemplates")(function* (input) {
+      if (
+        !SEARCH_REPOSITORY.test(input.scope) ||
+        (input.metadataOnly && input.templateKey !== undefined)
+      )
+        return yield* unreadable("listTemplates", "invalid-template-selection");
+      const { owner, name } = parseRepository(input.scope);
+      const prefix = `github-default:${owner.toLowerCase()}/.github:`;
+      if (
+        input.templateKey?.startsWith("github-default:") &&
+        (!input.templateKey.startsWith(prefix) ||
+          !/^[0-9a-f]{40}:[^/\\\p{Cc}]+$/u.test(input.templateKey.slice(prefix.length)))
+      )
+        return yield* unreadable("listTemplates", "invalid-default-template");
+      const read = (repository: string) =>
+        graphqlRead({
+          host: input.host,
+          operation: "listTemplates",
+          query: client.IssueTemplates,
+          variables: {
+            owner,
+            name: repository,
+            includeBody: !input.metadataOnly,
+          },
+          decode: (data) => {
+            const templates = toIssueTemplates(data);
+            const files = toIssueTemplateFiles(data);
+            if (files === null) return null;
+            const parsed = readGitHubIssueTemplateFiles(files.entries);
+            return {
+              ...files,
+              markdown: templates.filter((template) => !/\.ya?ml$/i.test(template.key)),
+              parsed,
+              markdownNames: [
+                ...parsed.markdownNames,
+                ...readGitHubIssueTemplateFiles(files.legacyEntries).markdownNames,
+              ],
+            };
+          },
+        }).pipe(
+          Effect.filterOrFail(
+            (value) => value !== null,
+            () => notFound("listTemplates"),
+          ),
         );
-        let effective = local;
-        let inherited = false;
+      const local = yield* read(name);
+      if (
+        local.repository !== undefined &&
+        local.repository.toLowerCase() !== input.scope.toLowerCase()
+      )
+        return yield* unreadable("listTemplates", "different-repository");
+      const localMarkdown = local.markdown.some((template) =>
+        local.markdownNames.includes(template.key.split("/").at(-1) ?? ""),
+      );
+      let effective = local;
+      let inherited = false;
+      if (
+        !local.parsed.hasConfig &&
+        !local.parsed.hasForms &&
+        !localMarkdown &&
+        name !== ".github"
+      ) {
+        const defaults = yield* read(".github").pipe(
+          Effect.catchIf(
+            (error) => error.reason !== "rate-limited",
+            () => Effect.succeed(null),
+          ),
+        );
         if (
-          !local.parsed.hasConfig &&
-          !local.parsed.hasForms &&
-          !localMarkdown &&
-          name !== ".github"
+          defaults !== null &&
+          defaults.isPrivate === false &&
+          defaults.repository?.toLowerCase() === `${owner}/.github`.toLowerCase() &&
+          defaults.oid !== undefined &&
+          /^[0-9a-f]{40}$/.test(defaults.oid)
         ) {
-          const defaults = yield* read(".github").pipe(
-            Effect.catchIf(
-              (error) => error.reason !== "rate-limited",
-              () => Effect.succeed(null),
-            ),
-          );
-          if (
-            defaults !== null &&
-            defaults.isPrivate === false &&
-            defaults.repository?.toLowerCase() === `${owner}/.github`.toLowerCase() &&
-            defaults.oid !== undefined &&
-            /^[0-9a-f]{40}$/.test(defaults.oid)
-          ) {
-            effective = defaults;
-            inherited = true;
-          }
+          effective = defaults;
+          inherited = true;
         }
-        const templates = [...effective.markdown, ...effective.parsed.templates].map(
-          (template) => ({
-            ...template,
-            ...(inherited
-              ? { key: `${prefix}${effective.oid}:${template.key.split("/").at(-1)}` }
-              : {}),
-            ...(input.metadataOnly ? { body: "", contentDeferred: true } : {}),
-          }),
-        );
-        const selected =
-          input.templateKey === undefined
-            ? templates
-            : templates.filter((template) => template.key === input.templateKey);
-        if (input.templateKey !== undefined && selected.length === 0)
-          return yield* unreadable("listTemplates", "template-changed-or-missing");
-        return {
-          templates: selected,
-          blankIssuesEnabled: effective.parsed.blankIssuesEnabled,
-          ...(effective.parsed.externalTemplates.length === 0
-            ? {}
-            : {
-                externalTemplates: effective.parsed.externalTemplates.map((template) => ({
-                  name: template.name,
-                  about: template.about,
-                  url: `https://${input.host}/${input.scope}/issues/new?${new URLSearchParams({ template: template.key })}`,
-                })),
-              }),
-          ...(effective.parsed.contactLinks.length === 0
-            ? {}
-            : { contactLinks: effective.parsed.contactLinks }),
-        };
-      }),
+      }
+      const templates = [...effective.markdown, ...effective.parsed.templates].map((template) => ({
+        ...template,
+        ...(inherited
+          ? { key: `${prefix}${effective.oid}:${template.key.split("/").at(-1)}` }
+          : {}),
+        ...(input.metadataOnly ? { body: "", contentDeferred: true } : {}),
+      }));
+      const selected =
+        input.templateKey === undefined
+          ? templates
+          : templates.filter((template) => template.key === input.templateKey);
+      if (input.templateKey !== undefined && selected.length === 0)
+        return yield* unreadable("listTemplates", "template-changed-or-missing");
+      return {
+        templates: selected,
+        blankIssuesEnabled: effective.parsed.blankIssuesEnabled,
+        ...(effective.parsed.externalTemplates.length === 0
+          ? {}
+          : {
+              externalTemplates: effective.parsed.externalTemplates.map((template) => ({
+                name: template.name,
+                about: template.about,
+                url: `https://${input.host}/${input.scope}/issues/new?${new URLSearchParams({ template: template.key })}`,
+              })),
+            }),
+        ...(effective.parsed.contactLinks.length === 0
+          ? {}
+          : { contactLinks: effective.parsed.contactLinks }),
+      };
+    }),
 
     listCandidates: (input) => {
       const { owner, name } = parseRepository(input.scope);

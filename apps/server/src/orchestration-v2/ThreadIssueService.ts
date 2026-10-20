@@ -220,8 +220,8 @@ const make = Effect.gen(function* () {
 
   const worker = yield* makeDrainableWorker(refreshThread);
 
-  const link: ThreadIssueService["Service"]["link"] = (input) =>
-    Effect.gen(function* () {
+  const link: ThreadIssueService["Service"]["link"] = Effect.fn("ThreadIssueService.link")(
+    function* (input: LinkThreadIssueInput) {
       const thread = yield* shellOf(input.threadId);
       const existing = thread?.issues?.find((issue) => threadIssueKeysEqual(issue, input.ref));
       if (existing !== undefined) {
@@ -274,10 +274,11 @@ const make = Effect.gen(function* () {
         ...(snapshot === undefined ? {} : { snapshot }),
       });
       return { alreadyLinked: false };
-    });
+    },
+  );
 
-  const unlink: ThreadIssueService["Service"]["unlink"] = (input) =>
-    Effect.gen(function* () {
+  const unlink: ThreadIssueService["Service"]["unlink"] = Effect.fn("ThreadIssueService.unlink")(
+    function* (input: UnlinkThreadIssueInput) {
       const thread = yield* shellOf(input.threadId);
       if (!thread?.issues?.some((existing) => threadIssueKeysEqual(existing, input.key))) {
         return { wasLinked: false };
@@ -293,59 +294,61 @@ const make = Effect.gen(function* () {
         key: input.key.key,
       });
       return { wasLinked: true };
-    });
+    },
+  );
 
-  const unlinkByIdentity: ThreadIssueService["Service"]["unlinkByIdentity"] = (request) =>
-    Effect.gen(function* () {
-      const thread = yield* orchestrator
-        .getThreadShell(request.threadId)
-        .pipe(Effect.mapError((cause) => new IssueService.IssueLinkFailedError({ cause })));
-      if (thread === null || thread.deletedAt !== null) {
-        return yield* new IssueThreadNotFoundError({ threadId: request.threadId });
-      }
-      const input = request.identity;
-      const matchesExplicitFields = (link: ThreadIssueLink) =>
-        ((input.url !== undefined && input.projectId === undefined) ||
-          link.projectId === (input.projectId ?? thread.projectId)) &&
-        threadIssueKeysEqual(link, {
-          tracker: input.tracker ?? link.tracker,
-          ...(input.connectionId === undefined ? {} : { connectionId: input.connectionId }),
-          host: input.host ?? link.host,
-          scope: input.scope ?? link.scope,
-          key: input.key ?? link.key,
-        });
-      const matches = (thread.issues ?? []).filter(
-        (link) =>
-          (input.url !== undefined ? link.url === input.url : input.key !== undefined) &&
-          matchesExplicitFields(link),
+  const unlinkByIdentity: ThreadIssueService["Service"]["unlinkByIdentity"] = Effect.fn(
+    "ThreadIssueService.unlinkByIdentity",
+  )(function* (request: Parameters<ThreadIssueService["Service"]["unlinkByIdentity"]>[0]) {
+    const thread = yield* orchestrator
+      .getThreadShell(request.threadId)
+      .pipe(Effect.mapError((cause) => new IssueService.IssueLinkFailedError({ cause })));
+    if (thread === null || thread.deletedAt !== null) {
+      return yield* new IssueThreadNotFoundError({ threadId: request.threadId });
+    }
+    const input = request.identity;
+    const matchesExplicitFields = (link: ThreadIssueLink) =>
+      ((input.url !== undefined && input.projectId === undefined) ||
+        link.projectId === (input.projectId ?? thread.projectId)) &&
+      threadIssueKeysEqual(link, {
+        tracker: input.tracker ?? link.tracker,
+        ...(input.connectionId === undefined ? {} : { connectionId: input.connectionId }),
+        host: input.host ?? link.host,
+        scope: input.scope ?? link.scope,
+        key: input.key ?? link.key,
+      });
+    const matches = (thread.issues ?? []).filter(
+      (link) =>
+        (input.url !== undefined ? link.url === input.url : input.key !== undefined) &&
+        matchesExplicitFields(link),
+    );
+    if (matches.length > 1)
+      return yield* new IssueOperationError({
+        operation: "unlink",
+        detail:
+          "Multiple saved issue links match. Pass projectId, tracker and key, or a unique url from list_thread_issues.",
+      });
+    const target =
+      matches[0] ??
+      (yield* issues.resolveTarget({
+        ...input,
+        projectId: input.projectId ?? thread.projectId,
+      }));
+    const existing =
+      matches[0] ??
+      (thread.issues ?? []).find(
+        (link) => matchesExplicitFields(link) && threadIssueKeysEqual(link, target),
       );
-      if (matches.length > 1)
-        return yield* new IssueOperationError({
-          operation: "unlink",
-          detail:
-            "Multiple saved issue links match. Pass projectId, tracker and key, or a unique url from list_thread_issues.",
-        });
-      const target =
-        matches[0] ??
-        (yield* issues.resolveTarget({
-          ...input,
-          projectId: input.projectId ?? thread.projectId,
-        }));
-      const existing =
-        matches[0] ??
-        (thread.issues ?? []).find(
-          (link) => matchesExplicitFields(link) && threadIssueKeysEqual(link, target),
-        );
-      if (existing === undefined) return { ...target, wasLinked: false };
-      const result = yield* unlink({ threadId: thread.id, key: existing }).pipe(
-        Effect.catchCause((cause) =>
-          Cause.hasInterruptsOnly(cause)
-            ? Effect.failCause(cause as Cause.Cause<never>)
-            : Effect.fail(new IssueService.IssueLinkFailedError({ cause })),
-        ),
-      );
-      return { ...target, url: existing.url, wasLinked: result.wasLinked };
-    });
+    if (existing === undefined) return { ...target, wasLinked: false };
+    const result = yield* unlink({ threadId: thread.id, key: existing }).pipe(
+      Effect.catchCause((cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.failCause(cause as Cause.Cause<never>)
+          : Effect.fail(new IssueService.IssueLinkFailedError({ cause })),
+      ),
+    );
+    return { ...target, url: existing.url, wasLinked: result.wasLinked };
+  });
 
   const refresh: ThreadIssueService["Service"]["refresh"] = (threadId, options) =>
     worker.enqueue({ threadId, staleOnly: options?.staleOnly ?? false });

@@ -651,7 +651,7 @@ export const make: Effect.Effect<
       },
       catch: (cause) => refused("getComments", "Invalid Azure DevOps comment cursor.", cause),
     });
-  const comments = (
+  const comments = Effect.fn("AzureDevOpsIssueTracker.comments")(function* (
     input: IssueTarget & {
       readonly operation: string;
       readonly organization: string;
@@ -660,77 +660,71 @@ export const make: Effect.Effect<
       readonly order?: IssueListOrder;
       readonly previous?: typeof CommentCursor.Type;
     },
-  ) =>
-    Effect.gen(function* () {
-      const order = input.order ?? "desc";
-      const page = yield* read({
-        cwd: input.cwd,
-        operation: input.operation,
-        args: invokeArgs({
-          ...input,
-          resource: "comments",
-          route: [`workItemId=${input.number}`],
-          apiVersion: "7.1-preview",
-          query: [
-            `$top=${PAGE_SIZE}`,
-            `order=${order}`,
-            "$expand=reactions",
-            "api-version=7.1-preview.4",
-            ...(input.previous === undefined ? [] : [`continuationToken=${input.previous.token}`]),
-          ],
-        }),
-        decode: (raw) => decodeCommentsJson(raw, input.viewer),
-      });
-      const seen =
-        input.previous === undefined ? [] : [...input.previous.seen, input.previous.token];
-      const position = (input.previous?.position ?? 0) + page.rawCount;
-      const total = input.previous?.total ?? page.totalCount;
-      if (
-        (page.count !== undefined && page.count !== page.rawCount) ||
-        (input.previous?.total !== undefined &&
-          page.totalCount !== undefined &&
-          input.previous.total !== page.totalCount) ||
-        (total !== undefined &&
-          (position > total ||
-            (page.nextCursor === null ? position < total : position >= total))) ||
-        (page.totalCount !== undefined &&
-          (page.totalCount < page.rawCount || (page.rawCount === 0 && page.totalCount > 0))) ||
-        (input.previous !== undefined && page.rawCount === 0) ||
-        page.comments.some(
-          (row, index) =>
-            !Number.isFinite(Date.parse(row.createdAt)) ||
-            (index > 0 &&
-              (order === "desc"
-                ? Date.parse(row.createdAt) > Date.parse(page.comments[index - 1]!.createdAt)
-                : Date.parse(row.createdAt) < Date.parse(page.comments[index - 1]!.createdAt))),
-        ) ||
-        page.rawCount > PAGE_SIZE ||
-        page.rawIds.some((id) => id === null || id <= 0 || id === input.previous?.boundary) ||
-        new Set(page.rawIds).size !== page.rawCount ||
-        (page.nextCursor !== null && (page.rawCount === 0 || seen.includes(page.nextCursor)))
-      )
-        return yield* refused(
-          input.operation,
-          "Azure DevOps returned an inconsistent comment page.",
-        );
-      const nextCursor =
-        page.nextCursor === null
-          ? null
-          : encodeJson({
-              identity: timelineIdentity(input, "comments", order),
-              token: page.nextCursor,
-              seen,
-              boundary: page.rawIds.at(-1)!,
-              position,
-              ...(total === undefined ? {} : { total }),
-            });
-      if (nextCursor !== null && nextCursor.length > 8192)
-        return yield* refused(
-          input.operation,
-          "Azure DevOps comment continuation exceeds the cursor limit.",
-        );
-      return { comments: page.comments, nextCursor };
+  ) {
+    const order = input.order ?? "desc";
+    const page = yield* read({
+      cwd: input.cwd,
+      operation: input.operation,
+      args: invokeArgs({
+        ...input,
+        resource: "comments",
+        route: [`workItemId=${input.number}`],
+        apiVersion: "7.1-preview",
+        query: [
+          `$top=${PAGE_SIZE}`,
+          `order=${order}`,
+          "$expand=reactions",
+          "api-version=7.1-preview.4",
+          ...(input.previous === undefined ? [] : [`continuationToken=${input.previous.token}`]),
+        ],
+      }),
+      decode: (raw) => decodeCommentsJson(raw, input.viewer),
     });
+    const seen = input.previous === undefined ? [] : [...input.previous.seen, input.previous.token];
+    const position = (input.previous?.position ?? 0) + page.rawCount;
+    const total = input.previous?.total ?? page.totalCount;
+    if (
+      (page.count !== undefined && page.count !== page.rawCount) ||
+      (input.previous?.total !== undefined &&
+        page.totalCount !== undefined &&
+        input.previous.total !== page.totalCount) ||
+      (total !== undefined &&
+        (position > total || (page.nextCursor === null ? position < total : position >= total))) ||
+      (page.totalCount !== undefined &&
+        (page.totalCount < page.rawCount || (page.rawCount === 0 && page.totalCount > 0))) ||
+      (input.previous !== undefined && page.rawCount === 0) ||
+      page.comments.some(
+        (row, index) =>
+          !Number.isFinite(Date.parse(row.createdAt)) ||
+          (index > 0 &&
+            (order === "desc"
+              ? Date.parse(row.createdAt) > Date.parse(page.comments[index - 1]!.createdAt)
+              : Date.parse(row.createdAt) < Date.parse(page.comments[index - 1]!.createdAt))),
+      ) ||
+      page.rawCount > PAGE_SIZE ||
+      page.rawIds.some((id) => id === null || id <= 0 || id === input.previous?.boundary) ||
+      new Set(page.rawIds).size !== page.rawCount ||
+      (page.nextCursor !== null && (page.rawCount === 0 || seen.includes(page.nextCursor)))
+    )
+      return yield* refused(input.operation, "Azure DevOps returned an inconsistent comment page.");
+    const nextCursor =
+      page.nextCursor === null
+        ? null
+        : encodeJson({
+            identity: timelineIdentity(input, "comments", order),
+            token: page.nextCursor,
+            seen,
+            boundary: page.rawIds.at(-1)!,
+            position,
+            ...(total === undefined ? {} : { total }),
+          });
+    if (nextCursor !== null && nextCursor.length > 8192)
+      return yield* refused(
+        input.operation,
+        "Azure DevOps comment continuation exceeds the cursor limit.",
+      );
+    return { comments: page.comments, nextCursor };
+  });
   const historyCursor = (
     input: IssueTarget & IssuePageInput & { readonly order?: IssueListOrder },
   ) =>
@@ -750,7 +744,7 @@ export const make: Effect.Effect<
       catch: (cause) =>
         refused("getHistory", "Invalid Azure DevOps history cursor or page size.", cause),
     });
-  const history = (
+  const history = Effect.fn("AzureDevOpsIssueTracker.history")(function* (
     input: IssueTarget,
     scope: {
       readonly organization: string;
@@ -762,49 +756,48 @@ export const make: Effect.Effect<
     limit: number,
     previous?: typeof HistoryCursor.Type,
     operation = "getHistory",
-  ) =>
-    Effect.gen(function* () {
-      const revision = scope.item.revision;
-      if (
-        revision === null ||
-        !Number.isSafeInteger(revision) ||
-        revision < 1 ||
-        (previous !== undefined && revision < previous.total)
-      )
-        return yield* refused(
-          operation,
-          "Azure DevOps did not return an authoritative work item revision.",
-        );
-      const total = previous?.total ?? revision;
-      const end =
-        order === "desc"
-          ? (previous?.position ?? total)
-          : Math.min(total, (previous?.position ?? 0) + limit);
-      const skip = order === "desc" ? Math.max(0, end - limit) : (previous?.position ?? 0);
-      const top = end - skip;
-      const page = yield* read({
-        cwd: input.cwd,
+  ) {
+    const revision = scope.item.revision;
+    if (
+      revision === null ||
+      !Number.isSafeInteger(revision) ||
+      revision < 1 ||
+      (previous !== undefined && revision < previous.total)
+    )
+      return yield* refused(
         operation,
-        args: invokeArgs({
-          ...scope,
-          resource: "updates",
-          route: [`id=${scope.number}`],
-          query: [`$top=${top}`, `$skip=${skip}`],
-        }),
-        decode: (raw) =>
-          Result.map(decodeUpdatesJson(raw, undefined, order), (page) => ({ ...page, raw })),
-      });
-      if (page.rawCount !== top || page.rawIds.some((id, index) => id !== skip + index + 1))
-        return yield* refused(operation, "Azure DevOps returned an inconsistent history window.");
-      const position = order === "desc" ? skip : end;
-      return {
-        items: page.events,
-        raw: page.raw,
-        nextCursor: (order === "desc" ? position > 0 : position < total)
-          ? encodeJson({ identity: timelineIdentity(input, "history", order), position, total })
-          : null,
-      };
+        "Azure DevOps did not return an authoritative work item revision.",
+      );
+    const total = previous?.total ?? revision;
+    const end =
+      order === "desc"
+        ? (previous?.position ?? total)
+        : Math.min(total, (previous?.position ?? 0) + limit);
+    const skip = order === "desc" ? Math.max(0, end - limit) : (previous?.position ?? 0);
+    const top = end - skip;
+    const page = yield* read({
+      cwd: input.cwd,
+      operation,
+      args: invokeArgs({
+        ...scope,
+        resource: "updates",
+        route: [`id=${scope.number}`],
+        query: [`$top=${top}`, `$skip=${skip}`],
+      }),
+      decode: (raw) =>
+        Result.map(decodeUpdatesJson(raw, undefined, order), (page) => ({ ...page, raw })),
     });
+    if (page.rawCount !== top || page.rawIds.some((id, index) => id !== skip + index + 1))
+      return yield* refused(operation, "Azure DevOps returned an inconsistent history window.");
+    const position = order === "desc" ? skip : end;
+    return {
+      items: page.events,
+      raw: page.raw,
+      nextCursor: (order === "desc" ? position > 0 : position < total)
+        ? encodeJson({ identity: timelineIdentity(input, "history", order), position, total })
+        : null,
+    };
+  });
 
   const linkedPullRequests = (input: {
     readonly cwd: string;
@@ -981,52 +974,50 @@ export const make: Effect.Effect<
           }),
         );
 
-  const itemsWorkflow = (
+  const itemsWorkflow = Effect.fn("AzureDevOpsIssueTracker.itemsWorkflow")(function* (
     input: { readonly cwd: string; readonly organization: string; readonly project: string },
     items: ReadonlyArray<AzureDevOpsWorkItem>,
     knownTypes?: typeof WorkItemTypes.Type,
-  ) =>
-    Effect.gen(function* () {
-      const groups = [
-        ...new Set(
-          items.flatMap((item) =>
-            item.workItemType === null ? [] : [item.project ?? input.project],
-          ),
+  ) {
+    const groups = [
+      ...new Set(
+        items.flatMap((item) =>
+          item.workItemType === null ? [] : [item.project ?? input.project],
         ),
-      ];
-      const states = new Map(
-        yield* Effect.forEach(
-          groups,
-          (project) =>
-            Effect.gen(function* () {
-              const types = knownTypes ?? (yield* workItemTypes({ ...input, project }));
-              return yield* Effect.forEach(
-                types.value.filter((type) =>
-                  items.some(
-                    (item) =>
-                      item.workItemType === type.name &&
-                      (item.project ?? input.project) === project,
-                  ),
+      ),
+    ];
+    const states = new Map(
+      yield* Effect.forEach(
+        groups,
+        (project) =>
+          Effect.gen(function* () {
+            const types = knownTypes ?? (yield* workItemTypes({ ...input, project }));
+            return yield* Effect.forEach(
+              types.value.filter((type) =>
+                items.some(
+                  (item) =>
+                    item.workItemType === type.name && (item.project ?? input.project) === project,
                 ),
-                (type) =>
-                  nativeStates(type.states ?? []).pipe(
-                    Effect.map((states) => [`${project}\0${type.name}`, states] as const),
-                  ),
-              );
-            }),
-          { concurrency: 3 },
-        ).pipe(Effect.map((groups) => groups.flat())),
-      );
-      return yield* Effect.forEach(items, (item) => {
-        if (item.workItemType === null) return Effect.succeed(item);
-        const state = states
-          .get(`${item.project}\0${item.workItemType}`)
-          ?.find((state) => state.name === item.state.name);
-        return state === undefined
-          ? Effect.fail(refused("getStates", "The work item state is absent from its workflow."))
-          : Effect.succeed({ ...item, state });
-      });
+              ),
+              (type) =>
+                nativeStates(type.states ?? []).pipe(
+                  Effect.map((states) => [`${project}\0${type.name}`, states] as const),
+                ),
+            );
+          }),
+        { concurrency: 3 },
+      ).pipe(Effect.map((groups) => groups.flat())),
+    );
+    return yield* Effect.forEach(items, (item) => {
+      if (item.workItemType === null) return Effect.succeed(item);
+      const state = states
+        .get(`${item.project}\0${item.workItemType}`)
+        ?.find((state) => state.name === item.state.name);
+      return state === undefined
+        ? Effect.fail(refused("getStates", "The work item state is absent from its workflow."))
+        : Effect.succeed({ ...item, state });
     });
+  });
 
   const defaultTeam = (input: IssueScopeTarget) =>
     scoped("defaultTeam", input).pipe(
@@ -1081,275 +1072,276 @@ export const make: Effect.Effect<
       decode: decodeAs(Schema.decodeUnknownResult(WorkItemTemplate)),
     });
 
-  const setParent: NonNullable<IssueTrackerApi["setParent"]> = (input) =>
-    Effect.gen(function* () {
-      if (input.parentKey === input.key)
-        return yield* refused("setParent", "An issue cannot be its own parent.");
-      const scope = yield* target("setParent", input);
-      const parent =
-        input.parentKey === null
-          ? null
-          : yield* target("setParent", { ...input, key: input.parentKey });
-      if (scope.item.revision === null || (parent !== null && parent.item.nativeUrl === null))
-        return yield* refused("setParent", "Azure returned no work item revision or URL.");
-      const removal = scope.item.relations
-        .flatMap((relation, index) =>
-          relation.rel === "System.LinkTypes.Hierarchy-Reverse" ? [index] : [],
-        )
-        .toReversed()
-        .map((index) => ({ op: "remove", path: `/relations/${index}` }));
-      yield* patchWorkItem({
-        ...scope,
-        cwd: input.cwd,
-        operation: "setParent",
-        body: [
-          { op: "test", path: "/rev", value: scope.item.revision },
-          ...removal,
-          ...(parent === null
-            ? []
-            : [
-                {
-                  op: "add",
-                  path: "/relations/-",
-                  value: { rel: "System.LinkTypes.Hierarchy-Reverse", url: parent.item.nativeUrl },
-                },
-              ]),
-        ],
-      });
+  const setParent: NonNullable<IssueTrackerApi["setParent"]> = Effect.fn(
+    "AzureDevOpsIssueTracker.setParent",
+  )(function* (input) {
+    if (input.parentKey === input.key)
+      return yield* refused("setParent", "An issue cannot be its own parent.");
+    const scope = yield* target("setParent", input);
+    const parent =
+      input.parentKey === null
+        ? null
+        : yield* target("setParent", { ...input, key: input.parentKey });
+    if (scope.item.revision === null || (parent !== null && parent.item.nativeUrl === null))
+      return yield* refused("setParent", "Azure returned no work item revision or URL.");
+    const removal = scope.item.relations
+      .flatMap((relation, index) =>
+        relation.rel === "System.LinkTypes.Hierarchy-Reverse" ? [index] : [],
+      )
+      .toReversed()
+      .map((index) => ({ op: "remove", path: `/relations/${index}` }));
+    yield* patchWorkItem({
+      ...scope,
+      cwd: input.cwd,
+      operation: "setParent",
+      body: [
+        { op: "test", path: "/rev", value: scope.item.revision },
+        ...removal,
+        ...(parent === null
+          ? []
+          : [
+              {
+                op: "add",
+                path: "/relations/-",
+                value: { rel: "System.LinkTypes.Hierarchy-Reverse", url: parent.item.nativeUrl },
+              },
+            ]),
+      ],
     });
+  });
 
-  const labelCandidates: NonNullable<IssueTrackerApi["listLabelCandidates"]> = (input) =>
-    Effect.gen(function* () {
-      const skip = yield* pageOffset(input, "listLabelCandidates");
-      const limit = Math.min(input.limit ?? PAGE_SIZE, PAGE_SIZE);
-      const scope = yield* scoped("listLabelCandidates", input);
-      const tags = yield* read({
-        cwd: input.cwd,
-        operation: "listLabelCandidates",
-        args: invokeArgs({ ...scope, resource: "tags" }),
-        decode: decodeAs(decodeTags),
-      });
-      return {
-        items: tags.value
-          .slice(skip, skip + limit)
-          .map((tag) => ({ name: tag.name, color: null, description: null })),
-        nextCursor: skip + limit < tags.value.length ? String(skip + limit) : null,
-      };
+  const labelCandidates: NonNullable<IssueTrackerApi["listLabelCandidates"]> = Effect.fn(
+    "AzureDevOpsIssueTracker.labelCandidates",
+  )(function* (input) {
+    const skip = yield* pageOffset(input, "listLabelCandidates");
+    const limit = Math.min(input.limit ?? PAGE_SIZE, PAGE_SIZE);
+    const scope = yield* scoped("listLabelCandidates", input);
+    const tags = yield* read({
+      cwd: input.cwd,
+      operation: "listLabelCandidates",
+      args: invokeArgs({ ...scope, resource: "tags" }),
+      decode: decodeAs(decodeTags),
     });
+    return {
+      items: tags.value
+        .slice(skip, skip + limit)
+        .map((tag) => ({ name: tag.name, color: null, description: null })),
+      nextCursor: skip + limit < tags.value.length ? String(skip + limit) : null,
+    };
+  });
 
-  const assigneeCandidates: NonNullable<IssueTrackerApi["listAssigneeCandidates"]> = (input) =>
-    Effect.gen(function* () {
-      const skip = yield* pageOffset(input, "listAssigneeCandidates");
-      const limit = Math.min(input.limit ?? PAGE_SIZE, PAGE_SIZE);
-      const project = yield* defaultTeam(input);
-      const rows = yield* read({
-        cwd: input.cwd,
-        operation: "listAssigneeCandidates",
-        args: [
-          "devops",
-          "team",
-          "list-member",
-          "--detect",
-          "false",
-          "--organization",
-          project.organization,
-          "--project",
-          project.id,
-          "--team",
-          project.defaultTeam.id,
-          "--top",
-          String(limit),
-          "--skip",
-          String(skip),
-        ],
-        decode: decodeAs(decodeMembers),
-      });
-      return {
-        items: rows.flatMap(({ identity }) =>
-          identity.isContainer || !identity.uniqueName.trim()
-            ? []
-            : [
-                {
-                  id: identity.uniqueName,
-                  login: identity.uniqueName,
-                  name: identity.displayName ?? null,
-                  avatarUrl: identity.imageUrl ?? null,
-                },
-              ],
-        ),
-        nextCursor: rows.length >= limit ? String(skip + rows.length) : null,
-      };
+  const assigneeCandidates: NonNullable<IssueTrackerApi["listAssigneeCandidates"]> = Effect.fn(
+    "AzureDevOpsIssueTracker.assigneeCandidates",
+  )(function* (input) {
+    const skip = yield* pageOffset(input, "listAssigneeCandidates");
+    const limit = Math.min(input.limit ?? PAGE_SIZE, PAGE_SIZE);
+    const project = yield* defaultTeam(input);
+    const rows = yield* read({
+      cwd: input.cwd,
+      operation: "listAssigneeCandidates",
+      args: [
+        "devops",
+        "team",
+        "list-member",
+        "--detect",
+        "false",
+        "--organization",
+        project.organization,
+        "--project",
+        project.id,
+        "--team",
+        project.defaultTeam.id,
+        "--top",
+        String(limit),
+        "--skip",
+        String(skip),
+      ],
+      decode: decodeAs(decodeMembers),
     });
+    return {
+      items: rows.flatMap(({ identity }) =>
+        identity.isContainer || !identity.uniqueName.trim()
+          ? []
+          : [
+              {
+                id: identity.uniqueName,
+                login: identity.uniqueName,
+                name: identity.displayName ?? null,
+                avatarUrl: identity.imageUrl ?? null,
+              },
+            ],
+      ),
+      nextCursor: rows.length >= limit ? String(skip + rows.length) : null,
+    };
+  });
 
   return {
     kind: KIND,
     capabilities: CAPABILITIES,
 
-    getViewer: (input) =>
-      Effect.gen(function* () {
-        const scope = parseScope(input.host, input.scope ?? "");
-        const host = URL.parse("https://" + input.host);
-        if (
-          scope === null ||
-          host === null ||
-          host.port !== "" ||
-          host.pathname !== "/" ||
-          (host.hostname !== "dev.azure.com" && !host.hostname.endsWith(".visualstudio.com"))
-        )
-          return yield* refused(
-            "getViewer",
-            "Choose a supported Azure DevOps organization and project.",
-          );
-        return yield* azure
-          .getCurrentIdentity({
-            cwd: input.cwd,
-            organization: scope.organization,
-          })
-          .pipe(Effect.mapError(fail("getViewer")));
-      }),
+    getViewer: Effect.fn("AzureDevOpsIssueTracker.getViewer")(function* (input) {
+      const scope = parseScope(input.host, input.scope ?? "");
+      const host = URL.parse("https://" + input.host);
+      if (
+        scope === null ||
+        host === null ||
+        host.port !== "" ||
+        host.pathname !== "/" ||
+        (host.hostname !== "dev.azure.com" && !host.hostname.endsWith(".visualstudio.com"))
+      )
+        return yield* refused(
+          "getViewer",
+          "Choose a supported Azure DevOps organization and project.",
+        );
+      return yield* azure
+        .getCurrentIdentity({
+          cwd: input.cwd,
+          organization: scope.organization,
+        })
+        .pipe(Effect.mapError(fail("getViewer")));
+    }),
 
-    listIssues: (input) =>
-      Effect.gen(function* () {
-        if (input.involvement === "mentioned")
-          return yield* refused("listIssues", "Azure DevOps does not support a mentioned filter.");
-        const sort = input.sort ?? "updated";
-        const order = input.order ?? "desc";
-        const limit = Math.min(Math.max(input.limit, 1), PAGE_SIZE);
-        const field =
-          sort === "created"
-            ? "System.CreatedDate"
-            : sort === "comments"
-              ? "System.CommentCount"
-              : "System.ChangedDate";
-        const requestedScope = yield* scoped("listIssues", input);
-        const scope = /^[a-f\d]{8}-(?:[a-f\d]{4}-){3}[a-f\d]{12}$/i.test(requestedScope.project)
-          ? { ...requestedScope, project: (yield* defaultTeam(input)).name }
-          : requestedScope;
-        const clauses = [`[System.TeamProject] = ${quoted(scope.project)}`];
-        const categories =
-          input.stateCategories ??
-          (input.state === "all"
-            ? undefined
-            : input.state === "closed"
-              ? ["completed", "canceled"]
-              : ["backlog", "unstarted", "started"]);
-        let types: typeof WorkItemTypes.Type | undefined;
-        if (categories !== undefined) {
-          if (categories.every((category) => category === "backlog"))
-            return { items: [], nextCursor: null };
-          types = yield* workItemTypes({ ...scope, cwd: input.cwd });
-          const enabled = types.value.filter((type) => !type.isDisabled);
-          if (enabled.some((type) => type.states === undefined || type.states === null))
-            return yield* refused(
-              "listIssues",
-              "Azure returned no workflow states for a work item type.",
-            );
-          const groups = yield* Effect.forEach(enabled, (type) =>
-            nativeStates(type.states ?? []).pipe(
-              Effect.map((states) => ({
-                type: type.name,
-                states: states.filter(
-                  (state) =>
-                    state.workflowCategory !== undefined &&
-                    categories.includes(state.workflowCategory),
-                ),
-              })),
-            ),
-          );
-          const filters = groups.flatMap((group) =>
-            group.states.length === 0
-              ? []
-              : [
-                  `([System.WorkItemType] = ${quoted(group.type)} AND [System.State] IN (${group.states.map((state) => quoted(state.name)).join(",")}))`,
-                ],
-          );
-          if (filters.length === 0) return { items: [], nextCursor: null };
-          clauses.push(`(${filters.join(" OR ")})`);
-        }
-        const text = input.query?.trim() ?? "";
-        if (text) clauses.push(`[System.Title] CONTAINS ${quoted(text)}`);
-        const involvement = involvementClause(input.involvement);
-        if (involvement) clauses.push(involvement.replace(/^ AND /, ""));
-        if (input.cursor !== undefined) {
-          const native = decodeAs(decodeListCursor)(input.cursor);
-          const old = parseCursor(input.cursor);
-          const cursor = Result.isSuccess(native)
-            ? native.success
-            : old !== null && sort === "updated" && order === "desc"
-              ? { sort, order, value: old.changedAt, id: old.id }
-              : null;
-          if (
-            cursor === null ||
-            cursor.sort !== sort ||
-            cursor.order !== order ||
-            (sort === "comments"
-              ? typeof cursor.value !== "number"
-              : typeof cursor.value !== "string" ||
-                !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(cursor.value))
-          )
-            return yield* refused("listIssues", "The cursor was not one Azure DevOps handed out.");
-          const comparison = order === "asc" ? ">" : "<";
-          const value =
-            typeof cursor.value === "number" ? String(cursor.value) : quoted(cursor.value);
-          clauses.push(
-            `([${field}] ${comparison} ${value} OR ([${field}] = ${value} AND [System.Id] ${comparison} ${cursor.id}))`,
-          );
-        }
-        const raw = yield* invokeWithBody({
-          cwd: input.cwd,
-          operation: "listIssues",
-          args: invokeArgs({
-            ...scope,
-            resource: "wiql",
-            method: "POST",
-            query: ["timePrecision=true", `$top=${limit + 1}`],
-          }),
-          body: {
-            query: `SELECT [System.Id] FROM WorkItems WHERE ${clauses.join(" AND ")} ORDER BY [${field}] ${order.toUpperCase()}, [System.Id] ${order.toUpperCase()}`,
-          },
-        });
-        const refs = decodeAs(decodeWiql)(raw);
-        if (!Result.isSuccess(refs)) return yield* unreadable("listIssues", raw);
-        const ids = refs.success.workItems ?? [];
-        if (ids.length === 0) return { items: [], nextCursor: null };
-        const rows = yield* workItems({
-          ...scope,
-          cwd: input.cwd,
-          operation: "listIssues",
-          ids: ids.slice(0, limit).map((row) => row.id),
-          fields: LIST_FIELDS,
-          ...(refs.success.asOf === undefined ? {} : { asOf: refs.success.asOf }),
-        });
-        const indexed = new Map(rows.map((row) => [row.key, row]));
-        const ordered = ids.slice(0, limit).flatMap(({ id }) => indexed.get(String(id)) ?? []);
-        if (
-          ordered.length !== Math.min(ids.length, limit) ||
-          ordered.some((row) => row.project?.toLowerCase() !== scope.project.toLowerCase())
-        )
+    listIssues: Effect.fn("AzureDevOpsIssueTracker.listIssues")(function* (input) {
+      if (input.involvement === "mentioned")
+        return yield* refused("listIssues", "Azure DevOps does not support a mentioned filter.");
+      const sort = input.sort ?? "updated";
+      const order = input.order ?? "desc";
+      const limit = Math.min(Math.max(input.limit, 1), PAGE_SIZE);
+      const field =
+        sort === "created"
+          ? "System.CreatedDate"
+          : sort === "comments"
+            ? "System.CommentCount"
+            : "System.ChangedDate";
+      const requestedScope = yield* scoped("listIssues", input);
+      const scope = /^[a-f\d]{8}-(?:[a-f\d]{4}-){3}[a-f\d]{12}$/i.test(requestedScope.project)
+        ? { ...requestedScope, project: (yield* defaultTeam(input)).name }
+        : requestedScope;
+      const clauses = [`[System.TeamProject] = ${quoted(scope.project)}`];
+      const categories =
+        input.stateCategories ??
+        (input.state === "all"
+          ? undefined
+          : input.state === "closed"
+            ? ["completed", "canceled"]
+            : ["backlog", "unstarted", "started"]);
+      let types: typeof WorkItemTypes.Type | undefined;
+      if (categories !== undefined) {
+        if (categories.every((category) => category === "backlog"))
+          return { items: [], nextCursor: null };
+        types = yield* workItemTypes({ ...scope, cwd: input.cwd });
+        const enabled = types.value.filter((type) => !type.isDisabled);
+        if (enabled.some((type) => type.states === undefined || type.states === null))
           return yield* refused(
             "listIssues",
-            "Azure returned an incomplete or foreign work item page.",
+            "Azure returned no workflow states for a work item type.",
           );
-        if (types === undefined && ordered.some((item) => item.workItemType !== null))
-          types = yield* workItemTypes({ ...scope, cwd: input.cwd });
-        const items = yield* itemsWorkflow({ ...scope, cwd: input.cwd }, ordered, types);
-        const last = items.at(-1)!;
+        const groups = yield* Effect.forEach(enabled, (type) =>
+          nativeStates(type.states ?? []).pipe(
+            Effect.map((states) => ({
+              type: type.name,
+              states: states.filter(
+                (state) =>
+                  state.workflowCategory !== undefined &&
+                  categories.includes(state.workflowCategory),
+              ),
+            })),
+          ),
+        );
+        const filters = groups.flatMap((group) =>
+          group.states.length === 0
+            ? []
+            : [
+                `([System.WorkItemType] = ${quoted(group.type)} AND [System.State] IN (${group.states.map((state) => quoted(state.name)).join(",")}))`,
+              ],
+        );
+        if (filters.length === 0) return { items: [], nextCursor: null };
+        clauses.push(`(${filters.join(" OR ")})`);
+      }
+      const text = input.query?.trim() ?? "";
+      if (text) clauses.push(`[System.Title] CONTAINS ${quoted(text)}`);
+      const involvement = involvementClause(input.involvement);
+      if (involvement) clauses.push(involvement.replace(/^ AND /, ""));
+      if (input.cursor !== undefined) {
+        const native = decodeAs(decodeListCursor)(input.cursor);
+        const old = parseCursor(input.cursor);
+        const cursor = Result.isSuccess(native)
+          ? native.success
+          : old !== null && sort === "updated" && order === "desc"
+            ? { sort, order, value: old.changedAt, id: old.id }
+            : null;
+        if (
+          cursor === null ||
+          cursor.sort !== sort ||
+          cursor.order !== order ||
+          (sort === "comments"
+            ? typeof cursor.value !== "number"
+            : typeof cursor.value !== "string" ||
+              !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(cursor.value))
+        )
+          return yield* refused("listIssues", "The cursor was not one Azure DevOps handed out.");
+        const comparison = order === "asc" ? ">" : "<";
         const value =
-          sort === "created"
-            ? last.createdAt
-            : sort === "comments"
-              ? (last.commentCount ?? 0)
-              : last.updatedAt;
-        return {
-          items,
-          nextCursor:
-            ids.length > limit
-              ? sort === "updated" && order === "desc"
-                ? `${value}|${last.key}`
-                : encodeJson({ sort, order, value, id: Number(last.key) })
-              : null,
-        };
-      }),
+          typeof cursor.value === "number" ? String(cursor.value) : quoted(cursor.value);
+        clauses.push(
+          `([${field}] ${comparison} ${value} OR ([${field}] = ${value} AND [System.Id] ${comparison} ${cursor.id}))`,
+        );
+      }
+      const raw = yield* invokeWithBody({
+        cwd: input.cwd,
+        operation: "listIssues",
+        args: invokeArgs({
+          ...scope,
+          resource: "wiql",
+          method: "POST",
+          query: ["timePrecision=true", `$top=${limit + 1}`],
+        }),
+        body: {
+          query: `SELECT [System.Id] FROM WorkItems WHERE ${clauses.join(" AND ")} ORDER BY [${field}] ${order.toUpperCase()}, [System.Id] ${order.toUpperCase()}`,
+        },
+      });
+      const refs = decodeAs(decodeWiql)(raw);
+      if (!Result.isSuccess(refs)) return yield* unreadable("listIssues", raw);
+      const ids = refs.success.workItems ?? [];
+      if (ids.length === 0) return { items: [], nextCursor: null };
+      const rows = yield* workItems({
+        ...scope,
+        cwd: input.cwd,
+        operation: "listIssues",
+        ids: ids.slice(0, limit).map((row) => row.id),
+        fields: LIST_FIELDS,
+        ...(refs.success.asOf === undefined ? {} : { asOf: refs.success.asOf }),
+      });
+      const indexed = new Map(rows.map((row) => [row.key, row]));
+      const ordered = ids.slice(0, limit).flatMap(({ id }) => indexed.get(String(id)) ?? []);
+      if (
+        ordered.length !== Math.min(ids.length, limit) ||
+        ordered.some((row) => row.project?.toLowerCase() !== scope.project.toLowerCase())
+      )
+        return yield* refused(
+          "listIssues",
+          "Azure returned an incomplete or foreign work item page.",
+        );
+      if (types === undefined && ordered.some((item) => item.workItemType !== null))
+        types = yield* workItemTypes({ ...scope, cwd: input.cwd });
+      const items = yield* itemsWorkflow({ ...scope, cwd: input.cwd }, ordered, types);
+      const last = items.at(-1)!;
+      const value =
+        sort === "created"
+          ? last.createdAt
+          : sort === "comments"
+            ? (last.commentCount ?? 0)
+            : last.updatedAt;
+      return {
+        items,
+        nextCursor:
+          ids.length > limit
+            ? sort === "updated" && order === "desc"
+              ? `${value}|${last.key}`
+              : encodeJson({ sort, order, value, id: Number(last.key) })
+            : null,
+      };
+    }),
 
     getIssue: (input) =>
       target("getIssue", input, true).pipe(
@@ -1395,17 +1387,16 @@ export const make: Effect.Effect<
         ),
       ),
 
-    getComments: (input) =>
-      Effect.gen(function* () {
-        const previous = yield* commentCursor(input);
-        const scope = yield* target("getComments", input);
-        return yield* comments({
-          ...input,
-          ...scope,
-          operation: "getComments",
-          ...(previous === undefined ? {} : { previous }),
-        });
-      }),
+    getComments: Effect.fn("AzureDevOpsIssueTracker.getComments")(function* (input) {
+      const previous = yield* commentCursor(input);
+      const scope = yield* target("getComments", input);
+      return yield* comments({
+        ...input,
+        ...scope,
+        operation: "getComments",
+        ...(previous === undefined ? {} : { previous }),
+      });
+    }),
 
     getViewerPermissions: () => Effect.succeed(VIEWER_PERMISSIONS),
 
@@ -1413,66 +1404,64 @@ export const make: Effect.Effect<
     listLabelCandidates: labelCandidates,
     listAssigneeCandidates: assigneeCandidates,
 
-    editComment: (input) =>
-      Effect.gen(function* () {
-        if (parseNumber(input.commentId) === null)
-          return yield* refused("editComment", "The comment id names no Azure DevOps comment.");
-        const scope = yield* target("editComment", input);
-        const route = [`workItemId=${scope.number}`, `commentId=${input.commentId}`];
-        const current = yield* read({
-          cwd: input.cwd,
-          operation: "editComment",
-          args: invokeArgs({
-            ...scope,
-            resource: "comments",
-            route,
-            apiVersion: "7.1-preview",
-            query: ["api-version=7.1-preview.4"],
-          }),
-          decode: decodeCommentFormatJson,
-        });
-        if (
-          current.id !== input.commentId ||
-          current.isDeleted ||
-          current.format === null ||
-          (current.format === "html"
-            ? input.richBody?.format !== "azure-html"
-            : input.richBody !== undefined) ||
-          (input.richBody?.document ?? input.body).trim().length === 0 ||
-          (input.richBody?.document ?? input.body).length > 65_536
-        )
-          return yield* refused("editComment", "The comment must keep its native text format.");
-        yield* invokeWithBody({
-          cwd: input.cwd,
-          operation: "editComment",
-          args: invokeArgs({
-            ...scope,
-            resource: "comments",
-            route,
-            method: "PATCH",
-            apiVersion: "7.1-preview",
-            query: ["format=" + current.format, "api-version=7.1-preview.4"],
-          }),
-          body: { text: input.richBody?.document ?? input.body },
-        });
-      }),
+    editComment: Effect.fn("AzureDevOpsIssueTracker.editComment")(function* (input) {
+      if (parseNumber(input.commentId) === null)
+        return yield* refused("editComment", "The comment id names no Azure DevOps comment.");
+      const scope = yield* target("editComment", input);
+      const route = [`workItemId=${scope.number}`, `commentId=${input.commentId}`];
+      const current = yield* read({
+        cwd: input.cwd,
+        operation: "editComment",
+        args: invokeArgs({
+          ...scope,
+          resource: "comments",
+          route,
+          apiVersion: "7.1-preview",
+          query: ["api-version=7.1-preview.4"],
+        }),
+        decode: decodeCommentFormatJson,
+      });
+      if (
+        current.id !== input.commentId ||
+        current.isDeleted ||
+        current.format === null ||
+        (current.format === "html"
+          ? input.richBody?.format !== "azure-html"
+          : input.richBody !== undefined) ||
+        (input.richBody?.document ?? input.body).trim().length === 0 ||
+        (input.richBody?.document ?? input.body).length > 65_536
+      )
+        return yield* refused("editComment", "The comment must keep its native text format.");
+      yield* invokeWithBody({
+        cwd: input.cwd,
+        operation: "editComment",
+        args: invokeArgs({
+          ...scope,
+          resource: "comments",
+          route,
+          method: "PATCH",
+          apiVersion: "7.1-preview",
+          query: ["format=" + current.format, "api-version=7.1-preview.4"],
+        }),
+        body: { text: input.richBody?.document ?? input.body },
+      });
+    }),
 
-    getHistory: (input) =>
-      Effect.gen(function* () {
-        const previous = yield* historyCursor(input);
-        const scope = yield* target("getHistory", input);
-        const page = yield* history(
-          input,
-          scope,
-          input.order ?? "desc",
-          input.limit ?? PAGE_SIZE,
-          previous,
-        );
-        return { items: page.items, nextCursor: page.nextCursor };
-      }),
+    getHistory: Effect.fn("AzureDevOpsIssueTracker.getHistory")(function* (input) {
+      const previous = yield* historyCursor(input);
+      const scope = yield* target("getHistory", input);
+      const page = yield* history(
+        input,
+        scope,
+        input.order ?? "desc",
+        input.limit ?? PAGE_SIZE,
+        previous,
+      );
+      return { items: page.items, nextCursor: page.nextCursor };
+    }),
 
-    getLinkedPullRequests: (input) =>
-      Effect.gen(function* () {
+    getLinkedPullRequests: Effect.fn("AzureDevOpsIssueTracker.getLinkedPullRequests")(
+      function* (input) {
         const scope = yield* target("getLinkedPullRequests", input);
         const skip = yield* pageOffset(input, "getLinkedPullRequests");
         const limit = Math.min(input.limit ?? LINKED_PULL_REQUEST_LIMIT, LINKED_PULL_REQUEST_LIMIT);
@@ -1492,195 +1481,190 @@ export const make: Effect.Effect<
           }),
           nextCursor: skip + limit < artifacts.length ? String(skip + limit) : null,
         };
-      }),
+      },
+    ),
 
-    getHierarchy: (input) =>
-      Effect.gen(function* () {
-        const scope = yield* target("getHierarchy", input);
-        const skip = yield* pageOffset(input, "getHierarchy");
-        const limit = Math.min(input.limit ?? LINKED_PULL_REQUEST_LIMIT, LINKED_PULL_REQUEST_LIMIT);
-        const parent = scope.item.relations.find(
-          (relation) => relation.rel === "System.LinkTypes.Hierarchy-Reverse",
+    getHierarchy: Effect.fn("AzureDevOpsIssueTracker.getHierarchy")(function* (input) {
+      const scope = yield* target("getHierarchy", input);
+      const skip = yield* pageOffset(input, "getHierarchy");
+      const limit = Math.min(input.limit ?? LINKED_PULL_REQUEST_LIMIT, LINKED_PULL_REQUEST_LIMIT);
+      const parent = scope.item.relations.find(
+        (relation) => relation.rel === "System.LinkTypes.Hierarchy-Reverse",
+      );
+      const children = scope.item.relations.filter(
+        (relation) => relation.rel === "System.LinkTypes.Hierarchy-Forward",
+      );
+      const selected = [
+        ...(parent === undefined ? [] : [parent]),
+        ...children.slice(skip, skip + limit),
+      ];
+      const numbers = selected.map((relation) => {
+        const url = URL.parse(relation.url);
+        const organization = new URL(scope.organization);
+        const match = /\/_apis\/wit\/workitems\/([1-9]\d*)$/i.exec(url?.pathname ?? "");
+        return url !== null &&
+          url.origin === organization.origin &&
+          url.pathname
+            .toLowerCase()
+            .startsWith(`${organization.pathname.toLowerCase().replace(/\/+$/, "")}/`) &&
+          match
+          ? Number(match[1])
+          : null;
+      });
+      if (numbers.some((number) => number === null))
+        return yield* refused(
+          "getHierarchy",
+          "Azure returned a hierarchy link outside this organization.",
         );
-        const children = scope.item.relations.filter(
-          (relation) => relation.rel === "System.LinkTypes.Hierarchy-Forward",
-        );
-        const selected = [
-          ...(parent === undefined ? [] : [parent]),
-          ...children.slice(skip, skip + limit),
-        ];
-        const numbers = selected.map((relation) => {
-          const url = URL.parse(relation.url);
-          const organization = new URL(scope.organization);
-          const match = /\/_apis\/wit\/workitems\/([1-9]\d*)$/i.exec(url?.pathname ?? "");
-          return url !== null &&
-            url.origin === organization.origin &&
-            url.pathname
-              .toLowerCase()
-              .startsWith(`${organization.pathname.toLowerCase().replace(/\/+$/, "")}/`) &&
-            match
-            ? Number(match[1])
-            : null;
-        });
-        if (numbers.some((number) => number === null))
-          return yield* refused(
-            "getHierarchy",
-            "Azure returned a hierarchy link outside this organization.",
-          );
-        if (numbers.length === 0)
-          return { parent: null, children: { items: [], nextCursor: null } };
-        const items = yield* workItems({
-          ...scope,
-          project: "",
-          cwd: input.cwd,
-          operation: "getHierarchy",
-          ids: numbers.filter((number) => number !== null),
-        });
-        const native = yield* itemsWorkflow({ ...scope, cwd: input.cwd }, items);
-        const related = native.map((item): IssueRelation => ({
-          scope: `${input.scope.split("/")[0]}/${item.project}`,
-          key: item.key,
-          displayKey: item.displayKey,
-          title: item.title,
-          url: item.url,
-          state: item.state,
-        }));
-        const indexed = new Map(related.map((item) => [Number(item.key), item]));
-        if (numbers.some((number) => !indexed.has(number!)))
-          return yield* refused("getHierarchy", "Azure returned an incomplete hierarchy page.");
-        return {
-          parent: parent === undefined ? null : indexed.get(numbers[0]!)!,
-          children: {
-            items: numbers
-              .slice(parent === undefined ? 0 : 1)
-              .map((number) => indexed.get(number!)!),
-            nextCursor: skip + limit < children.length ? String(skip + limit) : null,
-          },
-        };
-      }),
+      if (numbers.length === 0) return { parent: null, children: { items: [], nextCursor: null } };
+      const items = yield* workItems({
+        ...scope,
+        project: "",
+        cwd: input.cwd,
+        operation: "getHierarchy",
+        ids: numbers.filter((number) => number !== null),
+      });
+      const native = yield* itemsWorkflow({ ...scope, cwd: input.cwd }, items);
+      const related = native.map((item): IssueRelation => ({
+        scope: `${input.scope.split("/")[0]}/${item.project}`,
+        key: item.key,
+        displayKey: item.displayKey,
+        title: item.title,
+        url: item.url,
+        state: item.state,
+      }));
+      const indexed = new Map(related.map((item) => [Number(item.key), item]));
+      if (numbers.some((number) => !indexed.has(number!)))
+        return yield* refused("getHierarchy", "Azure returned an incomplete hierarchy page.");
+      return {
+        parent: parent === undefined ? null : indexed.get(numbers[0]!)!,
+        children: {
+          items: numbers.slice(parent === undefined ? 0 : 1).map((number) => indexed.get(number!)!),
+          nextCursor: skip + limit < children.length ? String(skip + limit) : null,
+        },
+      };
+    }),
 
-    listTemplates: (input) =>
-      Effect.gen(function* () {
-        const project = yield* defaultTeam(input);
-        const refs = yield* read({
-          cwd: input.cwd,
-          operation: "listTemplates",
-          args: invokeArgs({
-            organization: project.organization,
-            project: project.id,
-            resource: "templates",
-            route: [`team=${project.defaultTeam.id}`],
-            apiVersion: "7.1-preview",
-            query: ["api-version=7.1-preview.1"],
-          }),
-          decode: decodeAs(
-            Schema.decodeUnknownResult(
-              Schema.Struct({ value: Schema.Array(Schema.Struct({ id: Schema.String })) }),
-            ),
+    listTemplates: Effect.fn("AzureDevOpsIssueTracker.listTemplates")(function* (input) {
+      const project = yield* defaultTeam(input);
+      const refs = yield* read({
+        cwd: input.cwd,
+        operation: "listTemplates",
+        args: invokeArgs({
+          organization: project.organization,
+          project: project.id,
+          resource: "templates",
+          route: [`team=${project.defaultTeam.id}`],
+          apiVersion: "7.1-preview",
+          query: ["api-version=7.1-preview.1"],
+        }),
+        decode: decodeAs(
+          Schema.decodeUnknownResult(
+            Schema.Struct({ value: Schema.Array(Schema.Struct({ id: Schema.String })) }),
           ),
-        });
-        if (refs.value.length > 100)
-          return yield* refused(
-            "listTemplates",
-            "Azure returned more templates than this client supports.",
-          );
-        const rows = yield* Effect.forEach(refs.value, (ref) => template(input, ref.id, project), {
-          concurrency: 3,
-        });
-        return {
-          templates: rows.map((row) => ({
-            key: row.id,
-            name: row.name,
-            about: row.description ?? "",
-            title: row.fields["System.Title"] ?? "",
-            body: row.fields["System.Description"] ?? "",
-            labels: (row.fields["System.Tags"] ?? "")
-              .split(";")
-              .map((tag) => tag.trim())
-              .filter(Boolean),
-            assignees: row.fields["System.AssignedTo"] ? [row.fields["System.AssignedTo"]] : [],
-          })),
-          blankIssuesEnabled: true,
-        };
-      }),
+        ),
+      });
+      if (refs.value.length > 100)
+        return yield* refused(
+          "listTemplates",
+          "Azure returned more templates than this client supports.",
+        );
+      const rows = yield* Effect.forEach(refs.value, (ref) => template(input, ref.id, project), {
+        concurrency: 3,
+      });
+      return {
+        templates: rows.map((row) => ({
+          key: row.id,
+          name: row.name,
+          about: row.description ?? "",
+          title: row.fields["System.Title"] ?? "",
+          body: row.fields["System.Description"] ?? "",
+          labels: (row.fields["System.Tags"] ?? "")
+            .split(";")
+            .map((tag) => tag.trim())
+            .filter(Boolean),
+          assignees: row.fields["System.AssignedTo"] ? [row.fields["System.AssignedTo"]] : [],
+        })),
+        blankIssuesEnabled: true,
+      };
+    }),
 
-    create: (input) =>
-      Effect.gen(function* () {
-        const scope = yield* scoped("create", input);
-        const selected =
-          input.templateKey === undefined
-            ? undefined
-            : yield* template(input, input.templateKey, yield* defaultTeam(input));
-        const types = yield* read({
-          cwd: input.cwd,
-          operation: "create",
-          args: invokeArgs({ ...scope, resource: "workitemtypes" }),
-          decode: decodeAs(decodeTypes),
-        });
-        const names = types.value.flatMap((type) => (type.isDisabled ? [] : [type.name]));
-        const type =
-          input.issueType ??
-          selected?.workItemTypeName ??
-          CREATE_TYPES.find((name) => names.includes(name)) ??
-          names[0];
-        if (type === undefined || !names.includes(type))
-          return yield* refused("create", "The project offers no such work item type to file.");
-        const parent =
-          input.parentKey === undefined
-            ? undefined
-            : yield* target("create", { ...input, key: input.parentKey });
-        if (parent !== undefined && parent.item.nativeUrl === null)
-          return yield* refused("create", "Azure returned no parent work item URL.");
-        const fields = {
-          ...selected?.fields,
-          "System.Title": input.title,
-          "System.Description": input.body,
-          "System.Tags": input.labels.join("; "),
-          "System.AssignedTo": input.assignees[0] ?? "",
-        };
-        const raw = yield* invokeWithBody({
-          cwd: input.cwd,
-          operation: "create",
-          args: invokeArgs({
-            ...scope,
-            resource: "workitems",
-            route: [`type=${type}`, `id=$${type}`],
-            method: "POST",
-            query: ["$expand=Relations"],
-          }),
-          mediaType: "application/json-patch+json",
-          body: [
-            ...Object.entries(fields).map(([field, value]) => ({
-              op: "add",
-              path: `/fields/${field.replaceAll("~", "~0").replaceAll("/", "~1")}`,
-              value,
-            })),
-            { op: "add", path: "/multilineFieldsFormat/System.Description", value: "Markdown" },
-            ...(parent === undefined
-              ? []
-              : [
-                  {
-                    op: "add",
-                    path: "/relations/-",
-                    value: {
-                      rel: "System.LinkTypes.Hierarchy-Reverse",
-                      url: parent.item.nativeUrl,
-                    },
+    create: Effect.fn("AzureDevOpsIssueTracker.create")(function* (input) {
+      const scope = yield* scoped("create", input);
+      const selected =
+        input.templateKey === undefined
+          ? undefined
+          : yield* template(input, input.templateKey, yield* defaultTeam(input));
+      const types = yield* read({
+        cwd: input.cwd,
+        operation: "create",
+        args: invokeArgs({ ...scope, resource: "workitemtypes" }),
+        decode: decodeAs(decodeTypes),
+      });
+      const names = types.value.flatMap((type) => (type.isDisabled ? [] : [type.name]));
+      const type =
+        input.issueType ??
+        selected?.workItemTypeName ??
+        CREATE_TYPES.find((name) => names.includes(name)) ??
+        names[0];
+      if (type === undefined || !names.includes(type))
+        return yield* refused("create", "The project offers no such work item type to file.");
+      const parent =
+        input.parentKey === undefined
+          ? undefined
+          : yield* target("create", { ...input, key: input.parentKey });
+      if (parent !== undefined && parent.item.nativeUrl === null)
+        return yield* refused("create", "Azure returned no parent work item URL.");
+      const fields = {
+        ...selected?.fields,
+        "System.Title": input.title,
+        "System.Description": input.body,
+        "System.Tags": input.labels.join("; "),
+        "System.AssignedTo": input.assignees[0] ?? "",
+      };
+      const raw = yield* invokeWithBody({
+        cwd: input.cwd,
+        operation: "create",
+        args: invokeArgs({
+          ...scope,
+          resource: "workitems",
+          route: [`type=${type}`, `id=$${type}`],
+          method: "POST",
+          query: ["$expand=Relations"],
+        }),
+        mediaType: "application/json-patch+json",
+        body: [
+          ...Object.entries(fields).map(([field, value]) => ({
+            op: "add",
+            path: `/fields/${field.replaceAll("~", "~0").replaceAll("/", "~1")}`,
+            value,
+          })),
+          { op: "add", path: "/multilineFieldsFormat/System.Description", value: "Markdown" },
+          ...(parent === undefined
+            ? []
+            : [
+                {
+                  op: "add",
+                  path: "/relations/-",
+                  value: {
+                    rel: "System.LinkTypes.Hierarchy-Reverse",
+                    url: parent.item.nativeUrl,
                   },
-                ]),
-          ],
-        });
-        const decoded = decodeWorkItemJson(raw);
-        if (!Result.isSuccess(decoded) || decoded.success === null)
-          return yield* unreadable("create", raw);
-        const item = decoded.success;
-        return {
-          key: item.key,
-          displayKey: item.displayKey,
-          url: item.url,
-          ...(parent === undefined ? {} : { parentLinked: true }),
-        };
-      }),
+                },
+              ]),
+        ],
+      });
+      const decoded = decodeWorkItemJson(raw);
+      if (!Result.isSuccess(decoded) || decoded.success === null)
+        return yield* unreadable("create", raw);
+      const item = decoded.success;
+      return {
+        key: item.key,
+        displayKey: item.displayKey,
+        url: item.url,
+        ...(parent === undefined ? {} : { parentLinked: true }),
+      };
+    }),
 
     comment: (input) =>
       target("comment", input).pipe(
@@ -1799,30 +1783,29 @@ export const make: Effect.Effect<
         }),
       ),
 
-    listCandidates: (input) =>
-      Effect.gen(function* () {
-        const [labels, assignees, scope] = yield* Effect.all(
-          [labelCandidates(input), assigneeCandidates(input), scoped("listCandidates", input)],
-          { concurrency: 3 },
-        );
-        const types = yield* workItemTypes({ ...scope, cwd: input.cwd });
-        const enabled = types.value.filter((type) => !type.isDisabled).slice(0, 100);
-        const native = yield* Effect.forEach(enabled, (type) => nativeStates(type.states ?? []));
-        const states = [...new Map(native.flat().map((state) => [state.name, state])).values()];
-        return {
-          labels: labels.items.map((label) => ({
-            ...label,
-            description: label.description ?? null,
-          })),
-          assignees: assignees.items.map((actor) => ({ ...actor, id: actor.id ?? actor.login })),
-          states,
-          issueTypes: enabled.map((type) => ({ id: type.name, name: type.name })),
-          truncated:
-            labels.nextCursor !== null ||
-            assignees.nextCursor !== null ||
-            types.value.length > 100 ||
-            enabled.some((type) => type.states === undefined || type.states === null),
-        };
-      }),
+    listCandidates: Effect.fn("AzureDevOpsIssueTracker.listCandidates")(function* (input) {
+      const [labels, assignees, scope] = yield* Effect.all(
+        [labelCandidates(input), assigneeCandidates(input), scoped("listCandidates", input)],
+        { concurrency: 3 },
+      );
+      const types = yield* workItemTypes({ ...scope, cwd: input.cwd });
+      const enabled = types.value.filter((type) => !type.isDisabled).slice(0, 100);
+      const native = yield* Effect.forEach(enabled, (type) => nativeStates(type.states ?? []));
+      const states = [...new Map(native.flat().map((state) => [state.name, state])).values()];
+      return {
+        labels: labels.items.map((label) => ({
+          ...label,
+          description: label.description ?? null,
+        })),
+        assignees: assignees.items.map((actor) => ({ ...actor, id: actor.id ?? actor.login })),
+        states,
+        issueTypes: enabled.map((type) => ({ id: type.name, name: type.name })),
+        truncated:
+          labels.nextCursor !== null ||
+          assignees.nextCursor !== null ||
+          types.value.length > 100 ||
+          enabled.some((type) => type.states === undefined || type.states === null),
+      };
+    }),
   };
 });

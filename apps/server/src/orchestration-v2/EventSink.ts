@@ -380,8 +380,8 @@ const layerBase: Layer.Layer<
         }
       });
 
-    const appendAndApplyEvents = (input: Parameters<EventStore.EventStoreV2Shape["append"]>[0]) =>
-      Effect.gen(function* () {
+    const appendAndApplyEvents = Effect.fn("orchestrationV2.EventSink.appendAndApplyEvents")(
+      function* (input: Parameters<EventStore.EventStoreV2Shape["append"]>[0]) {
         const appendBatch = (events: ReadonlyArray<OrchestrationV2DomainEvent>) =>
           eventStore.append({ ...input, events }).pipe(Effect.tap(applyStoredEvents));
         if (!input.events.some((event) => event.type === "thread.issue-synced")) {
@@ -415,7 +415,8 @@ const layerBase: Layer.Layer<
         }
         storedEvents.push(...(yield* appendBatch(pending)));
         return storedEvents;
-      });
+      },
+    );
 
     const writeEffect = Effect.fn("orchestrationV2.EventSink.write")(function* (
       input: Parameters<EventSinkV2Shape["writeWithEffects"]>[0],

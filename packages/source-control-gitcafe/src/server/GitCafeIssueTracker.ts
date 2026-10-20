@@ -140,7 +140,7 @@ export const make = Effect.gen(function* () {
     );
   const principal = (operation: string, input: { readonly host: string }) =>
     read(operation, input, { path: "/auth/principal" }, Json.Principal);
-  const page = <
+  const page = Effect.fn("GitCafeIssueTracker.page")(function* <
     S extends Schema.Codec<
       { readonly items: ReadonlyArray<unknown>; readonly next: string | null },
       unknown,
@@ -155,93 +155,93 @@ export const make = Effect.gen(function* () {
     cursor?: string,
     limit = 100,
     query = new URLSearchParams(),
-  ) =>
-    Effect.gen(function* () {
-      if (!Number.isInteger(limit) || limit < 1 || (cursor !== undefined && !isCursor(cursor)))
-        return yield* fail(operation, "GitCafe received invalid page parameters.");
-      const size = Math.min(limit, 100);
-      query.set("limit", String(size));
-      if (cursor !== undefined) query.set("after", cursor);
-      const result = yield* read(operation, input, { path: `${path}?${query}` }, schema);
-      if (result.items.length > size || (result.next !== null && result.next === cursor))
-        return yield* fail(operation, "GitCafe returned an invalid continuation page.");
-      return result;
-    });
+  ) {
+    if (!Number.isInteger(limit) || limit < 1 || (cursor !== undefined && !isCursor(cursor)))
+      return yield* fail(operation, "GitCafe received invalid page parameters.");
+    const size = Math.min(limit, 100);
+    query.set("limit", String(size));
+    if (cursor !== undefined) query.set("after", cursor);
+    const result = yield* read(operation, input, { path: `${path}?${query}` }, schema);
+    if (result.items.length > size || (result.next !== null && result.next === cursor))
+      return yield* fail(operation, "GitCafe returned an invalid continuation page.");
+    return result;
+  });
   const readComments = (operation: string, input: IssueTarget, cursor?: string) =>
     issuePath(operation, input).pipe(
       Effect.flatMap((path) => page(operation, input, `${path}/comments/`, Json.Comments, cursor)),
     );
-  const readConversation = (
+  const readConversation = Effect.fn("GitCafeIssueTracker.readConversation")(function* (
     operation: string,
     input: IssueTarget,
     cursor: string | undefined,
     order: IssueListOrder = "desc",
     fallback = false,
-  ) =>
-    Effect.gen(function* () {
-      if (cursor !== undefined && cursor.length > 8192)
-        return yield* fail(operation, "The GitCafe comment cursor exceeds the supported size.");
-      const continuation =
-        cursor === undefined
-          ? undefined
-          : yield* decodeCommentCursor(cursor).pipe(
-              Effect.mapError(() => fail(operation, "The GitCafe comment cursor is invalid.")),
-            );
-      if (cursor !== undefined && continuation?.identity !== commentIdentity(input, order))
-        return yield* fail(
-          operation,
-          "The GitCafe comment cursor does not match this account, issue or order. Refresh the conversation.",
-        );
-      const result = yield* readComments(operation, input, continuation?.native);
-      if (
-        new Set(result.items.map((row) => row.id)).size !== result.items.length ||
-        (result.next !== null && result.items.length === 0) ||
-        (continuation !== undefined &&
-          result.items.some(
-            (row) => row.id === continuation.lastId || row.createdAt < continuation.lastAt,
-          ))
-      )
-        return yield* fail(operation, "GitCafe returned a repeated or invalid comment page.");
-      const partial = result.next !== null || continuation !== undefined;
-      if (partial && order === "desc" && !fallback)
-        return yield* fail(
-          operation,
-          "GitCafe supports oldest-first comments only for a paged conversation.",
-        );
-      const selectedOrder = partial ? "asc" : order;
-      const items = [...result.items].sort((left, right) =>
-        left.createdAt.localeCompare(right.createdAt),
+  ) {
+    if (cursor !== undefined && cursor.length > 8192)
+      return yield* fail(operation, "The GitCafe comment cursor exceeds the supported size.");
+    const continuation =
+      cursor === undefined
+        ? undefined
+        : yield* decodeCommentCursor(cursor).pipe(
+            Effect.mapError(() => fail(operation, "The GitCafe comment cursor is invalid.")),
+          );
+    if (cursor !== undefined && continuation?.identity !== commentIdentity(input, order))
+      return yield* fail(
+        operation,
+        "The GitCafe comment cursor does not match this account, issue or order. Refresh the conversation.",
       );
-      if (selectedOrder === "desc") items.reverse();
-      return {
-        items,
-        next: yield* commentCursor(operation, input, result.next, items.at(-1)),
-        partial,
-      };
-    });
-  const readReactions = (operation: string, input: IssueTarget) =>
-    Effect.gen(function* () {
-      const path = yield* issuePath(operation, input);
-      const items: Array<(typeof PullJson.GitCafeReactions.Type.items)[number]> = [];
-      const seen = new Set<string>();
-      let next: string | null = null;
-      for (let count = 0; count < 10; count++) {
-        const result: typeof PullJson.GitCafeReactions.Type = yield* page(
-          operation,
-          input,
-          `${path}/reactions/`,
-          PullJson.GitCafeReactions,
-          next ?? undefined,
-        );
-        items.push(...result.items);
-        next = result.next;
-        if (next === null) break;
-        if (!isCursor(next) || seen.has(next))
-          return yield* fail(operation, "GitCafe returned an invalid reaction cursor.");
-        seen.add(next);
-      }
-      return { items, next };
-    });
+    const result = yield* readComments(operation, input, continuation?.native);
+    if (
+      new Set(result.items.map((row) => row.id)).size !== result.items.length ||
+      (result.next !== null && result.items.length === 0) ||
+      (continuation !== undefined &&
+        result.items.some(
+          (row) => row.id === continuation.lastId || row.createdAt < continuation.lastAt,
+        ))
+    )
+      return yield* fail(operation, "GitCafe returned a repeated or invalid comment page.");
+    const partial = result.next !== null || continuation !== undefined;
+    if (partial && order === "desc" && !fallback)
+      return yield* fail(
+        operation,
+        "GitCafe supports oldest-first comments only for a paged conversation.",
+      );
+    const selectedOrder = partial ? "asc" : order;
+    const items = [...result.items].sort((left, right) =>
+      left.createdAt.localeCompare(right.createdAt),
+    );
+    if (selectedOrder === "desc") items.reverse();
+    return {
+      items,
+      next: yield* commentCursor(operation, input, result.next, items.at(-1)),
+      partial,
+    };
+  });
+  const readReactions = Effect.fn("GitCafeIssueTracker.readReactions")(function* (
+    operation: string,
+    input: IssueTarget,
+  ) {
+    const path = yield* issuePath(operation, input);
+    const items: Array<(typeof PullJson.GitCafeReactions.Type.items)[number]> = [];
+    const seen = new Set<string>();
+    let next: string | null = null;
+    for (let count = 0; count < 10; count++) {
+      const result: typeof PullJson.GitCafeReactions.Type = yield* page(
+        operation,
+        input,
+        `${path}/reactions/`,
+        PullJson.GitCafeReactions,
+        next ?? undefined,
+      );
+      items.push(...result.items);
+      next = result.next;
+      if (next === null) break;
+      if (!isCursor(next) || seen.has(next))
+        return yield* fail(operation, "GitCafe returned an invalid reaction cursor.");
+      seen.add(next);
+    }
+    return { items, next };
+  });
   const optionalReactions = (operation: string, input: IssueTarget) =>
     readReactions(operation, input).pipe(
       Effect.catchIf(
@@ -249,61 +249,64 @@ export const make = Effect.gen(function* () {
         () => Effect.void,
       ),
     );
-  const linkedPullRequests: NonNullable<IssueTrackerApi["getLinkedPullRequests"]> = (input) =>
-    Effect.gen(function* () {
-      const path = yield* issuePath("getLinkedPullRequests", input);
-      const links = yield* page(
-        "getLinkedPullRequests",
-        input,
-        `${path}/links/`,
-        Json.Links,
-        input.cursor,
-        input.limit,
-      );
-      const items = links.items.map((link) => ({
-        provider: SourceControlProviderKind.make("gitcafe"),
-        host: input.host,
-        repository: input.scope,
-        number: link.number,
-        title: link.title,
-        url: `https://${input.host}/${input.scope}/pulls/${link.number}`,
-        state: link.state,
-        closesIssue: link.linkType === "closes",
-      }));
-      return { items, nextCursor: links.next };
-    });
-  const labelCandidates: NonNullable<IssueTrackerApi["listLabelCandidates"]> = (input) =>
-    Effect.gen(function* () {
-      const path = yield* repositoryPath("listLabelCandidates", input);
-      const rows = yield* page(
-        "listLabelCandidates",
-        input,
-        `${path}/labels`,
-        Json.Labels,
-        input.cursor,
-        input.limit,
-      );
-      return {
-        items: rows.items.map((label) => ({ ...label, description: label.description ?? null })),
-        nextCursor: rows.next,
-      };
-    });
-  const assigneeCandidates: NonNullable<IssueTrackerApi["listAssigneeCandidates"]> = (input) =>
-    Effect.gen(function* () {
-      const path = yield* repositoryPath("listAssigneeCandidates", input);
-      const rows = yield* page(
-        "listAssigneeCandidates",
-        input,
-        `${path}/issues/assignee-candidates`,
-        Json.Assignees,
-        input.cursor,
-        input.limit,
-      );
-      return {
-        items: rows.items.map((value) => Json.assignee(value, input.host)),
-        nextCursor: rows.next,
-      };
-    });
+  const linkedPullRequests: NonNullable<IssueTrackerApi["getLinkedPullRequests"]> = Effect.fn(
+    "GitCafeIssueTracker.linkedPullRequests",
+  )(function* (input) {
+    const path = yield* issuePath("getLinkedPullRequests", input);
+    const links = yield* page(
+      "getLinkedPullRequests",
+      input,
+      `${path}/links/`,
+      Json.Links,
+      input.cursor,
+      input.limit,
+    );
+    const items = links.items.map((link) => ({
+      provider: SourceControlProviderKind.make("gitcafe"),
+      host: input.host,
+      repository: input.scope,
+      number: link.number,
+      title: link.title,
+      url: `https://${input.host}/${input.scope}/pulls/${link.number}`,
+      state: link.state,
+      closesIssue: link.linkType === "closes",
+    }));
+    return { items, nextCursor: links.next };
+  });
+  const labelCandidates: NonNullable<IssueTrackerApi["listLabelCandidates"]> = Effect.fn(
+    "GitCafeIssueTracker.labelCandidates",
+  )(function* (input) {
+    const path = yield* repositoryPath("listLabelCandidates", input);
+    const rows = yield* page(
+      "listLabelCandidates",
+      input,
+      `${path}/labels`,
+      Json.Labels,
+      input.cursor,
+      input.limit,
+    );
+    return {
+      items: rows.items.map((label) => ({ ...label, description: label.description ?? null })),
+      nextCursor: rows.next,
+    };
+  });
+  const assigneeCandidates: NonNullable<IssueTrackerApi["listAssigneeCandidates"]> = Effect.fn(
+    "GitCafeIssueTracker.assigneeCandidates",
+  )(function* (input) {
+    const path = yield* repositoryPath("listAssigneeCandidates", input);
+    const rows = yield* page(
+      "listAssigneeCandidates",
+      input,
+      `${path}/issues/assignee-candidates`,
+      Json.Assignees,
+      input.cursor,
+      input.limit,
+    );
+    return {
+      items: rows.items.map((value) => Json.assignee(value, input.host)),
+      nextCursor: rows.next,
+    };
+  });
   const validateMetadata = (
     operation: string,
     labels: ReadonlyArray<string> | undefined,
@@ -318,120 +321,114 @@ export const make = Effect.gen(function* () {
     kind: KIND,
     capabilities: CAPABILITIES,
     getViewer: (input) => principal("getViewer", input).pipe(Effect.map((value) => value.handle)),
-    listIssues: (input) =>
-      Effect.gen(function* () {
-        const path = yield* repositoryPath("listIssues", input);
-        if (input.involvement === "mentioned" || input.sort === "comments")
-          return yield* fail("listIssues", "GitCafe does not support this issue filter or sort.");
-        if (input.stateCategories?.length === 0) return { items: [], nextCursor: null };
-        const query = new URLSearchParams();
-        const states =
-          input.stateCategories === undefined
-            ? undefined
-            : STATES.filter(
-                (value) =>
-                  (value === "triage"
-                    ? input.stateCategories!.some(
-                        (category) =>
-                          category === "backlog" ||
-                          category === "unstarted" ||
-                          category === "started",
-                      )
-                    : input.stateCategories!.includes(value)) &&
-                  (input.state === "all" || Json.state(value).category === input.state),
-              );
-        if (states?.length === 0) return { items: [], nextCursor: null };
-        if (states !== undefined) for (const value of states) query.append("states", value);
-        else if (input.state === "all") {
-          query.append("statuses", "open");
-          query.append("statuses", "closed");
-        } else query.set("statuses", input.state);
-        if (input.query?.trim()) query.set("q", input.query.trim());
-        query.set("sort", input.sort ?? "updated");
-        query.set("direction", input.order ?? "desc");
-        if (input.involvement !== "all") {
-          const viewer = yield* principal("listIssues", input);
-          if (viewer.handle !== input.viewer)
-            return yield* fail(
-              "listIssues",
-              "The GitCafe account changed. Refresh the issue list.",
+    listIssues: Effect.fn("GitCafeIssueTracker.listIssues")(function* (input) {
+      const path = yield* repositoryPath("listIssues", input);
+      if (input.involvement === "mentioned" || input.sort === "comments")
+        return yield* fail("listIssues", "GitCafe does not support this issue filter or sort.");
+      if (input.stateCategories?.length === 0) return { items: [], nextCursor: null };
+      const query = new URLSearchParams();
+      const states =
+        input.stateCategories === undefined
+          ? undefined
+          : STATES.filter(
+              (value) =>
+                (value === "triage"
+                  ? input.stateCategories!.some(
+                      (category) =>
+                        category === "backlog" ||
+                        category === "unstarted" ||
+                        category === "started",
+                    )
+                  : input.stateCategories!.includes(value)) &&
+                (input.state === "all" || Json.state(value).category === input.state),
             );
-          query.set(input.involvement === "assigned" ? "assignee" : "author", viewer.actorId);
-        }
-        const rows = yield* page(
-          "listIssues",
-          input,
-          `${path}/issues/`,
-          Json.Issues,
-          input.cursor,
-          input.limit,
-          query,
-        );
-        return {
-          items: rows.items.map((value) => Json.summary(value, input.host, input.scope)),
-          nextCursor: rows.next,
-        };
-      }),
-    getIssue: (input) =>
-      Effect.gen(function* () {
-        const value = yield* detail("getIssue", input);
-        const [viewer, comments, links, reactions] = yield* Effect.all(
-          [
-            principal("getIssue", input),
-            readConversation("getIssue", input, undefined, "desc", true),
-            linkedPullRequests({ ...input, limit: 30 }),
-            optionalReactions("getIssue", input),
-          ],
-          { concurrency: 4 },
-        );
-        if (
-          value.number !== Number(input.key) ||
-          comments.items.some((item) => item.issueId !== value.id)
-        )
-          return yield* fail("getIssue", "GitCafe returned a different issue conversation.");
-        return {
-          ...Json.summary(value, input.host, input.scope),
-          ...(comments.partial
-            ? { capabilities: { ...CAPABILITIES, commentOrders: ["asc"] as const } }
-            : {}),
-          body: value.description ?? "",
-          viewer: viewer.handle,
-          viewerPermissions: Json.permissions(value),
-          states: CAPABILITIES.states.filter((target) =>
-            target.category === "closed"
-              ? value.capabilities.close
-              : Json.state(value.stateType).category === "closed"
-                ? value.capabilities.reopen && value.capabilities.edit
-                : value.capabilities.edit,
+      if (states?.length === 0) return { items: [], nextCursor: null };
+      if (states !== undefined) for (const value of states) query.append("states", value);
+      else if (input.state === "all") {
+        query.append("statuses", "open");
+        query.append("statuses", "closed");
+      } else query.set("statuses", input.state);
+      if (input.query?.trim()) query.set("q", input.query.trim());
+      query.set("sort", input.sort ?? "updated");
+      query.set("direction", input.order ?? "desc");
+      if (input.involvement !== "all") {
+        const viewer = yield* principal("listIssues", input);
+        if (viewer.handle !== input.viewer)
+          return yield* fail("listIssues", "The GitCafe account changed. Refresh the issue list.");
+        query.set(input.involvement === "assigned" ? "assignee" : "author", viewer.actorId);
+      }
+      const rows = yield* page(
+        "listIssues",
+        input,
+        `${path}/issues/`,
+        Json.Issues,
+        input.cursor,
+        input.limit,
+        query,
+      );
+      return {
+        items: rows.items.map((value) => Json.summary(value, input.host, input.scope)),
+        nextCursor: rows.next,
+      };
+    }),
+    getIssue: Effect.fn("GitCafeIssueTracker.getIssue")(function* (input) {
+      const value = yield* detail("getIssue", input);
+      const [viewer, comments, links, reactions] = yield* Effect.all(
+        [
+          principal("getIssue", input),
+          readConversation("getIssue", input, undefined, "desc", true),
+          linkedPullRequests({ ...input, limit: 30 }),
+          optionalReactions("getIssue", input),
+        ],
+        { concurrency: 4 },
+      );
+      if (
+        value.number !== Number(input.key) ||
+        comments.items.some((item) => item.issueId !== value.id)
+      )
+        return yield* fail("getIssue", "GitCafe returned a different issue conversation.");
+      return {
+        ...Json.summary(value, input.host, input.scope),
+        ...(comments.partial
+          ? { capabilities: { ...CAPABILITIES, commentOrders: ["asc"] as const } }
+          : {}),
+        body: value.description ?? "",
+        viewer: viewer.handle,
+        viewerPermissions: Json.permissions(value),
+        states: CAPABILITIES.states.filter((target) =>
+          target.category === "closed"
+            ? value.capabilities.close
+            : Json.state(value.stateType).category === "closed"
+              ? value.capabilities.reopen && value.capabilities.edit
+              : value.capabilities.edit,
+        ),
+        comments: comments.items.map((item) => ({
+          ...Json.comment(item, input.host),
+          ...Json.reactionFields(reactions, item.id, "issue_comment", input.host, viewer.handle),
+        })),
+        commentsCursor: comments.next,
+        events: [],
+        linkedPullRequests: links.items,
+        ...Json.reactionFields(reactions, value.id, "issue", input.host, viewer.handle),
+      };
+    }),
+    getComments: Effect.fn("GitCafeIssueTracker.getComments")(function* (input) {
+      const rows = yield* readConversation("getComments", input, input.cursor, input.order);
+      const reactions = yield* optionalReactions("getComments", input);
+      return {
+        comments: rows.items.map((value) => ({
+          ...Json.comment(value, input.host),
+          ...Json.reactionFields(
+            reactions,
+            value.id,
+            "issue_comment",
+            input.host,
+            input.viewer ?? null,
           ),
-          comments: comments.items.map((item) => ({
-            ...Json.comment(item, input.host),
-            ...Json.reactionFields(reactions, item.id, "issue_comment", input.host, viewer.handle),
-          })),
-          commentsCursor: comments.next,
-          events: [],
-          linkedPullRequests: links.items,
-          ...Json.reactionFields(reactions, value.id, "issue", input.host, viewer.handle),
-        };
-      }),
-    getComments: (input) =>
-      Effect.gen(function* () {
-        const rows = yield* readConversation("getComments", input, input.cursor, input.order);
-        const reactions = yield* optionalReactions("getComments", input);
-        return {
-          comments: rows.items.map((value) => ({
-            ...Json.comment(value, input.host),
-            ...Json.reactionFields(
-              reactions,
-              value.id,
-              "issue_comment",
-              input.host,
-              input.viewer ?? null,
-            ),
-          })),
-          nextCursor: rows.next,
-        };
-      }),
+        })),
+        nextCursor: rows.next,
+      };
+    }),
     getViewerPermissions: (input) =>
       detail("getViewerPermissions", input).pipe(Effect.map(Json.permissions)),
     listLabelCandidates: labelCandidates,
@@ -455,226 +452,219 @@ export const make = Effect.gen(function* () {
         Effect.andThen(send("listTemplates", input, { path })),
       ),
     ),
-    create: (input) =>
-      Effect.gen(function* () {
-        const path = yield* repositoryPath("create", input);
-        yield* validateMetadata("create", input.labels, input.assignees);
-        if (
-          input.parentKey !== undefined ||
-          input.issueType !== undefined ||
-          (input.templateKey !== undefined && parseTemplateKey(input.templateKey) === null)
-        )
-          return yield* fail("create", "GitCafe does not support this creation option.");
-        const value = yield* read(
-          "create",
-          input,
-          {
-            method: "POST",
-            path: `${path}/issues/`,
-            body: {
-              title: input.title,
-              description: input.body,
-              labelIds: input.labels,
-              assigneeIds: input.assignees,
-            },
+    create: Effect.fn("GitCafeIssueTracker.create")(function* (input) {
+      const path = yield* repositoryPath("create", input);
+      yield* validateMetadata("create", input.labels, input.assignees);
+      if (
+        input.parentKey !== undefined ||
+        input.issueType !== undefined ||
+        (input.templateKey !== undefined && parseTemplateKey(input.templateKey) === null)
+      )
+        return yield* fail("create", "GitCafe does not support this creation option.");
+      const value = yield* read(
+        "create",
+        input,
+        {
+          method: "POST",
+          path: `${path}/issues/`,
+          body: {
+            title: input.title,
+            description: input.body,
+            labelIds: input.labels,
+            assigneeIds: input.assignees,
           },
-          Json.Issue,
-        );
-        return {
-          key: String(value.number),
-          displayKey: `#${value.number}`,
-          url: `https://${input.host}/${input.scope}/issues/${value.number}`,
-        };
-      }),
-    update: (input) =>
-      Effect.gen(function* () {
-        const path = yield* issuePath("update", input);
-        yield* validateMetadata("update", input.labels, input.assignees);
-        const current = yield* detail("update", input);
-        const words = input.title !== undefined || input.body !== undefined;
-        if (
-          (words && !current.capabilities.edit) ||
-          (input.labels !== undefined && !current.capabilities.manageLabels) ||
-          (input.assignees !== undefined && !current.capabilities.manageAssignees)
-        )
-          return yield* fail("update", "GitCafe does not allow this issue edit.");
-        let version = current.version;
-        let changed = false;
-        const write = (request: Omit<GitCafeApi.GitCafeApiRequest, "host" | "operation">) =>
-          read("update", input, request, Json.Versioned).pipe(
-            Effect.tap((result) =>
-              Effect.sync(() => {
-                version = result.version;
-                changed = true;
-              }),
-            ),
-            Effect.mapError((cause) =>
-              changed
-                ? new IssueTrackerError({
-                    ...cause,
-                    detail:
-                      "GitCafe saved part of the edit. Refresh the issue before trying again.",
-                    cause,
-                  })
-                : cause,
-            ),
-          );
-        if (words)
-          yield* write({
-            method: "PATCH",
-            path,
-            body: {
-              expectedVersion: version,
-              ...(input.title === undefined ? {} : { title: input.title }),
-              ...(input.body === undefined ? {} : { description: input.body }),
-            },
-          });
-        if (input.labels !== undefined)
-          yield* write({
-            method: "PUT",
-            path: `${path}/labels`,
-            body: { expectedVersion: version, labelIds: input.labels },
-          });
-        if (input.assignees !== undefined)
-          yield* write({
-            method: "PUT",
-            path: `${path}/assignees`,
-            body: { expectedVersion: version, actorIds: input.assignees },
-          });
-      }),
-    setState: (input) =>
-      Effect.gen(function* () {
-        const path = yield* issuePath("setState", input);
-        const next = STATES.find((value) => value === input.state);
-        if (next === undefined || input.closeReason !== undefined)
-          return yield* fail("setState", "GitCafe received an unsupported state or close reason.");
-        let current = yield* detail("setState", input);
-        if (current.stateType === next) return;
-        const closing = Json.state(next).category === "closed";
-        const reopening = Json.state(current.stateType).category === "closed" && !closing;
-        if (
-          (closing && !current.capabilities.close) ||
-          (reopening && (!current.capabilities.reopen || !current.capabilities.edit)) ||
-          (!closing && !reopening && !current.capabilities.edit)
-        )
-          return yield* fail("setState", "GitCafe does not allow this state change.");
-        if (reopening)
-          current = yield* read(
-            "setState",
-            input,
-            { method: "POST", path: `${path}/reopen`, body: { expectedVersion: current.version } },
-            Json.Detail,
-          );
-        if (current.stateType === next) return;
-        yield* read(
-          "setState",
-          input,
-          closing
-            ? {
-                method: "POST",
-                path: `${path}/close`,
-                body: { expectedVersion: current.version, state: next },
-              }
-            : { method: "PATCH", path, body: { expectedVersion: current.version, state: next } },
-          Json.Detail,
-        ).pipe(
+        },
+        Json.Issue,
+      );
+      return {
+        key: String(value.number),
+        displayKey: `#${value.number}`,
+        url: `https://${input.host}/${input.scope}/issues/${value.number}`,
+      };
+    }),
+    update: Effect.fn("GitCafeIssueTracker.update")(function* (input) {
+      const path = yield* issuePath("update", input);
+      yield* validateMetadata("update", input.labels, input.assignees);
+      const current = yield* detail("update", input);
+      const words = input.title !== undefined || input.body !== undefined;
+      if (
+        (words && !current.capabilities.edit) ||
+        (input.labels !== undefined && !current.capabilities.manageLabels) ||
+        (input.assignees !== undefined && !current.capabilities.manageAssignees)
+      )
+        return yield* fail("update", "GitCafe does not allow this issue edit.");
+      let version = current.version;
+      let changed = false;
+      const write = (request: Omit<GitCafeApi.GitCafeApiRequest, "host" | "operation">) =>
+        read("update", input, request, Json.Versioned).pipe(
+          Effect.tap((result) =>
+            Effect.sync(() => {
+              version = result.version;
+              changed = true;
+            }),
+          ),
           Effect.mapError((cause) =>
-            reopening
+            changed
               ? new IssueTrackerError({
                   ...cause,
-                  detail:
-                    "GitCafe reopened the issue but could not set the requested state. Refresh the issue.",
+                  detail: "GitCafe saved part of the edit. Refresh the issue before trying again.",
                   cause,
                 })
               : cause,
           ),
         );
-      }),
-    comment: (input) =>
-      Effect.gen(function* () {
-        const path = yield* issuePath("comment", input);
-        const current = yield* detail("comment", input);
-        if (!current.capabilities.comment)
-          return yield* fail("comment", "GitCafe does not allow a comment on this issue.");
-        yield* read(
-          "comment",
+      if (words)
+        yield* write({
+          method: "PATCH",
+          path,
+          body: {
+            expectedVersion: version,
+            ...(input.title === undefined ? {} : { title: input.title }),
+            ...(input.body === undefined ? {} : { description: input.body }),
+          },
+        });
+      if (input.labels !== undefined)
+        yield* write({
+          method: "PUT",
+          path: `${path}/labels`,
+          body: { expectedVersion: version, labelIds: input.labels },
+        });
+      if (input.assignees !== undefined)
+        yield* write({
+          method: "PUT",
+          path: `${path}/assignees`,
+          body: { expectedVersion: version, actorIds: input.assignees },
+        });
+    }),
+    setState: Effect.fn("GitCafeIssueTracker.setState")(function* (input) {
+      const path = yield* issuePath("setState", input);
+      const next = STATES.find((value) => value === input.state);
+      if (next === undefined || input.closeReason !== undefined)
+        return yield* fail("setState", "GitCafe received an unsupported state or close reason.");
+      let current = yield* detail("setState", input);
+      if (current.stateType === next) return;
+      const closing = Json.state(next).category === "closed";
+      const reopening = Json.state(current.stateType).category === "closed" && !closing;
+      if (
+        (closing && !current.capabilities.close) ||
+        (reopening && (!current.capabilities.reopen || !current.capabilities.edit)) ||
+        (!closing && !reopening && !current.capabilities.edit)
+      )
+        return yield* fail("setState", "GitCafe does not allow this state change.");
+      if (reopening)
+        current = yield* read(
+          "setState",
           input,
-          { method: "POST", path: `${path}/comments/`, body: { body: input.body } },
-          Json.Comment,
+          { method: "POST", path: `${path}/reopen`, body: { expectedVersion: current.version } },
+          Json.Detail,
         );
-      }),
-    editComment: (input) =>
-      Effect.gen(function* () {
-        const path = yield* issuePath("editComment", input);
-        let cursor: string | undefined;
-        const seen = new Set<string>();
-        for (let count = 0; count < 10; count++) {
-          const rows = yield* readComments("editComment", input, cursor);
-          const found = rows.items.find((value) => value.id === input.commentId);
-          if (found !== undefined) {
-            if (!found.capabilities.edit)
-              return yield* fail("editComment", "GitCafe does not allow this comment edit.");
-            yield* read(
-              "editComment",
-              input,
-              {
-                method: "PATCH",
-                path: `${path}/comments/${encodeURIComponent(found.id)}`,
-                body: { body: input.body, expectedVersion: found.version },
-              },
-              Json.Comment,
-            );
-            return;
-          }
-          if (rows.next === null)
-            return yield* fail("editComment", "GitCafe did not return this comment.");
-          if (seen.has(rows.next))
-            return yield* fail("editComment", "GitCafe returned a repeated comment cursor.");
-          seen.add(rows.next);
-          cursor = rows.next;
-        }
-        return yield* fail(
-          "editComment",
-          "The GitCafe comment is outside the supported search bound. Refresh the conversation.",
-        );
-      }),
-    setReaction: (input) =>
-      Effect.gen(function* () {
-        const path = yield* issuePath("setReaction", input);
-        const current = yield* detail("setReaction", input);
-        const subject = {
-          kind: input.subjectId === undefined ? "issue" : "issue_comment",
-          id: input.subjectId ?? current.id,
-        };
-        const values = yield* readReactions("setReaction", input);
-        const mine = values.items.find(
-          (item) =>
-            item.subject.kind === subject.kind &&
-            item.subject.id === subject.id &&
-            item.emoji.kind === "unicode" &&
-            PullJson.reactionContent(item.emoji.value) === input.content,
-        )?.viewerReactionId;
-        if (values.next !== null && mine == null)
-          return yield* fail(
-            "setReaction",
-            "GitCafe reactions are incomplete. Refresh before changing a reaction.",
+      if (current.stateType === next) return;
+      yield* read(
+        "setState",
+        input,
+        closing
+          ? {
+              method: "POST",
+              path: `${path}/close`,
+              body: { expectedVersion: current.version, state: next },
+            }
+          : { method: "PATCH", path, body: { expectedVersion: current.version, state: next } },
+        Json.Detail,
+      ).pipe(
+        Effect.mapError((cause) =>
+          reopening
+            ? new IssueTrackerError({
+                ...cause,
+                detail:
+                  "GitCafe reopened the issue but could not set the requested state. Refresh the issue.",
+                cause,
+              })
+            : cause,
+        ),
+      );
+    }),
+    comment: Effect.fn("GitCafeIssueTracker.comment")(function* (input) {
+      const path = yield* issuePath("comment", input);
+      const current = yield* detail("comment", input);
+      if (!current.capabilities.comment)
+        return yield* fail("comment", "GitCafe does not allow a comment on this issue.");
+      yield* read(
+        "comment",
+        input,
+        { method: "POST", path: `${path}/comments/`, body: { body: input.body } },
+        Json.Comment,
+      );
+    }),
+    editComment: Effect.fn("GitCafeIssueTracker.editComment")(function* (input) {
+      const path = yield* issuePath("editComment", input);
+      let cursor: string | undefined;
+      const seen = new Set<string>();
+      for (let count = 0; count < 10; count++) {
+        const rows = yield* readComments("editComment", input, cursor);
+        const found = rows.items.find((value) => value.id === input.commentId);
+        if (found !== undefined) {
+          if (!found.capabilities.edit)
+            return yield* fail("editComment", "GitCafe does not allow this comment edit.");
+          yield* read(
+            "editComment",
+            input,
+            {
+              method: "PATCH",
+              path: `${path}/comments/${encodeURIComponent(found.id)}`,
+              body: { body: input.body, expectedVersion: found.version },
+            },
+            Json.Comment,
           );
-        if (input.reacted === (mine != null)) return;
-        yield* send(
+          return;
+        }
+        if (rows.next === null)
+          return yield* fail("editComment", "GitCafe did not return this comment.");
+        if (seen.has(rows.next))
+          return yield* fail("editComment", "GitCafe returned a repeated comment cursor.");
+        seen.add(rows.next);
+        cursor = rows.next;
+      }
+      return yield* fail(
+        "editComment",
+        "The GitCafe comment is outside the supported search bound. Refresh the conversation.",
+      );
+    }),
+    setReaction: Effect.fn("GitCafeIssueTracker.setReaction")(function* (input) {
+      const path = yield* issuePath("setReaction", input);
+      const current = yield* detail("setReaction", input);
+      const subject = {
+        kind: input.subjectId === undefined ? "issue" : "issue_comment",
+        id: input.subjectId ?? current.id,
+      };
+      const values = yield* readReactions("setReaction", input);
+      const mine = values.items.find(
+        (item) =>
+          item.subject.kind === subject.kind &&
+          item.subject.id === subject.id &&
+          item.emoji.kind === "unicode" &&
+          PullJson.reactionContent(item.emoji.value) === input.content,
+      )?.viewerReactionId;
+      if (values.next !== null && mine == null)
+        return yield* fail(
           "setReaction",
-          input,
-          input.reacted
-            ? {
-                method: "POST",
-                path: `${path}/reactions/`,
-                body: {
-                  subject,
-                  emoji: { kind: "unicode", value: PullJson.REACTION_EMOJI[input.content] },
-                },
-              }
-            : { method: "DELETE", path: `${path}/reactions/${encodeURIComponent(mine!)}` },
+          "GitCafe reactions are incomplete. Refresh before changing a reaction.",
         );
-      }),
+      if (input.reacted === (mine != null)) return;
+      yield* send(
+        "setReaction",
+        input,
+        input.reacted
+          ? {
+              method: "POST",
+              path: `${path}/reactions/`,
+              body: {
+                subject,
+                emoji: { kind: "unicode", value: PullJson.REACTION_EMOJI[input.content] },
+              },
+            }
+          : { method: "DELETE", path: `${path}/reactions/${encodeURIComponent(mine!)}` },
+      );
+    }),
   };
   return tracker;
 });

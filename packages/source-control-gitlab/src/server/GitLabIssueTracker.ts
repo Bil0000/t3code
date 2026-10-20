@@ -369,51 +369,49 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
         input.connectionId ?? null,
         input.order ?? "desc",
       ]);
-    const cursorFor = (
+    const cursorFor = Effect.fn("GitLabIssueTracker.cursorFor")(function* (
       input: IssueTarget & { readonly order?: IssueListOrder },
       kind: "comments" | "history",
       position: string,
-    ) =>
-      Effect.gen(function* () {
-        const payload = Buffer.from(
-          encodeBody({ v: 1, kind, target: targetIdentity(input), position }),
-        ).toString("base64url");
-        if (payload.length > 8192)
-          return yield* refused(
-            kind === "comments" ? "getComments" : "getHistory",
-            "GitLab returned an oversized timeline cursor.",
-          );
-        return payload;
-      });
-    const cursorPosition = (
+    ) {
+      const payload = Buffer.from(
+        encodeBody({ v: 1, kind, target: targetIdentity(input), position }),
+      ).toString("base64url");
+      if (payload.length > 8192)
+        return yield* refused(
+          kind === "comments" ? "getComments" : "getHistory",
+          "GitLab returned an oversized timeline cursor.",
+        );
+      return payload;
+    });
+    const cursorPosition = Effect.fn("GitLabIssueTracker.cursorPosition")(function* (
       input: IssueTarget & {
         readonly cursor?: string | undefined;
         readonly order?: IssueListOrder;
       },
       kind: "comments" | "history",
       operation: string,
-    ) =>
-      Effect.gen(function* () {
-        if (input.order !== undefined && input.order !== "asc" && input.order !== "desc")
-          return yield* refused(operation, "The timeline order is invalid.");
-        if (input.cursor === undefined) return undefined;
-        if (input.cursor.length > 8192 || !/^[A-Za-z0-9_-]+$/.test(input.cursor))
-          return yield* refused(operation, "The timeline cursor is invalid. Refresh this issue.");
-        const decoded = decodeJsonResult(TimelineCursor)(
-          Buffer.from(input.cursor, "base64url").toString("utf8"),
+    ) {
+      if (input.order !== undefined && input.order !== "asc" && input.order !== "desc")
+        return yield* refused(operation, "The timeline order is invalid.");
+      if (input.cursor === undefined) return undefined;
+      if (input.cursor.length > 8192 || !/^[A-Za-z0-9_-]+$/.test(input.cursor))
+        return yield* refused(operation, "The timeline cursor is invalid. Refresh this issue.");
+      const decoded = decodeJsonResult(TimelineCursor)(
+        Buffer.from(input.cursor, "base64url").toString("utf8"),
+      );
+      if (
+        Result.isFailure(decoded) ||
+        decoded.success.kind !== kind ||
+        decoded.success.target !== targetIdentity(input) ||
+        Buffer.from(encodeBody(decoded.success)).toString("base64url") !== input.cursor
+      )
+        return yield* refused(
+          operation,
+          "The timeline cursor belongs to another account, issue, or order.",
         );
-        if (
-          Result.isFailure(decoded) ||
-          decoded.success.kind !== kind ||
-          decoded.success.target !== targetIdentity(input) ||
-          Buffer.from(encodeBody(decoded.success)).toString("base64url") !== input.cursor
-        )
-          return yield* refused(
-            operation,
-            "The timeline cursor belongs to another account, issue, or order.",
-          );
-        return decoded.success.position;
-      });
+      return decoded.success.position;
+    });
 
     const hierarchyWidget = (item: GitLabWorkItemWithHierarchy, operation: string) => {
       const widgets = item.widgets.filter(
@@ -445,41 +443,40 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
         ? Effect.void
         : Effect.fail(refused(operation, "The work item is not an Epic in this group."));
 
-    const workItem = (
+    const workItem = Effect.fn("GitLabIssueTracker.workItem")(function* (
       input: IssueTarget,
       operation: string,
       page?: { first: number; after?: string },
-    ) =>
-      Effect.gen(function* () {
-        const iid = parseNumber(input.key);
-        if (iid === null || !Number.isSafeInteger(iid)) return yield* notFound(operation);
-        const group = groupPath(input.scope);
-        if (
-          group !== null &&
-          (!input.scope.trim().startsWith("group:") ||
-            group
-              .split("/")
-              .some((part) => !part || part === "." || part === ".." || /[:\\%?#\s]/.test(part)))
-        )
-          return yield* notFound(operation);
-        const raw = yield* nativeGraphql(
-          input,
-          operation,
-          page === undefined ? WORK_ITEM_QUERY : WORK_ITEM_HIERARCHY_QUERY,
-          {
-            fullPath: group ?? input.scope.trim(),
-            iid: input.key,
-            ...page,
-          },
-        );
-        const decoded = decodeWorkItemJson(raw);
-        if (Result.isFailure(decoded)) return yield* unreadable(operation, decoded.failure);
-        const selected = decoded.success.data.namespace?.workItem;
-        if (selected === undefined || selected === null) return yield* notFound(operation);
-        if (group === null) yield* projectWorkItem(input, selected, operation);
-        else yield* groupWorkItem(input, selected, operation);
-        return selected;
-      });
+    ) {
+      const iid = parseNumber(input.key);
+      if (iid === null || !Number.isSafeInteger(iid)) return yield* notFound(operation);
+      const group = groupPath(input.scope);
+      if (
+        group !== null &&
+        (!input.scope.trim().startsWith("group:") ||
+          group
+            .split("/")
+            .some((part) => !part || part === "." || part === ".." || /[:\\%?#\s]/.test(part)))
+      )
+        return yield* notFound(operation);
+      const raw = yield* nativeGraphql(
+        input,
+        operation,
+        page === undefined ? WORK_ITEM_QUERY : WORK_ITEM_HIERARCHY_QUERY,
+        {
+          fullPath: group ?? input.scope.trim(),
+          iid: input.key,
+          ...page,
+        },
+      );
+      const decoded = decodeWorkItemJson(raw);
+      if (Result.isFailure(decoded)) return yield* unreadable(operation, decoded.failure);
+      const selected = decoded.success.data.namespace?.workItem;
+      if (selected === undefined || selected === null) return yield* notFound(operation);
+      if (group === null) yield* projectWorkItem(input, selected, operation);
+      else yield* groupWorkItem(input, selected, operation);
+      return selected;
+    });
 
     const parentPermission = (input: IssueTarget, operation: string) =>
       workItem(input, operation).pipe(
@@ -552,256 +549,247 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
         : child.workItemType.name === "Issue" &&
           child.project.fullPath === child.namespace.fullPath);
 
-    const epicActivity = (
+    const epicActivity = Effect.fn("GitLabIssueTracker.epicActivity")(function* (
       page: GitLabEpicActivity | null | undefined,
       after: string | undefined,
       first: number,
       operation: string,
-    ) =>
-      Effect.gen(function* () {
-        if (
-          page == null ||
-          page.nodes.length > first ||
-          (page.pageInfo.hasNextPage &&
-            (!page.pageInfo.endCursor ||
-              page.pageInfo.endCursor.length > 4096 ||
-              page.pageInfo.endCursor === after)) ||
-          page.nodes.some(
-            ({ notes }) =>
-              notes.pageInfo.hasNextPage ||
-              notes.nodes.length !== 1 ||
-              notes.nodes[0]?.system !== true,
-          )
+    ) {
+      if (
+        page == null ||
+        page.nodes.length > first ||
+        (page.pageInfo.hasNextPage &&
+          (!page.pageInfo.endCursor ||
+            page.pageInfo.endCursor.length > 4096 ||
+            page.pageInfo.endCursor === after)) ||
+        page.nodes.some(
+          ({ notes }) =>
+            notes.pageInfo.hasNextPage ||
+            notes.nodes.length !== 1 ||
+            notes.nodes[0]?.system !== true,
         )
-          return yield* refused(operation, "GitLab returned an incomplete epic activity page.");
-        const items = page.nodes
-          .flatMap(({ notes }) => notes.nodes)
-          .map((note): IssueEvent => {
-            const event = toSystemEvent(note.body);
-            const label = note.id.startsWith("gid://gitlab/LabelNote/");
-            return {
-              id: note.id,
-              kind:
-                event?.kind ??
-                (label && /^added .+ labels?$/.test(note.body)
-                  ? "labeled"
-                  : label && /^removed .+ labels?$/.test(note.body)
-                    ? "unlabeled"
-                    : "updated"),
-              actor: epicActor(note.author),
-              createdAt: note.createdAt,
-              detail: event === null ? note.body.trim() || null : event.detail,
-              ...(nativeEventUrl(note.url) === undefined ? {} : { url: nativeEventUrl(note.url) }),
-            };
-          });
-        if (new Set(items.map((event) => event.id)).size !== items.length)
-          return yield* refused(operation, "GitLab returned duplicate epic activity.");
-        return {
-          items,
-          nextCursor: page.pageInfo.hasNextPage ? `activity:${page.pageInfo.endCursor}` : null,
-        };
-      });
+      )
+        return yield* refused(operation, "GitLab returned an incomplete epic activity page.");
+      const items = page.nodes
+        .flatMap(({ notes }) => notes.nodes)
+        .map((note): IssueEvent => {
+          const event = toSystemEvent(note.body);
+          const label = note.id.startsWith("gid://gitlab/LabelNote/");
+          return {
+            id: note.id,
+            kind:
+              event?.kind ??
+              (label && /^added .+ labels?$/.test(note.body)
+                ? "labeled"
+                : label && /^removed .+ labels?$/.test(note.body)
+                  ? "unlabeled"
+                  : "updated"),
+            actor: epicActor(note.author),
+            createdAt: note.createdAt,
+            detail: event === null ? note.body.trim() || null : event.detail,
+            ...(nativeEventUrl(note.url) === undefined ? {} : { url: nativeEventUrl(note.url) }),
+          };
+        });
+      if (new Set(items.map((event) => event.id)).size !== items.length)
+        return yield* refused(operation, "GitLab returned duplicate epic activity.");
+      return {
+        items,
+        nextCursor: page.pageInfo.hasNextPage ? `activity:${page.pageInfo.endCursor}` : null,
+      };
+    });
 
-    const epicHistory = (
+    const epicHistory = Effect.fn("GitLabIssueTracker.epicHistory")(function* (
       input: IssueTarget & IssuePageInput & { readonly order?: IssueListOrder },
-    ) =>
-      Effect.gen(function* () {
-        const group = groupPath(input.scope);
-        const iid = parseNumber(input.key);
-        const first = Math.min(input.limit ?? PAGE_SIZE, PAGE_SIZE);
-        const position = yield* cursorPosition(input, "history", "getHistory");
-        const parsed =
-          position === undefined ? undefined : decodeJsonResult(CommentPosition)(position);
-        if (parsed !== undefined && Result.isFailure(parsed))
-          return yield* refused("getHistory", "The activity cursor is invalid.");
-        const previous =
-          parsed !== undefined && Result.isSuccess(parsed) ? parsed.success : undefined;
-        if (previous !== undefined && new Set(previous.ids).size !== previous.ids.length)
-          return yield* refused("getHistory", "The activity cursor has duplicate note boundaries.");
-        const after = previous?.native;
-        if (
-          group === null ||
-          !input.scope.trim().startsWith("group:") ||
-          group
-            .split("/")
-            .some((part) => !part || part === "." || part === ".." || /[:\\%?#\s]/.test(part)) ||
-          iid === null ||
-          !Number.isSafeInteger(iid) ||
-          !Number.isSafeInteger(first) ||
-          first < 1 ||
-          (input.cursor !== undefined && (!after || after.length > 4096))
+    ) {
+      const group = groupPath(input.scope);
+      const iid = parseNumber(input.key);
+      const first = Math.min(input.limit ?? PAGE_SIZE, PAGE_SIZE);
+      const position = yield* cursorPosition(input, "history", "getHistory");
+      const parsed =
+        position === undefined ? undefined : decodeJsonResult(CommentPosition)(position);
+      if (parsed !== undefined && Result.isFailure(parsed))
+        return yield* refused("getHistory", "The activity cursor is invalid.");
+      const previous =
+        parsed !== undefined && Result.isSuccess(parsed) ? parsed.success : undefined;
+      if (previous !== undefined && new Set(previous.ids).size !== previous.ids.length)
+        return yield* refused("getHistory", "The activity cursor has duplicate note boundaries.");
+      const after = previous?.native;
+      if (
+        group === null ||
+        !input.scope.trim().startsWith("group:") ||
+        group
+          .split("/")
+          .some((part) => !part || part === "." || part === ".." || /[:\\%?#\s]/.test(part)) ||
+        iid === null ||
+        !Number.isSafeInteger(iid) ||
+        !Number.isSafeInteger(first) ||
+        first < 1 ||
+        (input.cursor !== undefined && (!after || after.length > 4096))
+      )
+        return yield* notFound("getHistory");
+      const raw = yield* nativeGraphql(
+        input,
+        "getHistory",
+        input.order === "asc"
+          ? EPIC_HISTORY_QUERY.replace("CREATED_DESC", "CREATED_ASC")
+          : EPIC_HISTORY_QUERY,
+        {
+          fullPath: group,
+          iid: input.key,
+          first,
+          after: after ?? null,
+        },
+      );
+      const decoded = decodeEpicHistoryJson(raw);
+      if (Result.isFailure(decoded)) return yield* unreadable("getHistory", decoded.failure);
+      const selected = decoded.success.data.namespace?.workItem;
+      if (selected == null) return yield* notFound("getHistory");
+      yield* groupWorkItem(input, selected, "getHistory");
+      yield* relation(input, selected, "getHistory");
+      const widgets = selected.widgets.filter(
+        (widget) => widget.__typename === "WorkItemWidgetNotes",
+      );
+      if (widgets.length !== 1)
+        return yield* refused("getHistory", "GitLab returned an unreadable epic activity widget.");
+      const result = yield* epicActivity(widgets[0]?.discussions, after, first, "getHistory");
+      if (
+        result.items.some(
+          (event, index) =>
+            previous?.ids.includes(event.id) ||
+            !Number.isFinite(Date.parse(event.createdAt)) ||
+            (index > 0 &&
+              (input.order === "asc"
+                ? Date.parse(event.createdAt) < Date.parse(result.items[index - 1]!.createdAt)
+                : Date.parse(event.createdAt) > Date.parse(result.items[index - 1]!.createdAt))),
         )
-          return yield* notFound("getHistory");
-        const raw = yield* nativeGraphql(
-          input,
-          "getHistory",
-          input.order === "asc"
-            ? EPIC_HISTORY_QUERY.replace("CREATED_DESC", "CREATED_ASC")
-            : EPIC_HISTORY_QUERY,
-          {
-            fullPath: group,
-            iid: input.key,
-            first,
-            after: after ?? null,
-          },
-        );
-        const decoded = decodeEpicHistoryJson(raw);
-        if (Result.isFailure(decoded)) return yield* unreadable("getHistory", decoded.failure);
-        const selected = decoded.success.data.namespace?.workItem;
-        if (selected == null) return yield* notFound("getHistory");
-        yield* groupWorkItem(input, selected, "getHistory");
-        yield* relation(input, selected, "getHistory");
-        const widgets = selected.widgets.filter(
-          (widget) => widget.__typename === "WorkItemWidgetNotes",
-        );
-        if (widgets.length !== 1)
-          return yield* refused(
-            "getHistory",
-            "GitLab returned an unreadable epic activity widget.",
-          );
-        const result = yield* epicActivity(widgets[0]?.discussions, after, first, "getHistory");
-        if (
-          result.items.some(
-            (event, index) =>
-              previous?.ids.includes(event.id) ||
-              !Number.isFinite(Date.parse(event.createdAt)) ||
-              (index > 0 &&
-                (input.order === "asc"
-                  ? Date.parse(event.createdAt) < Date.parse(result.items[index - 1]!.createdAt)
-                  : Date.parse(event.createdAt) > Date.parse(result.items[index - 1]!.createdAt))),
-          )
-        )
-          return yield* refused(
-            "getHistory",
-            "GitLab returned repeated or unordered epic activity.",
-          );
-        return {
-          items: result.items,
-          nextCursor:
-            result.nextCursor === null
-              ? null
-              : yield* cursorFor(
-                  input,
-                  "history",
-                  encodeBody({
-                    native: result.nextCursor.slice(9),
-                    ids: result.items.map(({ id }) => id),
-                  }),
-                ),
-        };
-      });
+      )
+        return yield* refused("getHistory", "GitLab returned repeated or unordered epic activity.");
+      return {
+        items: result.items,
+        nextCursor:
+          result.nextCursor === null
+            ? null
+            : yield* cursorFor(
+                input,
+                "history",
+                encodeBody({
+                  native: result.nextCursor.slice(9),
+                  ids: result.items.map(({ id }) => id),
+                }),
+              ),
+      };
+    });
 
-    const epic = (
+    const epic = Effect.fn("GitLabIssueTracker.epic")(function* (
       input: IssueTarget & {
         readonly cursor?: string | undefined;
         readonly order?: IssueListOrder;
       },
       operation: string,
-    ) =>
-      Effect.gen(function* () {
-        const position = yield* cursorPosition(input, "comments", operation);
-        const parsed =
-          position === undefined ? undefined : decodeJsonResult(CommentPosition)(position);
-        if (parsed !== undefined && Result.isFailure(parsed))
-          return yield* refused(operation, "The comments cursor is invalid.");
-        const previous =
-          parsed !== undefined && Result.isSuccess(parsed) ? parsed.success : undefined;
-        if (previous !== undefined && new Set(previous.ids).size !== previous.ids.length)
-          return yield* refused(operation, "The comments cursor has duplicate note boundaries.");
-        const group = groupPath(input.scope);
-        const iid = parseNumber(input.key);
-        if (
-          group === null ||
-          !input.scope.trim().startsWith("group:") ||
-          group
-            .split("/")
-            .some((part) => !part || part === "." || part === ".." || /[:\\%?#\s]/.test(part)) ||
-          iid === null ||
-          !Number.isSafeInteger(iid)
-        )
-          return yield* notFound(operation);
-        const raw = yield* nativeGraphql(
-          input,
-          operation,
-          input.order === "asc"
-            ? EPIC_QUERY.replace(
-                "notes(last: 100, before: $before)",
-                "notes(first: 100, after: $before)",
-              ).replace(
-                "hasPreviousPage startCursor",
-                "hasPreviousPage: hasNextPage startCursor: endCursor",
-              )
-            : EPIC_QUERY,
-          {
-            fullPath: group,
-            iid: input.key,
-            before: previous?.native ?? null,
-            includeHistory: operation === "getIssue",
-            first: PAGE_SIZE,
-            after: null,
-          },
-        );
-        const decoded = decodeEpicJson(raw);
-        if (Result.isFailure(decoded)) return yield* unreadable(operation, decoded.failure);
-        const selected = decoded.success.data.namespace?.workItem;
-        if (selected === undefined || selected === null) return yield* notFound(operation);
-        yield* groupWorkItem(input, selected, operation);
-        const reference = yield* relation(input, selected, operation);
-        const notes = selected.widgets.filter(
-          (widget) => widget.__typename === "WorkItemWidgetNotes",
-        );
-        const page = notes[0]?.notes;
-        if (
-          notes.length !== 1 ||
-          page === undefined ||
-          page.nodes.length > PAGE_SIZE ||
-          (page.pageInfo.hasPreviousPage &&
-            (!page.pageInfo.startCursor ||
-              page.pageInfo.startCursor.length > 4096 ||
-              page.pageInfo.startCursor === previous?.native))
-        )
-          return yield* refused(operation, "GitLab returned an unreadable epic notes page.");
-        if (
-          new Set(page.nodes.map(({ id }) => id)).size !== page.nodes.length ||
-          page.nodes.some(({ id }) => previous?.ids.includes(id))
-        )
-          return yield* refused(operation, "GitLab returned repeated epic comments.");
-        const comments = (input.order === "asc" ? page.nodes : page.nodes.toReversed())
-          .filter((note) => !note.system)
-          .map((note) => ({
-            id: note.id,
-            author: epicActor(note.author),
-            body: note.body,
-            createdAt: note.createdAt,
-            editedAt: note.lastEditedAt,
-            url: nativeEventUrl(note.url) ?? null,
-            canEdit: false,
-          }));
-        const activity =
-          operation === "getIssue"
-            ? yield* epicActivity(notes[0]?.discussions, undefined, PAGE_SIZE, operation)
-            : { items: [], nextCursor: null };
-        const nextCursor =
-          page.pageInfo.hasPreviousPage && page.pageInfo.startCursor !== null
-            ? yield* cursorFor(
-                input,
-                "comments",
-                encodeBody({
-                  native: page.pageInfo.startCursor,
-                  ids: page.nodes.map(({ id }) => id),
-                }),
-              )
-            : null;
-        return {
-          selected,
-          reference,
-          viewer: decoded.success.data.currentUser?.username ?? null,
-          comments,
-          events: activity.items,
-          historyNextCursor: activity.nextCursor,
-          nextCursor,
-        };
-      });
+    ) {
+      const position = yield* cursorPosition(input, "comments", operation);
+      const parsed =
+        position === undefined ? undefined : decodeJsonResult(CommentPosition)(position);
+      if (parsed !== undefined && Result.isFailure(parsed))
+        return yield* refused(operation, "The comments cursor is invalid.");
+      const previous =
+        parsed !== undefined && Result.isSuccess(parsed) ? parsed.success : undefined;
+      if (previous !== undefined && new Set(previous.ids).size !== previous.ids.length)
+        return yield* refused(operation, "The comments cursor has duplicate note boundaries.");
+      const group = groupPath(input.scope);
+      const iid = parseNumber(input.key);
+      if (
+        group === null ||
+        !input.scope.trim().startsWith("group:") ||
+        group
+          .split("/")
+          .some((part) => !part || part === "." || part === ".." || /[:\\%?#\s]/.test(part)) ||
+        iid === null ||
+        !Number.isSafeInteger(iid)
+      )
+        return yield* notFound(operation);
+      const raw = yield* nativeGraphql(
+        input,
+        operation,
+        input.order === "asc"
+          ? EPIC_QUERY.replace(
+              "notes(last: 100, before: $before)",
+              "notes(first: 100, after: $before)",
+            ).replace(
+              "hasPreviousPage startCursor",
+              "hasPreviousPage: hasNextPage startCursor: endCursor",
+            )
+          : EPIC_QUERY,
+        {
+          fullPath: group,
+          iid: input.key,
+          before: previous?.native ?? null,
+          includeHistory: operation === "getIssue",
+          first: PAGE_SIZE,
+          after: null,
+        },
+      );
+      const decoded = decodeEpicJson(raw);
+      if (Result.isFailure(decoded)) return yield* unreadable(operation, decoded.failure);
+      const selected = decoded.success.data.namespace?.workItem;
+      if (selected === undefined || selected === null) return yield* notFound(operation);
+      yield* groupWorkItem(input, selected, operation);
+      const reference = yield* relation(input, selected, operation);
+      const notes = selected.widgets.filter(
+        (widget) => widget.__typename === "WorkItemWidgetNotes",
+      );
+      const page = notes[0]?.notes;
+      if (
+        notes.length !== 1 ||
+        page === undefined ||
+        page.nodes.length > PAGE_SIZE ||
+        (page.pageInfo.hasPreviousPage &&
+          (!page.pageInfo.startCursor ||
+            page.pageInfo.startCursor.length > 4096 ||
+            page.pageInfo.startCursor === previous?.native))
+      )
+        return yield* refused(operation, "GitLab returned an unreadable epic notes page.");
+      if (
+        new Set(page.nodes.map(({ id }) => id)).size !== page.nodes.length ||
+        page.nodes.some(({ id }) => previous?.ids.includes(id))
+      )
+        return yield* refused(operation, "GitLab returned repeated epic comments.");
+      const comments = (input.order === "asc" ? page.nodes : page.nodes.toReversed())
+        .filter((note) => !note.system)
+        .map((note) => ({
+          id: note.id,
+          author: epicActor(note.author),
+          body: note.body,
+          createdAt: note.createdAt,
+          editedAt: note.lastEditedAt,
+          url: nativeEventUrl(note.url) ?? null,
+          canEdit: false,
+        }));
+      const activity =
+        operation === "getIssue"
+          ? yield* epicActivity(notes[0]?.discussions, undefined, PAGE_SIZE, operation)
+          : { items: [], nextCursor: null };
+      const nextCursor =
+        page.pageInfo.hasPreviousPage && page.pageInfo.startCursor !== null
+          ? yield* cursorFor(
+              input,
+              "comments",
+              encodeBody({
+                native: page.pageInfo.startCursor,
+                ids: page.nodes.map(({ id }) => id),
+              }),
+            )
+          : null;
+      return {
+        selected,
+        reference,
+        viewer: decoded.success.data.currentUser?.username ?? null,
+        comments,
+        events: activity.items,
+        historyNextCursor: activity.nextCursor,
+        nextCursor,
+      };
+    });
 
     const epicDetail = (input: IssueTarget): Effect.Effect<TrackerIssueDetail, IssueTrackerError> =>
       epic(input, "getIssue").pipe(
@@ -851,55 +839,51 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
             ),
           );
 
-    const linkParent = (
+    const linkParent = Effect.fn("GitLabIssueTracker.linkParent")(function* (
       input: IssueTarget,
       child: GitLabWorkItemWithHierarchy,
       parent: GitLabWorkItem | null,
       operation: string,
-    ) =>
-      Effect.gen(function* () {
-        const widget = yield* hierarchyWidget(child, operation);
-        if (
-          child.workItemType.name !== "Task" ||
-          child.archived ||
-          !child.userPermissions.adminParentLink
-        )
+    ) {
+      const widget = yield* hierarchyWidget(child, operation);
+      if (
+        child.workItemType.name !== "Task" ||
+        child.archived ||
+        !child.userPermissions.adminParentLink
+      )
+        return yield* refused(
+          operation,
+          "Only a Task with parent-link permission in an active project can change parent.",
+        );
+      if (widget.parent !== null && !projectParent(child, widget.parent))
+        return yield* refused(operation, "The existing parent is not an Issue in this project.");
+      if (parent !== null) {
+        yield* writableParent(parent, operation);
+        if (parent.id === child.id || (parent.confidential && !child.confidential))
           return yield* refused(
             operation,
-            "Only a Task with parent-link permission in an active project can change parent.",
+            "The parent and Task have incompatible hierarchy or confidentiality.",
           );
-        if (widget.parent !== null && !projectParent(child, widget.parent))
-          return yield* refused(operation, "The existing parent is not an Issue in this project.");
-        if (parent !== null) {
-          yield* writableParent(parent, operation);
-          if (parent.id === child.id || (parent.confidential && !child.confidential))
-            return yield* refused(
-              operation,
-              "The parent and Task have incompatible hierarchy or confidentiality.",
-            );
-        } else if (
-          widget.parent !== null &&
-          (!widget.parent.userPermissions.adminParentLink || widget.parent.archived)
-        ) {
-          return yield* refused(operation, "You cannot remove this parent link.");
-        }
-        if (parent === null && widget.parent === null) return;
-        const raw = yield* nativeGraphql(input, operation, WORK_ITEM_PARENT_MUTATION, {
-          input: { id: child.id, hierarchyWidget: { parentId: parent?.id ?? null } },
-        });
-        const decoded = decodeWorkItemMutationJson(raw);
-        if (Result.isFailure(decoded)) return yield* unreadable(operation, decoded.failure);
-        const result = decoded.success.data.workItemUpdate;
-        if (result.errors.length > 0) return yield* refused(operation, result.errors.join("; "));
-        if (result.workItem === null) return yield* unreadable(operation, "missing-work-item");
-        yield* projectWorkItem(input, result.workItem, operation);
-        const updated = yield* hierarchyWidget(result.workItem, operation);
-        if (
-          result.workItem.id !== child.id ||
-          (updated.parent?.id ?? null) !== (parent?.id ?? null)
-        )
-          return yield* refused(operation, "GitLab did not save the requested parent link.");
+      } else if (
+        widget.parent !== null &&
+        (!widget.parent.userPermissions.adminParentLink || widget.parent.archived)
+      ) {
+        return yield* refused(operation, "You cannot remove this parent link.");
+      }
+      if (parent === null && widget.parent === null) return;
+      const raw = yield* nativeGraphql(input, operation, WORK_ITEM_PARENT_MUTATION, {
+        input: { id: child.id, hierarchyWidget: { parentId: parent?.id ?? null } },
       });
+      const decoded = decodeWorkItemMutationJson(raw);
+      if (Result.isFailure(decoded)) return yield* unreadable(operation, decoded.failure);
+      const result = decoded.success.data.workItemUpdate;
+      if (result.errors.length > 0) return yield* refused(operation, result.errors.join("; "));
+      if (result.workItem === null) return yield* unreadable(operation, "missing-work-item");
+      yield* projectWorkItem(input, result.workItem, operation);
+      const updated = yield* hierarchyWidget(result.workItem, operation);
+      if (result.workItem.id !== child.id || (updated.parent?.id ?? null) !== (parent?.id ?? null))
+        return yield* refused(operation, "GitLab did not save the requested parent link.");
+    });
 
     /** The signed-in account; an answer naming nobody is a failure, since every comparison needs a login. */
     const viewer = (input: {
@@ -950,82 +934,81 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
         ["page", String(page)],
       ])}`;
 
-    const awards = (
+    const awards = Effect.fn("GitLabIssueTracker.awards")(function* (
       input: IssueTarget & {
         readonly number: number;
         readonly operation: string;
         readonly cursor?: string;
         readonly order?: IssueListOrder;
       },
-    ) =>
-      Effect.gen(function* () {
-        const position = yield* cursorPosition(input, "comments", input.operation);
-        const decodedPosition =
-          position === undefined ? undefined : decodeJsonResult(CommentPosition)(position);
-        if (decodedPosition !== undefined && Result.isFailure(decodedPosition))
-          return yield* refused(input.operation, "The comments cursor is invalid.");
-        const previous =
-          decodedPosition !== undefined && Result.isSuccess(decodedPosition)
-            ? decodedPosition.success
-            : undefined;
-        if (
-          previous !== undefined &&
-          (previous.ids.length === 0 || new Set(previous.ids).size !== previous.ids.length)
-        )
-          return yield* refused(
-            input.operation,
-            "The comments cursor has contradictory note boundaries.",
-          );
-        const order = input.order ?? "desc";
-        const page = yield* read({
-          ...input,
-          path: "graphql",
-          method: "POST",
-          body: {
-            query:
-              order === "desc"
-                ? ISSUE_AWARD_EMOJI_GRAPHQL_QUERY
-                : ISSUE_AWARD_EMOJI_GRAPHQL_QUERY.replace(
-                    `notes(last: ${PAGE_SIZE}, before: $cursor)`,
-                    `notes(first: ${PAGE_SIZE}, after: $cursor)`,
-                  ).replace(
-                    "hasPreviousPage startCursor",
-                    "hasPreviousPage: hasNextPage startCursor: endCursor",
-                  ),
-            variables: {
-              fullPath: input.scope.trim(),
-              iid: String(input.number),
-              ...(previous === undefined ? {} : { cursor: previous.native }),
-            },
-          },
-          decode: (raw) => decodeIssueAwardPageJson(raw, order),
-        });
-        if (
-          page.nativeIds.length > PAGE_SIZE ||
-          new Set(page.nativeIds).size !== page.nativeIds.length ||
-          page.nativeIds.some((id) => previous?.ids.includes(id)) ||
-          (page.nextCursor !== null &&
-            (!page.nextCursor ||
-              page.nextCursor.length > 4096 ||
-              page.nativeIds.length === 0 ||
-              page.nextCursor === previous?.native))
-        )
-          return yield* refused(
-            input.operation,
-            "GitLab returned a repeated or incomplete comments page.",
-          );
-        return {
-          ...page,
-          nextCursor:
-            page.nextCursor === null
-              ? null
-              : yield* cursorFor(
-                  input,
-                  "comments",
-                  encodeBody({ native: page.nextCursor, ids: page.nativeIds }),
+    ) {
+      const position = yield* cursorPosition(input, "comments", input.operation);
+      const decodedPosition =
+        position === undefined ? undefined : decodeJsonResult(CommentPosition)(position);
+      if (decodedPosition !== undefined && Result.isFailure(decodedPosition))
+        return yield* refused(input.operation, "The comments cursor is invalid.");
+      const previous =
+        decodedPosition !== undefined && Result.isSuccess(decodedPosition)
+          ? decodedPosition.success
+          : undefined;
+      if (
+        previous !== undefined &&
+        (previous.ids.length === 0 || new Set(previous.ids).size !== previous.ids.length)
+      )
+        return yield* refused(
+          input.operation,
+          "The comments cursor has contradictory note boundaries.",
+        );
+      const order = input.order ?? "desc";
+      const page = yield* read({
+        ...input,
+        path: "graphql",
+        method: "POST",
+        body: {
+          query:
+            order === "desc"
+              ? ISSUE_AWARD_EMOJI_GRAPHQL_QUERY
+              : ISSUE_AWARD_EMOJI_GRAPHQL_QUERY.replace(
+                  `notes(last: ${PAGE_SIZE}, before: $cursor)`,
+                  `notes(first: ${PAGE_SIZE}, after: $cursor)`,
+                ).replace(
+                  "hasPreviousPage startCursor",
+                  "hasPreviousPage: hasNextPage startCursor: endCursor",
                 ),
-        };
+          variables: {
+            fullPath: input.scope.trim(),
+            iid: String(input.number),
+            ...(previous === undefined ? {} : { cursor: previous.native }),
+          },
+        },
+        decode: (raw) => decodeIssueAwardPageJson(raw, order),
       });
+      if (
+        page.nativeIds.length > PAGE_SIZE ||
+        new Set(page.nativeIds).size !== page.nativeIds.length ||
+        page.nativeIds.some((id) => previous?.ids.includes(id)) ||
+        (page.nextCursor !== null &&
+          (!page.nextCursor ||
+            page.nextCursor.length > 4096 ||
+            page.nativeIds.length === 0 ||
+            page.nextCursor === previous?.native))
+      )
+        return yield* refused(
+          input.operation,
+          "GitLab returned a repeated or incomplete comments page.",
+        );
+      return {
+        ...page,
+        nextCursor:
+          page.nextCursor === null
+            ? null
+            : yield* cursorFor(
+                input,
+                "comments",
+                encodeBody({ native: page.nextCursor, ids: page.nativeIds }),
+              ),
+      };
+    });
 
     const historyEvent = (
       phase: "notes" | "labels" | "states",
@@ -1076,236 +1059,234 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
         ...(url === undefined ? {} : { url }),
       };
     };
-    const issueHistory = (
+    const issueHistory = Effect.fn("GitLabIssueTracker.issueHistory")(function* (
       input: IssueTarget & IssuePageInput & { readonly order?: IssueListOrder },
-    ) =>
-      Effect.gen(function* () {
-        const position = yield* cursorPosition(input, "history", "getHistory");
-        const decoded =
-          position === undefined ? undefined : decodeJsonResult(HistoryPosition)(position);
-        if (decoded !== undefined && Result.isFailure(decoded))
-          return yield* refused("getHistory", "The history cursor has an invalid page or offset.");
-        const saved =
-          decoded !== undefined && Result.isSuccess(decoded) ? decoded.success : undefined;
-        if (
-          saved !== undefined &&
-          (new Set(saved.ids).size !== saved.ids.length ||
-            new Set(saved.previousIds).size !== saved.previousIds.length ||
-            (saved.ids.length === 0 && saved.offset !== 0) ||
-            (saved.page === 1 && (saved.previousIds.length !== 0 || saved.previousTime !== null)) ||
-            (saved.page > 1 &&
-              (saved.previousIds.length === 0 ||
-                saved.previousTime === null ||
-                !Number.isFinite(Date.parse(saved.previousTime)))))
-        )
-          return yield* refused(
-            "getHistory",
-            "The history cursor has contradictory page boundaries.",
-          );
-        const limit = Math.min(input.limit ?? 50, PAGE_SIZE);
-        if (!Number.isSafeInteger(limit) || limit < 1)
-          return yield* refused("getHistory", "The history page size is invalid.");
-        const { path } = yield* issuePath(input, "getHistory");
-        const order = input.order ?? "desc";
-        const compare = (left: IssueEvent, right: IssueEvent) =>
-          (order === "desc" ? -1 : 1) *
-          (Date.parse(left.createdAt) - Date.parse(right.createdAt) ||
-            left.id.localeCompare(right.id));
-        const notesPage = saved?.page ?? 1;
-        const load = (endpoint: string, page: number) =>
-          api({
-            ...input,
-            operation: "getHistory",
-            path: `${path}/${endpoint}?per_page=${PAGE_SIZE}&page=${page}${endpoint === "notes" ? `&sort=${order}&order_by=created_at` : ""}`,
-            includeHeaders: true,
-          }).pipe(
-            Effect.flatMap((raw) =>
-              Effect.gen(function* () {
-                const headers = new Map<string, string>();
-                let body = raw;
-                if (raw.startsWith("HTTP/")) {
-                  const split = /\r?\n\r?\n/.exec(raw);
-                  if (split === null)
-                    return yield* unreadable("getHistory", "missing-response-body");
-                  for (const line of raw.slice(0, split.index).split(/\r?\n/).slice(1)) {
-                    const colon = line.indexOf(":");
-                    if (colon < 1)
-                      return yield* unreadable("getHistory", "invalid-pagination-header");
-                    const key = line.slice(0, colon).toLowerCase();
-                    if (
-                      headers.has(key) &&
-                      ["x-next-page", "x-total-pages", "x-total", "link"].includes(key)
-                    )
-                      return yield* unreadable("getHistory", "duplicate-pagination-header");
-                    headers.set(key, line.slice(colon + 1).trim());
-                  }
-                  body = raw.slice(split.index + split[0].length);
-                }
-                const decodedRows = decodeJsonResult(Schema.Array(HistoryRow))(body);
-                if (Result.isFailure(decodedRows))
-                  return yield* unreadable("getHistory", decodedRows.failure);
-                const native = decodedRows.success;
-                const next = headers.get("x-next-page");
-                const totalPages = headers.get("x-total-pages");
-                const total = headers.get("x-total");
-                if (
-                  [totalPages, total].some(
-                    (value) => value !== undefined && !/^(?:0|[1-9]\d{0,8})$/.test(value),
-                  ) ||
-                  (next !== undefined &&
-                    next !== "" &&
-                    (!/^[1-9]\d{0,6}$/.test(next) || Number(next) !== page + 1)) ||
-                  (totalPages !== undefined && Number(totalPages) > 0 && page > Number(totalPages))
-                )
-                  return yield* refused(
-                    "getHistory",
-                    "GitLab returned inconsistent history pagination.",
-                  );
-                const linkMore = /<[^>]+>;\s*rel="?next"?/.test(headers.get("link") ?? "");
-                const more =
-                  next !== undefined
-                    ? next !== ""
-                    : totalPages !== undefined
-                      ? page < Number(totalPages)
-                      : total !== undefined
-                        ? page * PAGE_SIZE < Number(total)
-                        : linkMore || native.length >= PAGE_SIZE;
-                if (
-                  (linkMore && !more) ||
-                  (totalPages !== undefined && more !== page < Number(totalPages)) ||
-                  (totalPages === "0" && native.length !== 0) ||
-                  (total !== undefined && more !== page * PAGE_SIZE < Number(total)) ||
-                  (total !== undefined &&
-                    totalPages !== undefined &&
-                    Number(totalPages) !== Math.ceil(Number(total) / PAGE_SIZE) &&
-                    !(total === "0" && totalPages === "1")) ||
-                  (total !== undefined && Number(total) < native.length) ||
-                  native.length > PAGE_SIZE
-                )
-                  return yield* refused(
-                    "getHistory",
-                    "GitLab returned contradictory history pagination.",
-                  );
-                if (native.length === 0 && more)
-                  return yield* refused(
-                    "getHistory",
-                    "GitLab returned an empty continuing history page.",
-                  );
-                return {
-                  rows: native,
-                  more,
-                  complete:
-                    !more &&
-                    (next !== undefined ||
-                      totalPages !== undefined ||
-                      total !== undefined ||
-                      headers.has("link")),
-                };
-              }),
-            ),
-          );
-        const [notePage, labelPage, statePage] = yield* Effect.all(
-          [
-            load("notes", notesPage),
-            load("resource_label_events", 1),
-            load("resource_state_events", 1),
-          ],
-          { concurrency: 3 },
+    ) {
+      const position = yield* cursorPosition(input, "history", "getHistory");
+      const decoded =
+        position === undefined ? undefined : decodeJsonResult(HistoryPosition)(position);
+      if (decoded !== undefined && Result.isFailure(decoded))
+        return yield* refused("getHistory", "The history cursor has an invalid page or offset.");
+      const saved =
+        decoded !== undefined && Result.isSuccess(decoded) ? decoded.success : undefined;
+      if (
+        saved !== undefined &&
+        (new Set(saved.ids).size !== saved.ids.length ||
+          new Set(saved.previousIds).size !== saved.previousIds.length ||
+          (saved.ids.length === 0 && saved.offset !== 0) ||
+          (saved.page === 1 && (saved.previousIds.length !== 0 || saved.previousTime !== null)) ||
+          (saved.page > 1 &&
+            (saved.previousIds.length === 0 ||
+              saved.previousTime === null ||
+              !Number.isFinite(Date.parse(saved.previousTime)))))
+      )
+        return yield* refused(
+          "getHistory",
+          "The history cursor has contradictory page boundaries.",
         );
-        const rows = notePage.rows;
-        const labels = labelPage.rows;
-        const states = statePage.rows;
-        const truncated = !labelPage.complete || !statePage.complete;
-        if (
-          [labels, states].some(
-            (native) =>
-              new Set(native.map(({ id }) => id)).size !== native.length ||
-              native.some(({ created_at }) => !Number.isFinite(Date.parse(created_at))),
-          )
-        )
-          return yield* refused(
-            "getHistory",
-            "GitLab returned an inconsistent resource history page.",
-          );
-        const resources = [
-          ...labels.flatMap((row) => historyEvent("labels", row) ?? []),
-          ...states.flatMap((row) => historyEvent("states", row) ?? []),
-        ].sort(compare);
-        const resourceIds = resources.map(({ id }) => id);
-        const resourceFingerprint = Buffer.from(
-          yield* Effect.promise(() =>
-            crypto.subtle.digest("SHA-256", Buffer.from(encodeBody(resourceIds))),
+      const limit = Math.min(input.limit ?? 50, PAGE_SIZE);
+      if (!Number.isSafeInteger(limit) || limit < 1)
+        return yield* refused("getHistory", "The history page size is invalid.");
+      const { path } = yield* issuePath(input, "getHistory");
+      const order = input.order ?? "desc";
+      const compare = (left: IssueEvent, right: IssueEvent) =>
+        (order === "desc" ? -1 : 1) *
+        (Date.parse(left.createdAt) - Date.parse(right.createdAt) ||
+          left.id.localeCompare(right.id));
+      const notesPage = saved?.page ?? 1;
+      const load = (endpoint: string, page: number) =>
+        api({
+          ...input,
+          operation: "getHistory",
+          path: `${path}/${endpoint}?per_page=${PAGE_SIZE}&page=${page}${endpoint === "notes" ? `&sort=${order}&order_by=created_at` : ""}`,
+          includeHeaders: true,
+        }).pipe(
+          Effect.flatMap((raw) =>
+            Effect.gen(function* () {
+              const headers = new Map<string, string>();
+              let body = raw;
+              if (raw.startsWith("HTTP/")) {
+                const split = /\r?\n\r?\n/.exec(raw);
+                if (split === null) return yield* unreadable("getHistory", "missing-response-body");
+                for (const line of raw.slice(0, split.index).split(/\r?\n/).slice(1)) {
+                  const colon = line.indexOf(":");
+                  if (colon < 1)
+                    return yield* unreadable("getHistory", "invalid-pagination-header");
+                  const key = line.slice(0, colon).toLowerCase();
+                  if (
+                    headers.has(key) &&
+                    ["x-next-page", "x-total-pages", "x-total", "link"].includes(key)
+                  )
+                    return yield* unreadable("getHistory", "duplicate-pagination-header");
+                  headers.set(key, line.slice(colon + 1).trim());
+                }
+                body = raw.slice(split.index + split[0].length);
+              }
+              const decodedRows = decodeJsonResult(Schema.Array(HistoryRow))(body);
+              if (Result.isFailure(decodedRows))
+                return yield* unreadable("getHistory", decodedRows.failure);
+              const native = decodedRows.success;
+              const next = headers.get("x-next-page");
+              const totalPages = headers.get("x-total-pages");
+              const total = headers.get("x-total");
+              if (
+                [totalPages, total].some(
+                  (value) => value !== undefined && !/^(?:0|[1-9]\d{0,8})$/.test(value),
+                ) ||
+                (next !== undefined &&
+                  next !== "" &&
+                  (!/^[1-9]\d{0,6}$/.test(next) || Number(next) !== page + 1)) ||
+                (totalPages !== undefined && Number(totalPages) > 0 && page > Number(totalPages))
+              )
+                return yield* refused(
+                  "getHistory",
+                  "GitLab returned inconsistent history pagination.",
+                );
+              const linkMore = /<[^>]+>;\s*rel="?next"?/.test(headers.get("link") ?? "");
+              const more =
+                next !== undefined
+                  ? next !== ""
+                  : totalPages !== undefined
+                    ? page < Number(totalPages)
+                    : total !== undefined
+                      ? page * PAGE_SIZE < Number(total)
+                      : linkMore || native.length >= PAGE_SIZE;
+              if (
+                (linkMore && !more) ||
+                (totalPages !== undefined && more !== page < Number(totalPages)) ||
+                (totalPages === "0" && native.length !== 0) ||
+                (total !== undefined && more !== page * PAGE_SIZE < Number(total)) ||
+                (total !== undefined &&
+                  totalPages !== undefined &&
+                  Number(totalPages) !== Math.ceil(Number(total) / PAGE_SIZE) &&
+                  !(total === "0" && totalPages === "1")) ||
+                (total !== undefined && Number(total) < native.length) ||
+                native.length > PAGE_SIZE
+              )
+                return yield* refused(
+                  "getHistory",
+                  "GitLab returned contradictory history pagination.",
+                );
+              if (native.length === 0 && more)
+                return yield* refused(
+                  "getHistory",
+                  "GitLab returned an empty continuing history page.",
+                );
+              return {
+                rows: native,
+                more,
+                complete:
+                  !more &&
+                  (next !== undefined ||
+                    totalPages !== undefined ||
+                    total !== undefined ||
+                    headers.has("link")),
+              };
+            }),
           ),
-        ).toString("hex");
-        const previousIds = saved?.previousIds ?? [];
-        const previousTime = saved?.previousTime ?? null;
-        const moreNotes = notePage.more;
-        if (
-          saved !== undefined &&
-          (saved.resources !== resourceFingerprint ||
-            (saved.ids.length !== 0 &&
-              encodeBody(saved.ids) !== encodeBody(rows.map(({ id }) => id))) ||
-            saved.offset > rows.length ||
-            saved.resourceOffset > resources.length)
+        );
+      const [notePage, labelPage, statePage] = yield* Effect.all(
+        [
+          load("notes", notesPage),
+          load("resource_label_events", 1),
+          load("resource_state_events", 1),
+        ],
+        { concurrency: 3 },
+      );
+      const rows = notePage.rows;
+      const labels = labelPage.rows;
+      const states = statePage.rows;
+      const truncated = !labelPage.complete || !statePage.complete;
+      if (
+        [labels, states].some(
+          (native) =>
+            new Set(native.map(({ id }) => id)).size !== native.length ||
+            native.some(({ created_at }) => !Number.isFinite(Date.parse(created_at))),
         )
-          return yield* refused("getHistory", "GitLab history changed. Refresh this issue.");
-        if (
-          rows.length > PAGE_SIZE ||
-          new Set(rows.map(({ id }) => id)).size !== rows.length ||
-          rows.some(
-            (row, index) =>
-              !Number.isFinite(Date.parse(row.created_at)) ||
-              previousIds.includes(row.id) ||
-              (index > 0 &&
-                (order === "desc"
-                  ? Date.parse(row.created_at) > Date.parse(rows[index - 1]!.created_at)
-                  : Date.parse(row.created_at) < Date.parse(rows[index - 1]!.created_at))) ||
-              (previousTime !== null &&
-                (order === "desc"
-                  ? Date.parse(row.created_at) > Date.parse(previousTime)
-                  : Date.parse(row.created_at) < Date.parse(previousTime))),
-          )
+      )
+        return yield* refused(
+          "getHistory",
+          "GitLab returned an inconsistent resource history page.",
+        );
+      const resources = [
+        ...labels.flatMap((row) => historyEvent("labels", row) ?? []),
+        ...states.flatMap((row) => historyEvent("states", row) ?? []),
+      ].sort(compare);
+      const resourceIds = resources.map(({ id }) => id);
+      const resourceFingerprint = Buffer.from(
+        yield* Effect.promise(() =>
+          crypto.subtle.digest("SHA-256", Buffer.from(encodeBody(resourceIds))),
+        ),
+      ).toString("hex");
+      const previousIds = saved?.previousIds ?? [];
+      const previousTime = saved?.previousTime ?? null;
+      const moreNotes = notePage.more;
+      if (
+        saved !== undefined &&
+        (saved.resources !== resourceFingerprint ||
+          (saved.ids.length !== 0 &&
+            encodeBody(saved.ids) !== encodeBody(rows.map(({ id }) => id))) ||
+          saved.offset > rows.length ||
+          saved.resourceOffset > resources.length)
+      )
+        return yield* refused("getHistory", "GitLab history changed. Refresh this issue.");
+      if (
+        rows.length > PAGE_SIZE ||
+        new Set(rows.map(({ id }) => id)).size !== rows.length ||
+        rows.some(
+          (row, index) =>
+            !Number.isFinite(Date.parse(row.created_at)) ||
+            previousIds.includes(row.id) ||
+            (index > 0 &&
+              (order === "desc"
+                ? Date.parse(row.created_at) > Date.parse(rows[index - 1]!.created_at)
+                : Date.parse(row.created_at) < Date.parse(rows[index - 1]!.created_at))) ||
+            (previousTime !== null &&
+              (order === "desc"
+                ? Date.parse(row.created_at) > Date.parse(previousTime)
+                : Date.parse(row.created_at) < Date.parse(previousTime))),
         )
-          return yield* refused(
-            "getHistory",
-            "GitLab returned a repeated or unordered history page.",
-          );
-        const items: IssueEvent[] = [];
-        let offset = saved?.offset ?? 0;
-        let resourceOffset = saved?.resourceOffset ?? 0;
-        while (items.length < limit) {
-          while (offset < rows.length && historyEvent("notes", rows[offset]!) === null) offset++;
-          const note = rows[offset] === undefined ? null : historyEvent("notes", rows[offset]!);
-          if (note === null && moreNotes) break;
-          const resource = resources[resourceOffset];
-          if (note === null && resource === undefined) break;
-          if (resource !== undefined && (note === null || compare(resource, note) < 0)) {
-            items.push(resource);
-            resourceOffset++;
-          } else if (note !== null) {
-            items.push(note);
-            offset++;
-          }
+      )
+        return yield* refused(
+          "getHistory",
+          "GitLab returned a repeated or unordered history page.",
+        );
+      const items: IssueEvent[] = [];
+      let offset = saved?.offset ?? 0;
+      let resourceOffset = saved?.resourceOffset ?? 0;
+      while (items.length < limit) {
+        while (offset < rows.length && historyEvent("notes", rows[offset]!) === null) offset++;
+        const note = rows[offset] === undefined ? null : historyEvent("notes", rows[offset]!);
+        if (note === null && moreNotes) break;
+        const resource = resources[resourceOffset];
+        if (note === null && resource === undefined) break;
+        if (resource !== undefined && (note === null || compare(resource, note) < 0)) {
+          items.push(resource);
+          resourceOffset++;
+        } else if (note !== null) {
+          items.push(note);
+          offset++;
         }
-        const exhausted = offset === rows.length;
-        const nextCursor =
-          exhausted && !moreNotes && resourceOffset === resources.length
-            ? null
-            : yield* cursorFor(
-                input,
-                "history",
-                encodeBody({
-                  page: exhausted && moreNotes ? notesPage + 1 : notesPage,
-                  offset: exhausted && moreNotes ? 0 : offset,
-                  resourceOffset,
-                  ids: exhausted && moreNotes ? [] : rows.map(({ id }) => id),
-                  resources: resourceFingerprint,
-                  previousIds: exhausted && moreNotes ? rows.map(({ id }) => id) : previousIds,
-                  previousTime: exhausted && moreNotes ? rows.at(-1)!.created_at : previousTime,
-                }),
-              );
-        return { items, nextCursor, ...(truncated ? { truncated: true } : {}) };
-      });
+      }
+      const exhausted = offset === rows.length;
+      const nextCursor =
+        exhausted && !moreNotes && resourceOffset === resources.length
+          ? null
+          : yield* cursorFor(
+              input,
+              "history",
+              encodeBody({
+                page: exhausted && moreNotes ? notesPage + 1 : notesPage,
+                offset: exhausted && moreNotes ? 0 : offset,
+                resourceOffset,
+                ids: exhausted && moreNotes ? [] : rows.map(({ id }) => id),
+                resources: resourceFingerprint,
+                previousIds: exhausted && moreNotes ? rows.map(({ id }) => id) : previousIds,
+                previousTime: exhausted && moreNotes ? rows.at(-1)!.created_at : previousTime,
+              }),
+            );
+      return { items, nextCursor, ...(truncated ? { truncated: true } : {}) };
+    });
 
     const linked = (input: {
       readonly cwd: string;
@@ -1366,80 +1347,74 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
       kind: KIND,
       capabilities: CAPABILITIES,
 
-      getHierarchy: (input) =>
-        Effect.gen(function* () {
-          const first = Math.min(input.limit ?? 50, PAGE_SIZE);
-          if (
-            !Number.isSafeInteger(first) ||
-            first < 1 ||
-            (input.cursor !== undefined &&
-              (input.cursor.length === 0 || input.cursor.length > 4096))
-          )
-            return yield* refused("getHierarchy", "The hierarchy page is invalid.");
-          const selected = yield* workItem(input, "getHierarchy", {
-            first,
-            ...(input.cursor === undefined ? {} : { after: input.cursor }),
-          });
-          const widget = yield* hierarchyWidget(selected, "getHierarchy");
-          const children = widget.children;
-          if (
-            children === undefined ||
-            children.nodes.length > first ||
-            (children.pageInfo.hasNextPage &&
-              (!children.pageInfo.endCursor ||
-                children.pageInfo.endCursor.length > 4096 ||
-                children.pageInfo.endCursor === input.cursor))
-          )
-            return yield* refused(
-              "getHierarchy",
-              "GitLab returned an inconsistent hierarchy page.",
-            );
-          if (
-            children.nodes.some(
+      getHierarchy: Effect.fn("GitLabIssueTracker.getHierarchy")(function* (input) {
+        const first = Math.min(input.limit ?? 50, PAGE_SIZE);
+        if (
+          !Number.isSafeInteger(first) ||
+          first < 1 ||
+          (input.cursor !== undefined && (input.cursor.length === 0 || input.cursor.length > 4096))
+        )
+          return yield* refused("getHierarchy", "The hierarchy page is invalid.");
+        const selected = yield* workItem(input, "getHierarchy", {
+          first,
+          ...(input.cursor === undefined ? {} : { after: input.cursor }),
+        });
+        const widget = yield* hierarchyWidget(selected, "getHierarchy");
+        const children = widget.children;
+        if (
+          children === undefined ||
+          children.nodes.length > first ||
+          (children.pageInfo.hasNextPage &&
+            (!children.pageInfo.endCursor ||
+              children.pageInfo.endCursor.length > 4096 ||
+              children.pageInfo.endCursor === input.cursor))
+        )
+          return yield* refused("getHierarchy", "GitLab returned an inconsistent hierarchy page.");
+        if (
+          children.nodes.some(
+            (child) =>
+              child.id === selected.id ||
+              (!projectParent(child, selected) && !epicParent(child, selected)),
+          ) ||
+          new Set(children.nodes.map((child) => child.id)).size !== children.nodes.length ||
+          new Set(
+            children.nodes.map(
               (child) =>
-                child.id === selected.id ||
-                (!projectParent(child, selected) && !epicParent(child, selected)),
-            ) ||
-            new Set(children.nodes.map((child) => child.id)).size !== children.nodes.length ||
-            new Set(
-              children.nodes.map(
-                (child) =>
-                  `${child.project === null ? "group:" : ""}${child.namespace.fullPath}:${child.iid}`,
-              ),
-            ).size !== children.nodes.length ||
-            (widget.parent !== null &&
-              (widget.parent.id === selected.id ||
-                (!projectParent(selected, widget.parent) && !epicParent(selected, widget.parent))))
-          )
-            return yield* refused(
-              "getHierarchy",
-              "GitLab returned an unsupported project hierarchy.",
-            );
-          return {
-            parent:
-              widget.parent === null ? null : yield* relation(input, widget.parent, "getHierarchy"),
-            children: {
-              items: yield* Effect.forEach(children.nodes, (child) =>
-                relation(input, child, "getHierarchy"),
-              ),
-              nextCursor: children.pageInfo.hasNextPage ? children.pageInfo.endCursor : null,
-            },
-          };
-        }),
+                `${child.project === null ? "group:" : ""}${child.namespace.fullPath}:${child.iid}`,
+            ),
+          ).size !== children.nodes.length ||
+          (widget.parent !== null &&
+            (widget.parent.id === selected.id ||
+              (!projectParent(selected, widget.parent) && !epicParent(selected, widget.parent))))
+        )
+          return yield* refused(
+            "getHierarchy",
+            "GitLab returned an unsupported project hierarchy.",
+          );
+        return {
+          parent:
+            widget.parent === null ? null : yield* relation(input, widget.parent, "getHierarchy"),
+          children: {
+            items: yield* Effect.forEach(children.nodes, (child) =>
+              relation(input, child, "getHierarchy"),
+            ),
+            nextCursor: children.pageInfo.hasNextPage ? children.pageInfo.endCursor : null,
+          },
+        };
+      }),
 
-      setParent: (input) =>
-        Effect.gen(function* () {
-          if (groupPath(input.scope) !== null)
-            return yield* refused("setParent", "Group epics are read-only.");
-          if (input.parentKey === input.key)
-            return yield* refused("setParent", "An issue cannot be its own parent.");
-          const child = yield* workItem(input, "setParent");
-          const parent =
-            input.parentKey === null
-              ? null
-              : yield* workItem({ ...input, key: input.parentKey }, "setParent");
-          yield* linkParent(input, child, parent, "setParent");
-        }),
+      setParent: Effect.fn("GitLabIssueTracker.setParent")(function* (input) {
+        if (groupPath(input.scope) !== null)
+          return yield* refused("setParent", "Group epics are read-only.");
+        if (input.parentKey === input.key)
+          return yield* refused("setParent", "An issue cannot be its own parent.");
+        const child = yield* workItem(input, "setParent");
+        const parent =
+          input.parentKey === null
+            ? null
+            : yield* workItem({ ...input, key: input.parentKey }, "setParent");
+        yield* linkParent(input, child, parent, "setParent");
+      }),
 
       getViewer: (input) => viewer({ cwd: input.cwd, host: input.host, operation: "getViewer" }),
 
@@ -1681,8 +1656,8 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
       getHistory: (input) =>
         groupPath(input.scope) !== null ? epicHistory(input) : issueHistory(input),
 
-      getLinkedPullRequests: (input) =>
-        Effect.gen(function* () {
+      getLinkedPullRequests: Effect.fn("GitLabIssueTracker.getLinkedPullRequests")(
+        function* (input) {
           const match = /^(closing|related):([1-9]\d{0,6})$/.exec(input.cursor ?? "closing:1");
           if (match === null)
             return yield* refused(
@@ -1711,75 +1686,75 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
                   ? "related:1"
                   : null,
           };
-        }),
+        },
+      ),
 
       listLabelCandidates: (input) =>
         candidatePage(input, "listLabelCandidates", "labels", decodeProjectLabelsJson),
       listAssigneeCandidates: (input) =>
         candidatePage(input, "listAssigneeCandidates", "users", decodeProjectMembersJson),
 
-      create: (input) =>
-        Effect.gen(function* () {
-          if (groupPath(input.scope) !== null)
-            return yield* refused("create", "Group epics are read-only.");
-          const assignee_ids = yield* assigneeIds("create", input.assignees);
-          const parent =
-            input.parentKey === undefined
-              ? null
-              : yield* workItem({ ...input, key: input.parentKey }, "create");
-          if (parent !== null) {
-            yield* hierarchyWidget(parent, "create");
-            yield* writableParent(parent, "create");
-          }
-          const issue = yield* read({
-            cwd: input.cwd,
-            host: input.host,
-            operation: "create",
-            path: `projects/${projectPath(input.scope)}/issues`,
-            method: "POST",
-            body: {
-              title: input.title,
-              description: input.body,
-              labels: input.labels.join(","),
-              assignee_ids,
-              ...(parent === null ? {} : { issue_type: "task", confidential: parent.confidential }),
-            },
-            decode: decodeCreatedIssueJson,
-          });
-          const created = {
-            key: String(issue.number),
-            displayKey: `#${issue.number}`,
-            url: issue.url,
-            warnings: (
-              [
-                ["labels", input.labels, issue.labels],
-                ["assignees", input.assignees, issue.assigneeIds],
-              ] as const
-            ).flatMap(([field, requested, saved]) =>
-              requested.some((value) => !saved.includes(value))
-                ? [`The issue was created, but GitLab did not save the requested ${field}.`]
-                : [],
-            ),
-          };
-          if (parent === null) return created;
-          const linked = yield* Effect.gen(function* () {
-            if (issue.itemType !== "task")
-              return yield* refused("create", "GitLab did not create a native Task.");
-            const childInput = { ...input, key: created.key };
-            const child = yield* workItem(childInput, "create");
-            yield* linkParent(childInput, child, parent, "create");
-          }).pipe(Effect.result);
-          return {
-            ...created,
-            parentLinked: Result.isSuccess(linked),
-            warnings: Result.isSuccess(linked)
-              ? created.warnings
-              : [
-                  ...created.warnings,
-                  `The item was created, but its parent link could not be confirmed. ${linked.failure.detail}`,
-                ],
-          };
-        }),
+      create: Effect.fn("GitLabIssueTracker.create")(function* (input) {
+        if (groupPath(input.scope) !== null)
+          return yield* refused("create", "Group epics are read-only.");
+        const assignee_ids = yield* assigneeIds("create", input.assignees);
+        const parent =
+          input.parentKey === undefined
+            ? null
+            : yield* workItem({ ...input, key: input.parentKey }, "create");
+        if (parent !== null) {
+          yield* hierarchyWidget(parent, "create");
+          yield* writableParent(parent, "create");
+        }
+        const issue = yield* read({
+          cwd: input.cwd,
+          host: input.host,
+          operation: "create",
+          path: `projects/${projectPath(input.scope)}/issues`,
+          method: "POST",
+          body: {
+            title: input.title,
+            description: input.body,
+            labels: input.labels.join(","),
+            assignee_ids,
+            ...(parent === null ? {} : { issue_type: "task", confidential: parent.confidential }),
+          },
+          decode: decodeCreatedIssueJson,
+        });
+        const created = {
+          key: String(issue.number),
+          displayKey: `#${issue.number}`,
+          url: issue.url,
+          warnings: (
+            [
+              ["labels", input.labels, issue.labels],
+              ["assignees", input.assignees, issue.assigneeIds],
+            ] as const
+          ).flatMap(([field, requested, saved]) =>
+            requested.some((value) => !saved.includes(value))
+              ? [`The issue was created, but GitLab did not save the requested ${field}.`]
+              : [],
+          ),
+        };
+        if (parent === null) return created;
+        const linked = yield* Effect.gen(function* () {
+          if (issue.itemType !== "task")
+            return yield* refused("create", "GitLab did not create a native Task.");
+          const childInput = { ...input, key: created.key };
+          const child = yield* workItem(childInput, "create");
+          yield* linkParent(childInput, child, parent, "create");
+        }).pipe(Effect.result);
+        return {
+          ...created,
+          parentLinked: Result.isSuccess(linked),
+          warnings: Result.isSuccess(linked)
+            ? created.warnings
+            : [
+                ...created.warnings,
+                `The item was created, but its parent link could not be confirmed. ${linked.failure.detail}`,
+              ],
+        };
+      }),
 
       comment: (input) =>
         issuePath(input, "comment").pipe(

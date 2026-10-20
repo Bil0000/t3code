@@ -464,89 +464,88 @@ export const make = Effect.gen(function* () {
 
   return AzureDevOpsCli.of({
     execute,
-    getCurrentIdentity: (input) =>
-      Effect.gen(function* () {
-        const failure = (kind: string): AzureDevOpsCliError => {
-          const fields = {
-            operation: "execute" as const,
-            command: "az" as const,
-            cwd: input.cwd,
-            argumentCount: 3,
-            cause: ["runtime", "authentication", "rate-limited"].includes(kind) ? kind : "failed",
-          };
-          switch (kind) {
-            case "runtime":
-              return new AzureDevOpsCliUnavailableError(fields);
-            case "authentication":
-              return new AzureDevOpsCliAuthenticationError(fields);
-            case "rate-limited":
-              return new AzureDevOpsCliRateLimitError(fields);
-            default:
-              return new AzureDevOpsCommandFailedError(fields);
-          }
-        };
-        if (
-          input.organization.length > 2048 ||
-          input.organization.trim() !== input.organization ||
-          !ORGANIZATION_PATTERN.test(input.organization)
-        )
-          return yield* failure("failed");
-        const run = (request: SourceControlHost.SourceControlProcessInput) =>
-          process.run(request).pipe(
-            Effect.mapError((error) =>
-              failure(
-                AzureDevOpsCommandFailedError.fromVcsError(
-                  {
-                    operation: "execute",
-                    command: "az",
-                    cwd: input.cwd,
-                    argumentCount: request.args.length,
-                  },
-                  error,
-                )._tag === "AzureDevOpsCliUnavailableError"
-                  ? "runtime"
-                  : "failed",
-              ),
-            ),
-            Effect.flatMap((result) =>
-              result.exitCode !== 0 ||
-              result.stdoutTruncated ||
-              result.stderrTruncated ||
-              result.stdoutInvalidUtf8 ||
-              result.stderrInvalidUtf8
-                ? Effect.fail(failure("failed"))
-                : Effect.succeed(result.stdout),
-            ),
-          );
-        const options = {
-          operation: "AzureDevOpsCli.getCurrentIdentity",
+    getCurrentIdentity: Effect.fn("AzureDevOpsCli.getCurrentIdentity")(function* (input) {
+      const failure = (kind: string): AzureDevOpsCliError => {
+        const fields = {
+          operation: "execute" as const,
+          command: "az" as const,
           cwd: input.cwd,
-          timeoutMs: DEFAULT_TIMEOUT_MS,
-          maxOutputBytes: IDENTITY_OUTPUT_BYTES,
-          env: { AZURE_AUTO_UPGRADE_ENABLE: "false", AZURE_CORE_COLLECT_TELEMETRY: "false" },
+          argumentCount: 3,
+          cause: ["runtime", "authentication", "rate-limited"].includes(kind) ? kind : "failed",
         };
-        const version = yield* run({ ...options, command: "az", args: ["--version"] });
-        const locations = [...version.matchAll(/^Python location '([^\r\n\0]+)'\r?$/gm)];
-        const python = locations.length === 1 ? locations[0]?.[1] : undefined;
-        if (!python || !NodePath.isAbsolute(python)) return yield* failure("runtime");
-        const stdin = yield* encodeIdentityInput({ organization: input.organization }).pipe(
-          Effect.mapError(() => failure("failed")),
+        switch (kind) {
+          case "runtime":
+            return new AzureDevOpsCliUnavailableError(fields);
+          case "authentication":
+            return new AzureDevOpsCliAuthenticationError(fields);
+          case "rate-limited":
+            return new AzureDevOpsCliRateLimitError(fields);
+          default:
+            return new AzureDevOpsCommandFailedError(fields);
+        }
+      };
+      if (
+        input.organization.length > 2048 ||
+        input.organization.trim() !== input.organization ||
+        !ORGANIZATION_PATTERN.test(input.organization)
+      )
+        return yield* failure("failed");
+      const run = (request: SourceControlHost.SourceControlProcessInput) =>
+        process.run(request).pipe(
+          Effect.mapError((error) =>
+            failure(
+              AzureDevOpsCommandFailedError.fromVcsError(
+                {
+                  operation: "execute",
+                  command: "az",
+                  cwd: input.cwd,
+                  argumentCount: request.args.length,
+                },
+                error,
+              )._tag === "AzureDevOpsCliUnavailableError"
+                ? "runtime"
+                : "failed",
+            ),
+          ),
+          Effect.flatMap((result) =>
+            result.exitCode !== 0 ||
+            result.stdoutTruncated ||
+            result.stderrTruncated ||
+            result.stdoutInvalidUtf8 ||
+            result.stderrInvalidUtf8
+              ? Effect.fail(failure("failed"))
+              : Effect.succeed(result.stdout),
+          ),
         );
-        const raw = yield* run({
-          ...options,
-          command: python,
-          args: ["-B", "-c", CURRENT_IDENTITY_SCRIPT],
-          spawnCwd: NodePath.dirname(python),
-          stdin,
-        });
-        const decoded = yield* decodeIdentityOutput(raw).pipe(
-          Effect.mapError(() => failure("failed")),
-        );
-        if (decoded.error) return yield* failure(decoded.error);
-        const account = decoded.account?.trim();
-        if (!account || account.length > 1024) return yield* failure("failed");
-        return account;
-      }),
+      const options = {
+        operation: "AzureDevOpsCli.getCurrentIdentity",
+        cwd: input.cwd,
+        timeoutMs: DEFAULT_TIMEOUT_MS,
+        maxOutputBytes: IDENTITY_OUTPUT_BYTES,
+        env: { AZURE_AUTO_UPGRADE_ENABLE: "false", AZURE_CORE_COLLECT_TELEMETRY: "false" },
+      };
+      const version = yield* run({ ...options, command: "az", args: ["--version"] });
+      const locations = [...version.matchAll(/^Python location '([^\r\n\0]+)'\r?$/gm)];
+      const python = locations.length === 1 ? locations[0]?.[1] : undefined;
+      if (!python || !NodePath.isAbsolute(python)) return yield* failure("runtime");
+      const stdin = yield* encodeIdentityInput({ organization: input.organization }).pipe(
+        Effect.mapError(() => failure("failed")),
+      );
+      const raw = yield* run({
+        ...options,
+        command: python,
+        args: ["-B", "-c", CURRENT_IDENTITY_SCRIPT],
+        spawnCwd: NodePath.dirname(python),
+        stdin,
+      });
+      const decoded = yield* decodeIdentityOutput(raw).pipe(
+        Effect.mapError(() => failure("failed")),
+      );
+      if (decoded.error) return yield* failure(decoded.error);
+      const account = decoded.account?.trim();
+      if (!account || account.length > 1024) return yield* failure("failed");
+      return account;
+    }),
     listPullRequests: (input) =>
       executeJson(execute, {
         cwd: input.cwd,

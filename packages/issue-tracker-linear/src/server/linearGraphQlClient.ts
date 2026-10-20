@@ -106,13 +106,13 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  const call = <A>(
-    operation: string,
-    document: string,
-    effect: Effect.Effect<A, GraphQLClientError.GraphQLClientError, LinearGraphQlTarget>,
-    token?: string,
-  ): Effect.Effect<A, IssueTrackerError> =>
-    Effect.gen(function* () {
+  const call = Effect.fn("linearGraphQlClient.call")(
+    function* <A>(
+      operation: string,
+      document: string,
+      effect: Effect.Effect<A, GraphQLClientError.GraphQLClientError, LinearGraphQlTarget>,
+      token?: string,
+    ): Effect.fn.Return<A, IssueTrackerError> {
       const key = token ?? (yield* storedToken(operation));
       const fingerprint = yield* crypto
         .digest("SHA-256", new TextEncoder().encode(key))
@@ -145,18 +145,20 @@ export const make = Effect.gen(function* () {
           ? checkLimit(identity, scope, true).pipe(Effect.orDie)
           : Effect.succeed(lease);
       };
-      const recordLimit = (scope?: string, retryAt?: number) =>
-        Effect.gen(function* () {
-          const lease = yield* leaseFor(scope);
-          yield* rateLimits
-            .recordRateLimit({ ...rateKey, lease, retryAt })
-            .pipe(
-              Effect.provideService(
-                RateLimit.CredentialScope,
-                scopeFor(identities.get(fingerprint) ?? fingerprint, scope),
-              ),
-            );
-        });
+      const recordLimit = Effect.fn("linearGraphQlClient.recordLimit")(function* (
+        scope?: string,
+        retryAt?: number,
+      ) {
+        const lease = yield* leaseFor(scope);
+        yield* rateLimits
+          .recordRateLimit({ ...rateKey, lease, retryAt })
+          .pipe(
+            Effect.provideService(
+              RateLimit.CredentialScope,
+              scopeFor(identities.get(fingerprint) ?? fingerprint, scope),
+            ),
+          );
+      });
       const observation: Observation = {};
       const result = yield* effect.pipe(
         Effect.provideService(LinearGraphQlTarget, { key, observation }),
@@ -195,27 +197,27 @@ export const make = Effect.gen(function* () {
         names.add(namedEndpoint);
         endpoints.set(document, names);
       }
-      const recordLimits = (unknown = false) =>
-        Effect.gen(function* () {
-          const globalWindows = exhausted.filter((window) => window !== "endpoint-requests");
-          if (globalWindows.length > 0) yield* recordLimit(undefined, latestReset(globalWindows));
-          if (exhausted.includes("endpoint-requests"))
-            yield* recordLimit(namedEndpoint, latestReset(["endpoint-requests"]));
-          if (unknown && exhausted.length === 0) yield* recordLimit(undefined, retryAfter);
-        });
+      const recordLimits = Effect.fn("linearGraphQlClient.recordLimits")(function* (
+        unknown = false,
+      ) {
+        const globalWindows = exhausted.filter((window) => window !== "endpoint-requests");
+        if (globalWindows.length > 0) yield* recordLimit(undefined, latestReset(globalWindows));
+        if (exhausted.includes("endpoint-requests"))
+          yield* recordLimit(namedEndpoint, latestReset(["endpoint-requests"]));
+        if (unknown && exhausted.length === 0) yield* recordLimit(undefined, retryAfter);
+      });
       const retryAt = latestReset(exhausted);
-      const rateLimited = (cause?: string) =>
-        Effect.gen(function* () {
-          yield* recordLimits(true);
-          return yield* new IssueTrackerError({
-            tracker: KIND,
-            operation,
-            reason: "rate-limited",
-            detail: "Linear's rate limit was reached.",
-            ...(retryAt === undefined ? {} : { retryAt }),
-            ...(cause === undefined ? {} : { cause }),
-          });
+      const rateLimited = Effect.fn("linearGraphQlClient.rateLimited")(function* (cause?: string) {
+        yield* recordLimits(true);
+        return yield* new IssueTrackerError({
+          tracker: KIND,
+          operation,
+          reason: "rate-limited",
+          detail: "Linear's rate limit was reached.",
+          ...(retryAt === undefined ? {} : { retryAt }),
+          ...(cause === undefined ? {} : { cause }),
         });
+      });
       if (response.status === 429) return yield* rateLimited();
       if (response.status === 401 || response.status === 403) {
         return yield* new IssueTrackerError({
@@ -328,39 +330,41 @@ export const make = Effect.gen(function* () {
           );
       }
       return decoded;
-    }).pipe(
-      Effect.timeoutOrElse({
-        duration: "30 seconds",
-        orElse: () =>
-          Effect.fail(
-            new IssueTrackerError({
-              tracker: KIND,
-              operation,
-              reason: "failed",
-              detail: "Linear request timed out.",
-            }),
-          ),
-      }),
-    );
+    },
+    (effect, operation) =>
+      effect.pipe(
+        Effect.timeoutOrElse({
+          duration: "30 seconds",
+          orElse: () =>
+            Effect.fail(
+              new IssueTrackerError({
+                tracker: KIND,
+                operation,
+                reason: "failed",
+                detail: "Linear request timed out.",
+              }),
+            ),
+        }),
+      ),
+  );
 
   const layer = Layer.merge(
     Layer.succeed(
       LinearGraphQlAuth,
       LinearGraphQlAuth.of({
-        execute: ({ request, next }) =>
-          Effect.gen(function* () {
-            const { key, observation } = yield* LinearGraphQlTarget;
-            return yield* next({
-              ...request,
-              headers: Headers.set(request.headers, "authorization", key),
-            }).pipe(
-              Effect.tap((answer) =>
-                Effect.sync(() => {
-                  observation.answer = answer;
-                }),
-              ),
-            );
-          }),
+        execute: Effect.fn("LinearGraphQlAuth.execute")(function* ({ request, next }) {
+          const { key, observation } = yield* LinearGraphQlTarget;
+          return yield* next({
+            ...request,
+            headers: Headers.set(request.headers, "authorization", key),
+          }).pipe(
+            Effect.tap((answer) =>
+              Effect.sync(() => {
+                observation.answer = answer;
+              }),
+            ),
+          );
+        }),
         subscribe: () => Stream.empty,
       }),
     ),

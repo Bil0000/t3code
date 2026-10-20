@@ -91,46 +91,48 @@ export const makeListTemplates =
         if (commit === undefined) return { templates: [], blankIssuesEnabled: true };
       }
       const at = commit;
-      const entries = (path: string, templates = false) =>
-        Effect.gen(function* () {
-          const items: Array<typeof Entry.Type> = [];
-          const seenPaths = new Set<string>();
-          const seenCursors = new Set<string>();
-          let after: string | null = null;
-          let oid: string | undefined;
-          for (let page = 0; page < 10; page++) {
-            const query = new URLSearchParams({ oid: at, path, limit: "200" });
-            if (after !== null) query.set("after", after);
-            const result: typeof Tree.Type | null = yield* read(`tree?${query}`, Tree).pipe(
-              Effect.catchIf(
-                (error) => error.reason === "not-found" && page === 0 && !templates,
-                () => Effect.succeed(null),
-              ),
-            );
-            if (result === null) return items;
-            if (oid !== undefined && oid !== result.oid)
-              return yield* fail("GitCafe changed the template tree.");
-            oid = result.oid;
-            for (const entry of result.items) {
-              if (
-                !fileName(entry.name) ||
-                entry.path !== `${path}/${entry.name}` ||
-                seenPaths.has(entry.path)
-              )
-                return yield* fail("GitCafe returned an invalid template path.");
-              seenPaths.add(entry.path);
-              if (!templates || (entry.kind === "blob" && templatePath(entry.path)))
-                items.push(entry);
-            }
-            if (templates && items.length >= LIMIT) return items.slice(0, LIMIT);
-            if (result.next === null) return items;
-            if (seenCursors.has(result.next))
-              return yield* fail("GitCafe repeated a template tree cursor.");
-            seenCursors.add(result.next);
-            after = result.next;
+      const entries = Effect.fn("GitCafeIssueTemplates.entries")(function* (
+        path: string,
+        templates = false,
+      ) {
+        const items: Array<typeof Entry.Type> = [];
+        const seenPaths = new Set<string>();
+        const seenCursors = new Set<string>();
+        let after: string | null = null;
+        let oid: string | undefined;
+        for (let page = 0; page < 10; page++) {
+          const query = new URLSearchParams({ oid: at, path, limit: "200" });
+          if (after !== null) query.set("after", after);
+          const result: typeof Tree.Type | null = yield* read(`tree?${query}`, Tree).pipe(
+            Effect.catchIf(
+              (error) => error.reason === "not-found" && page === 0 && !templates,
+              () => Effect.succeed(null),
+            ),
+          );
+          if (result === null) return items;
+          if (oid !== undefined && oid !== result.oid)
+            return yield* fail("GitCafe changed the template tree.");
+          oid = result.oid;
+          for (const entry of result.items) {
+            if (
+              !fileName(entry.name) ||
+              entry.path !== `${path}/${entry.name}` ||
+              seenPaths.has(entry.path)
+            )
+              return yield* fail("GitCafe returned an invalid template path.");
+            seenPaths.add(entry.path);
+            if (!templates || (entry.kind === "blob" && templatePath(entry.path)))
+              items.push(entry);
           }
-          return yield* fail("GitCafe exceeds the supported template tree page limit.");
-        });
+          if (templates && items.length >= LIMIT) return items.slice(0, LIMIT);
+          if (result.next === null) return items;
+          if (seenCursors.has(result.next))
+            return yield* fail("GitCafe repeated a template tree cursor.");
+          seenCursors.add(result.next);
+          after = result.next;
+        }
+        return yield* fail("GitCafe exceeds the supported template tree page limit.");
+      });
       let candidates: Array<typeof Entry.Type> = [];
       const folders: Array<Array<typeof Entry.Type>> = [];
       let foundDirectory = false;

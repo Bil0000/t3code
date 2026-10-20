@@ -714,39 +714,42 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
       ).pipe(Effect.map((links) => links.flat()));
     };
 
-    const scopedCommentPath = (input: IssueTarget, operation: string, commentId: string) =>
-      Effect.gen(function* () {
-        const { number } = yield* issueTarget(operation, input);
-        if (!/^[1-9]\d*$/.test(commentId))
-          return yield* refused(operation, "The comment id names no Forgejo comment.");
-        const commentPath = `${repoPath(input.scope)}/issues/comments/${commentId}`;
-        const comment = yield* read(
-          input,
-          operation,
-          { path: commentPath },
-          Schema.Struct({ id: Schema.Int, issue_url: Schema.String }),
-        );
-        const url = URL.parse(comment.issue_url);
-        const segments = input.scope.split("/").map(encodeURIComponent);
-        const scopePath = segments.slice(-2).join("/");
-        const mountPath = segments.slice(0, -2).join("/");
-        const ownerPath = url?.pathname.replace(/\/$/, "");
-        const nativeScopePath = ownerPath?.split("/").slice(-4, -2).join("/");
-        const issueSuffix = `/${nativeScopePath}/issues/${number}`;
-        if (
-          String(comment.id) !== commentId ||
-          url === null ||
-          !["http:", "https:"].includes(url.protocol) ||
-          url.host.toLowerCase() !== input.host.toLowerCase() ||
-          nativeScopePath?.toLowerCase() !== scopePath.toLowerCase() ||
-          !ownerPath?.endsWith(issueSuffix) ||
-          (mountPath !== "" &&
-            ownerPath !== `/${mountPath}${issueSuffix}` &&
-            ownerPath !== `/${mountPath}/api/v1/repos${issueSuffix}`)
-        )
-          return yield* refused(operation, "The comment does not belong to this issue.");
-        return commentPath;
-      });
+    const scopedCommentPath = Effect.fn("ForgejoIssueTracker.scopedCommentPath")(function* (
+      input: IssueTarget,
+      operation: string,
+      commentId: string,
+    ) {
+      const { number } = yield* issueTarget(operation, input);
+      if (!/^[1-9]\d*$/.test(commentId))
+        return yield* refused(operation, "The comment id names no Forgejo comment.");
+      const commentPath = `${repoPath(input.scope)}/issues/comments/${commentId}`;
+      const comment = yield* read(
+        input,
+        operation,
+        { path: commentPath },
+        Schema.Struct({ id: Schema.Int, issue_url: Schema.String }),
+      );
+      const url = URL.parse(comment.issue_url);
+      const segments = input.scope.split("/").map(encodeURIComponent);
+      const scopePath = segments.slice(-2).join("/");
+      const mountPath = segments.slice(0, -2).join("/");
+      const ownerPath = url?.pathname.replace(/\/$/, "");
+      const nativeScopePath = ownerPath?.split("/").slice(-4, -2).join("/");
+      const issueSuffix = `/${nativeScopePath}/issues/${number}`;
+      if (
+        String(comment.id) !== commentId ||
+        url === null ||
+        !["http:", "https:"].includes(url.protocol) ||
+        url.host.toLowerCase() !== input.host.toLowerCase() ||
+        nativeScopePath?.toLowerCase() !== scopePath.toLowerCase() ||
+        !ownerPath?.endsWith(issueSuffix) ||
+        (mountPath !== "" &&
+          ownerPath !== `/${mountPath}${issueSuffix}` &&
+          ownerPath !== `/${mountPath}/api/v1/repos${issueSuffix}`)
+      )
+        return yield* refused(operation, "The comment does not belong to this issue.");
+      return commentPath;
+    });
 
     const pageInput = (input: Target & IssuePageInput, operation: string) => {
       const page = parsePage(input.cursor);
@@ -813,132 +816,129 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
       kind: KIND,
       capabilities: CAPABILITIES,
 
-      getDependencies: (input) =>
-        Effect.gen(function* () {
-          const operation = "getDependencies";
-          const match = /^([1-9]\d{0,6})(?::([1-9]\d?))?$/.exec(input.cursor ?? "1");
-          if (!match || Number(match[2] ?? 0) >= PAGE_SIZE)
-            return yield* refused(operation, "The cursor was not one Forgejo handed out.");
-          const page = Number(match[1]);
-          const offset = Number(match[2] ?? 0);
-          const { number } = yield* issueTarget(operation, input);
-          if (!Number.isSafeInteger(number)) return yield* notFound(operation);
-          const native = yield* dependencyRepository(input, operation);
-          const endpoint = input.direction === "blocks" ? "blocks" : "dependencies";
-          const path = `${issuePath(native.repository, number)}/${endpoint}`;
-          const result = yield* request(input, operation, {
-            path: `${path}?limit=${PAGE_SIZE}&page=${page}`,
-          });
-          if (result.stdoutTruncated || result.stderrTruncated)
-            return yield* refused(operation, "Forgejo response exceeded the output limit.");
-          const decoded = decodeJsonResult(Schema.NullOr(Schema.Array(ForgejoDependencyIssue)))(
-            result.stdout,
+      getDependencies: Effect.fn("ForgejoIssueTracker.getDependencies")(function* (input) {
+        const operation = "getDependencies";
+        const match = /^([1-9]\d{0,6})(?::([1-9]\d?))?$/.exec(input.cursor ?? "1");
+        if (!match || Number(match[2] ?? 0) >= PAGE_SIZE)
+          return yield* refused(operation, "The cursor was not one Forgejo handed out.");
+        const page = Number(match[1]);
+        const offset = Number(match[2] ?? 0);
+        const { number } = yield* issueTarget(operation, input);
+        if (!Number.isSafeInteger(number)) return yield* notFound(operation);
+        const native = yield* dependencyRepository(input, operation);
+        const endpoint = input.direction === "blocks" ? "blocks" : "dependencies";
+        const path = `${issuePath(native.repository, number)}/${endpoint}`;
+        const result = yield* request(input, operation, {
+          path: `${path}?limit=${PAGE_SIZE}&page=${page}`,
+        });
+        if (result.stdoutTruncated || result.stderrTruncated)
+          return yield* refused(operation, "Forgejo response exceeded the output limit.");
+        const decoded = decodeJsonResult(Schema.NullOr(Schema.Array(ForgejoDependencyIssue)))(
+          result.stdout,
+        );
+        if (Result.isFailure(decoded))
+          return yield* refused(
+            operation,
+            "Forgejo returned invalid dependencies.",
+            decoded.failure,
           );
-          if (Result.isFailure(decoded))
-            return yield* refused(
-              operation,
-              "Forgejo returned invalid dependencies.",
-              decoded.failure,
-            );
-          const rows = decoded.success ?? [];
-          if (rows.length > PAGE_SIZE || offset > rows.length)
-            return yield* refused(operation, "Forgejo returned an invalid dependency page.");
-          const pagination = forgejoDependencyPagination(
-            result.stderr,
-            new URL(`${native.baseUrl}/api/v1/${path}`),
-            page,
-            rows.length,
-          );
-          if (!pagination)
-            return yield* refused(operation, "Forgejo returned invalid dependency pagination.");
-          const items: IssueDependency[] = [];
-          let hidden = false;
-          let consumed = offset;
-          for (let index = 0; index < rows.length; index++) {
-            const dependency = forgejoDependency(rows[index]!, native.baseUrl);
-            if (!dependency)
-              return yield* refused(operation, "Forgejo returned an invalid dependency issue.");
-            if (dependency === "hidden") hidden = true;
-            if (index < offset || items.length >= Math.min(input.limit ?? PAGE_SIZE, PAGE_SIZE))
-              continue;
-            consumed = index + 1;
-            if (dependency !== "hidden") items.push(dependency);
-          }
-          return {
-            items,
-            nextCursor:
-              consumed < rows.length
-                ? `${page}:${consumed}`
-                : pagination.more && page < 9_999_999
-                  ? String(page + 1)
-                  : null,
-            truncated: hidden || !pagination.known || (pagination.more && page === 9_999_999),
-          };
-        }),
+        const rows = decoded.success ?? [];
+        if (rows.length > PAGE_SIZE || offset > rows.length)
+          return yield* refused(operation, "Forgejo returned an invalid dependency page.");
+        const pagination = forgejoDependencyPagination(
+          result.stderr,
+          new URL(`${native.baseUrl}/api/v1/${path}`),
+          page,
+          rows.length,
+        );
+        if (!pagination)
+          return yield* refused(operation, "Forgejo returned invalid dependency pagination.");
+        const items: IssueDependency[] = [];
+        let hidden = false;
+        let consumed = offset;
+        for (let index = 0; index < rows.length; index++) {
+          const dependency = forgejoDependency(rows[index]!, native.baseUrl);
+          if (!dependency)
+            return yield* refused(operation, "Forgejo returned an invalid dependency issue.");
+          if (dependency === "hidden") hidden = true;
+          if (index < offset || items.length >= Math.min(input.limit ?? PAGE_SIZE, PAGE_SIZE))
+            continue;
+          consumed = index + 1;
+          if (dependency !== "hidden") items.push(dependency);
+        }
+        return {
+          items,
+          nextCursor:
+            consumed < rows.length
+              ? `${page}:${consumed}`
+              : pagination.more && page < 9_999_999
+                ? String(page + 1)
+                : null,
+          truncated: hidden || !pagination.known || (pagination.more && page === 9_999_999),
+        };
+      }),
 
-      setDependency: (input) =>
-        Effect.gen(function* () {
-          const operation = "setDependency";
-          const source = forgejoDependencyScope(input.scope);
-          const target = forgejoDependencyScope(input.targetScope);
-          const number = parseNumber(input.key);
-          const targetNumber = parseNumber(input.targetKey);
-          if (
-            !source ||
-            !target ||
-            (source.mount && source.mount !== target.mount) ||
-            number === null ||
-            !Number.isSafeInteger(number) ||
-            targetNumber === null ||
-            !Number.isSafeInteger(targetNumber)
-          )
-            return yield* refused(
-              operation,
-              "Invalid Forgejo dependency target. No edge was changed.",
-            );
-          const native = yield* dependencyRepository(input, operation);
-          if (
-            target.mount &&
-            target.mount !== new URL(native.baseUrl).pathname.replace(/^\/|\/$/g, "")
-          )
-            return yield* refused(
-              operation,
-              "The dependency target belongs to a different native mount. No edge was changed.",
-            );
-          const sourceRepository = yield* getRepository(input, operation);
-          const sourceIssue = yield* readDependency(input, operation, native.baseUrl);
-          const targetInput = { ...input, scope: input.targetScope, key: input.targetKey };
-          const sameRepository =
-            source.repository.toLowerCase() === target.repository.toLowerCase();
-          const targetRepository = sameRepository
-            ? sourceRepository
-            : yield* getRepository(targetInput, operation);
-          const targetIssue = yield* readDependency(targetInput, operation, native.baseUrl);
-          const blockedRepository =
-            input.direction === "blocks" ? targetRepository : sourceRepository;
-          const blockedIssue = input.direction === "blocks" ? targetIssue : sourceIssue;
-          if (
-            sourceRepository.full_name.toLowerCase() !== source.repository.toLowerCase() ||
-            targetRepository.full_name.toLowerCase() !== target.repository.toLowerCase() ||
-            sourceIssue.kind !== "issue" ||
-            sourceRepository.archived ||
-            sourceRepository.has_issues === false ||
-            blockedRepository.archived ||
-            blockedRepository.internal_tracker?.enable_issue_dependencies === false ||
-            (blockedIssue.kind === "issue"
-              ? blockedRepository.has_issues === false
-              : blockedRepository.has_pull_requests === false)
-          )
-            return yield* refused(
-              operation,
-              "The native repository does not allow this dependency. No edge was changed.",
-            );
-          yield* write(input, operation, {
-            path: `${issuePath(input.scope, number)}/${input.direction === "blocks" ? "blocks" : "dependencies"}`,
-            method: input.linked ? "POST" : "DELETE",
-            body: { owner: target.owner, repo: target.repo, index: targetNumber },
-          });
-        }),
+      setDependency: Effect.fn("ForgejoIssueTracker.setDependency")(function* (input) {
+        const operation = "setDependency";
+        const source = forgejoDependencyScope(input.scope);
+        const target = forgejoDependencyScope(input.targetScope);
+        const number = parseNumber(input.key);
+        const targetNumber = parseNumber(input.targetKey);
+        if (
+          !source ||
+          !target ||
+          (source.mount && source.mount !== target.mount) ||
+          number === null ||
+          !Number.isSafeInteger(number) ||
+          targetNumber === null ||
+          !Number.isSafeInteger(targetNumber)
+        )
+          return yield* refused(
+            operation,
+            "Invalid Forgejo dependency target. No edge was changed.",
+          );
+        const native = yield* dependencyRepository(input, operation);
+        if (
+          target.mount &&
+          target.mount !== new URL(native.baseUrl).pathname.replace(/^\/|\/$/g, "")
+        )
+          return yield* refused(
+            operation,
+            "The dependency target belongs to a different native mount. No edge was changed.",
+          );
+        const sourceRepository = yield* getRepository(input, operation);
+        const sourceIssue = yield* readDependency(input, operation, native.baseUrl);
+        const targetInput = { ...input, scope: input.targetScope, key: input.targetKey };
+        const sameRepository = source.repository.toLowerCase() === target.repository.toLowerCase();
+        const targetRepository = sameRepository
+          ? sourceRepository
+          : yield* getRepository(targetInput, operation);
+        const targetIssue = yield* readDependency(targetInput, operation, native.baseUrl);
+        const blockedRepository =
+          input.direction === "blocks" ? targetRepository : sourceRepository;
+        const blockedIssue = input.direction === "blocks" ? targetIssue : sourceIssue;
+        if (
+          sourceRepository.full_name.toLowerCase() !== source.repository.toLowerCase() ||
+          targetRepository.full_name.toLowerCase() !== target.repository.toLowerCase() ||
+          sourceIssue.kind !== "issue" ||
+          sourceRepository.archived ||
+          sourceRepository.has_issues === false ||
+          blockedRepository.archived ||
+          blockedRepository.internal_tracker?.enable_issue_dependencies === false ||
+          (blockedIssue.kind === "issue"
+            ? blockedRepository.has_issues === false
+            : blockedRepository.has_pull_requests === false)
+        )
+          return yield* refused(
+            operation,
+            "The native repository does not allow this dependency. No edge was changed.",
+          );
+        yield* write(input, operation, {
+          path: `${issuePath(input.scope, number)}/${input.direction === "blocks" ? "blocks" : "dependencies"}`,
+          method: input.linked ? "POST" : "DELETE",
+          body: { owner: target.owner, repo: target.repo, index: targetNumber },
+        });
+      }),
 
       getViewer: (input) => getViewer({ ...input, scope: "" }, "getViewer"),
 
@@ -1118,47 +1118,46 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
           ),
         ),
 
-      update: (input) =>
-        Effect.gen(function* () {
-          const { path } = yield* issueTarget("update", input);
-          const labels =
-            input.labels === undefined
-              ? undefined
-              : yield* labelIds(input, "update", input.labels, path);
-          if (
-            input.title !== undefined ||
-            input.body !== undefined ||
-            input.assignees !== undefined
-          ) {
-            const issue = yield* read(
-              input,
-              "update",
-              {
-                path,
-                method: "PATCH",
-                body: {
-                  ...(input.title === undefined ? {} : { title: input.title }),
-                  ...(input.body === undefined ? {} : { body: input.body }),
-                  ...(input.assignees === undefined ? {} : { assignees: input.assignees }),
-                },
-              },
-              ForgejoIssue,
-            );
-            if (input.assignees !== undefined && !assigneesMatch(input.assignees, issue.assignees))
-              return yield* refused(
-                "update",
-                "Forgejo did not apply the requested assignees. Other fields may have changed.",
-              );
-          }
-          if (labels !== undefined)
-            yield* write(input, "update", {
-              path: `${path}/labels`,
-              method: "PUT",
+      update: Effect.fn("ForgejoIssueTracker.update")(function* (input) {
+        const { path } = yield* issueTarget("update", input);
+        const labels =
+          input.labels === undefined
+            ? undefined
+            : yield* labelIds(input, "update", input.labels, path);
+        if (
+          input.title !== undefined ||
+          input.body !== undefined ||
+          input.assignees !== undefined
+        ) {
+          const issue = yield* read(
+            input,
+            "update",
+            {
+              path,
+              method: "PATCH",
               body: {
-                labels,
+                ...(input.title === undefined ? {} : { title: input.title }),
+                ...(input.body === undefined ? {} : { body: input.body }),
+                ...(input.assignees === undefined ? {} : { assignees: input.assignees }),
               },
-            });
-        }),
+            },
+            ForgejoIssue,
+          );
+          if (input.assignees !== undefined && !assigneesMatch(input.assignees, issue.assignees))
+            return yield* refused(
+              "update",
+              "Forgejo did not apply the requested assignees. Other fields may have changed.",
+            );
+        }
+        if (labels !== undefined)
+          yield* write(input, "update", {
+            path: `${path}/labels`,
+            method: "PUT",
+            body: {
+              labels,
+            },
+          });
+      }),
 
       setState: (input) =>
         !CAPABILITIES.states.some((state) => state.name === input.state)
@@ -1169,20 +1168,19 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
               ),
             ),
 
-      setReaction: (input) =>
-        Effect.gen(function* () {
-          const { path } = yield* issueTarget("setReaction", input);
-          let reactionPath = `${path}/reactions`;
-          if (input.subjectId !== undefined) {
-            const commentPath = yield* scopedCommentPath(input, "setReaction", input.subjectId);
-            reactionPath = `${commentPath}/reactions`;
-          }
-          yield* write(input, "setReaction", {
-            path: reactionPath,
-            method: input.reacted ? "POST" : "DELETE",
-            body: { content: FORGEJO_REACTIONS[input.content] },
-          });
-        }),
+      setReaction: Effect.fn("ForgejoIssueTracker.setReaction")(function* (input) {
+        const { path } = yield* issueTarget("setReaction", input);
+        let reactionPath = `${path}/reactions`;
+        if (input.subjectId !== undefined) {
+          const commentPath = yield* scopedCommentPath(input, "setReaction", input.subjectId);
+          reactionPath = `${commentPath}/reactions`;
+        }
+        yield* write(input, "setReaction", {
+          path: reactionPath,
+          method: input.reacted ? "POST" : "DELETE",
+          body: { content: FORGEJO_REACTIONS[input.content] },
+        });
+      }),
 
       editComment: (input) =>
         scopedCommentPath(input, "editComment", input.commentId).pipe(
@@ -1191,77 +1189,70 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
           ),
         ),
 
-      getHistory: (input) =>
-        Effect.gen(function* () {
-          const order = input.order ?? "desc";
-          if (order !== "asc")
-            return yield* refused(
-              "getHistory",
-              "Forgejo supports oldest-first issue history only.",
-            );
-          const { path } = yield* issueTarget("getHistory", input);
-          const state = yield* readCursor(
-            input,
-            "history",
-            input.cursor,
-            order,
-            input.limit ?? PAGE_SIZE,
-          );
-          const { page, limit } = yield* pageInput(
-            { ...input, cursor: state?.native },
+      getHistory: Effect.fn("ForgejoIssueTracker.getHistory")(function* (input) {
+        const order = input.order ?? "desc";
+        if (order !== "asc")
+          return yield* refused("getHistory", "Forgejo supports oldest-first issue history only.");
+        const { path } = yield* issueTarget("getHistory", input);
+        const state = yield* readCursor(
+          input,
+          "history",
+          input.cursor,
+          order,
+          input.limit ?? PAGE_SIZE,
+        );
+        const { page, limit } = yield* pageInput({ ...input, cursor: state?.native }, "getHistory");
+        const rows = yield* readPage(
+          input,
+          "getHistory",
+          `${path}/timeline`,
+          page,
+          ForgejoTimelineEntry,
+          limit,
+        );
+        if (
+          new Set(rows.rows.map((row) => row.id)).size !== rows.rows.length ||
+          rows.rows.length > limit ||
+          (state?.lastId !== undefined &&
+            rows.rows.some(
+              (row) =>
+                Date.parse(row.created_at) < Date.parse(state.lastAt ?? "") ||
+                (Date.parse(row.created_at) === Date.parse(state.lastAt ?? "") &&
+                  row.id <= state.lastId!),
+            ))
+        )
+          return yield* refused(
             "getHistory",
+            "Forgejo returned a repeated or invalid history page.",
           );
-          const rows = yield* readPage(
-            input,
-            "getHistory",
-            `${path}/timeline`,
-            page,
-            ForgejoTimelineEntry,
-            limit,
-          );
-          if (
-            new Set(rows.rows.map((row) => row.id)).size !== rows.rows.length ||
-            rows.rows.length > limit ||
-            (state?.lastId !== undefined &&
-              rows.rows.some(
-                (row) =>
-                  Date.parse(row.created_at) < Date.parse(state.lastAt ?? "") ||
-                  (Date.parse(row.created_at) === Date.parse(state.lastAt ?? "") &&
-                    row.id <= state.lastId!),
-              ))
-          )
-            return yield* refused(
-              "getHistory",
-              "Forgejo returned a repeated or invalid history page.",
-            );
-          return {
-            items: rows.rows.flatMap((row): IssueEvent[] =>
-              row.type === "comment"
-                ? []
-                : [
-                    forgejoIssueEvent(row) ?? {
-                      id: String(row.id),
-                      kind: "updated",
-                      actor: forgejoActor(row.user),
-                      createdAt: row.created_at,
-                      detail: row.body?.trim() || row.type.replaceAll("_", " "),
-                      ...forgejoIssueEventLinks(row),
-                    },
-                  ],
-            ),
-            nextCursor: yield* saveCursor(
-              cursorIdentity(input, "history", order, input.limit ?? PAGE_SIZE),
-              rows.nextCursor,
-              rows.rows.at(-1)?.id,
-              undefined,
-              rows.rows.at(-1)?.created_at,
-            ),
-            truncated: true,
-          };
-        }),
+        return {
+          items: rows.rows.flatMap((row): IssueEvent[] =>
+            row.type === "comment"
+              ? []
+              : [
+                  forgejoIssueEvent(row) ?? {
+                    id: String(row.id),
+                    kind: "updated",
+                    actor: forgejoActor(row.user),
+                    createdAt: row.created_at,
+                    detail: row.body?.trim() || row.type.replaceAll("_", " "),
+                    ...forgejoIssueEventLinks(row),
+                  },
+                ],
+          ),
+          nextCursor: yield* saveCursor(
+            cursorIdentity(input, "history", order, input.limit ?? PAGE_SIZE),
+            rows.nextCursor,
+            rows.rows.at(-1)?.id,
+            undefined,
+            rows.rows.at(-1)?.created_at,
+          ),
+          truncated: true,
+        };
+      }),
 
-      getLinkedPullRequests: (input) =>
-        Effect.gen(function* () {
+      getLinkedPullRequests: Effect.fn("ForgejoIssueTracker.getLinkedPullRequests")(
+        function* (input) {
           const { path } = yield* issueTarget("getLinkedPullRequests", input);
           const { page, limit } = yield* pageInput(input, "getLinkedPullRequests");
           const rows = yield* readPage(
@@ -1277,48 +1268,48 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
             nextCursor: rows.nextCursor,
             truncated: !rows.paginationKnown,
           };
-        }),
+        },
+      ),
 
-      listLabelCandidates: (input) =>
-        Effect.gen(function* () {
-          const match = /^(repo|org):([1-9]\d{0,6})$/.exec(input.cursor ?? "repo:1");
-          if (match === null)
-            return yield* refused(
+      listLabelCandidates: Effect.fn("ForgejoIssueTracker.listLabelCandidates")(function* (input) {
+        const match = /^(repo|org):([1-9]\d{0,6})$/.exec(input.cursor ?? "repo:1");
+        if (match === null)
+          return yield* refused(
+            "listLabelCandidates",
+            "The cursor was not one Forgejo handed out.",
+          );
+        const limit = Math.min(input.limit ?? PAGE_SIZE, PAGE_SIZE);
+        const page = Number(match[2]);
+        const org = match[1] === "org";
+        const rows = yield* org
+          ? organizationLabels(input, "listLabelCandidates", page, limit)
+          : readPage(
+              input,
               "listLabelCandidates",
-              "The cursor was not one Forgejo handed out.",
+              `${repoPath(input.scope)}/labels`,
+              page,
+              ForgejoLabel,
+              limit,
             );
-          const limit = Math.min(input.limit ?? PAGE_SIZE, PAGE_SIZE);
-          const page = Number(match[2]);
-          const org = match[1] === "org";
-          const rows = yield* org
-            ? organizationLabels(input, "listLabelCandidates", page, limit)
-            : readPage(
-                input,
-                "listLabelCandidates",
-                `${repoPath(input.scope)}/labels`,
-                page,
-                ForgejoLabel,
-                limit,
-              );
-          return {
-            items: rows.rows.map((label) => ({
-              id: `forgejo-label:${label.id}`,
-              name: label.name,
-              color: label.color ?? null,
-              description: label.description ?? null,
-            })),
-            nextCursor:
-              rows.nextCursor === null
-                ? org
-                  ? null
-                  : "org:1"
-                : `${org ? "org" : "repo"}:${rows.nextCursor}`,
-            truncated: !rows.paginationKnown,
-          };
-        }),
+        return {
+          items: rows.rows.map((label) => ({
+            id: `forgejo-label:${label.id}`,
+            name: label.name,
+            color: label.color ?? null,
+            description: label.description ?? null,
+          })),
+          nextCursor:
+            rows.nextCursor === null
+              ? org
+                ? null
+                : "org:1"
+              : `${org ? "org" : "repo"}:${rows.nextCursor}`,
+          truncated: !rows.paginationKnown,
+        };
+      }),
 
-      listAssigneeCandidates: (input) =>
-        Effect.gen(function* () {
+      listAssigneeCandidates: Effect.fn("ForgejoIssueTracker.listAssigneeCandidates")(
+        function* (input) {
           const { page, limit } = yield* pageInput(input, "listAssigneeCandidates");
           const rows = yield* readPage(
             input,
@@ -1336,7 +1327,8 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
             nextCursor: rows.nextCursor,
             truncated: !rows.paginationKnown,
           };
-        }),
+        },
+      ),
 
       listTemplates: (input) =>
         Effect.all(

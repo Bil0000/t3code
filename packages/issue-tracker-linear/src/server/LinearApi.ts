@@ -510,8 +510,8 @@ export const make = Effect.gen(function* () {
         });
       }),
     );
-  const listScopes: LinearApi["Service"]["listScopes"] = (token, input) =>
-    Effect.gen(function* () {
+  const listScopes: LinearApi["Service"]["listScopes"] = Effect.fn("LinearApi.listScopes")(
+    function* (token, input) {
       const limit = input.limit ?? 100;
       if (
         !Number.isInteger(limit) ||
@@ -538,7 +538,8 @@ export const make = Effect.gen(function* () {
       )
         return yield* fail("listScopes", "failed", "Linear returned an inconsistent team page.");
       return { organization: data.organization, teams: data.teams.nodes, nextCursor: cursor };
-    });
+    },
+  );
   const getScope: LinearApi["Service"]["getScope"] = (key, token) =>
     execute("getScope", client.T3Scope, { key }, token).pipe(
       Effect.map((data) =>
@@ -751,99 +752,93 @@ export const make = Effect.gen(function* () {
         ],
       },
     });
-  const listAssigneeCandidates: LinearApi["Service"]["listAssigneeCandidates"] = (input) =>
-    Effect.gen(function* () {
-      const data = yield* execute("listAssigneeCandidates", client.T3AssigneeCandidates, {
-        key: input.key,
-        first: input.first,
-        after: input.after ?? null,
-        publicTeam: input.visibility !== undefined && input.visibility !== "private",
-        readMembers: input.visibility === "private",
-        restricted: input.visibility === "restricted",
-        membershipTeamIds: input.membershipTeamIds ?? [],
-        filter: {
-          active: { eq: true },
-          ...(input.id === undefined ? {} : { id: { eq: input.id } }),
-        },
-      });
-      const team = data.teams.nodes[0];
-      if (team === undefined) return { organization: data.organization, teams: { nodes: [] } };
-      if (
-        input.workspace !== undefined &&
-        data.organization.urlKey.toLowerCase() !== input.workspace
-      )
-        return yield* fail(
-          "listAssigneeCandidates",
-          "failed",
-          "This scope belongs to another Linear workspace.",
-        );
-      const teamIds = assigneeTeamIds(team);
-      if (
-        teamIds === null ||
-        (input.visibility !== undefined &&
-          (team.visibility !== input.visibility ||
-            input.membershipTeamIds === undefined ||
-            teamIds.length !== input.membershipTeamIds.length ||
-            teamIds.some((id, index) => id !== input.membershipTeamIds?.[index])))
-      )
-        return yield* fail(
-          "listAssigneeCandidates",
-          "failed",
-          "This Linear team's privacy changed.",
-        );
-      if (input.visibility === undefined) {
-        const page = yield* listAssigneeCandidates({
-          ...input,
-          visibility: team.visibility,
-          membershipTeamIds: teamIds,
-        });
-        if (
-          page.organization.id !== data.organization.id ||
-          page.organization.urlKey !== data.organization.urlKey ||
-          page.teams.nodes[0]?.id !== team.id
-        )
-          return yield* fail(
-            "listAssigneeCandidates",
-            "failed",
-            "This Linear team or workspace changed.",
-          );
-        return page;
-      }
-      const members = input.visibility === "private" ? team.members : data.users;
-      if (members === undefined)
-        return yield* fail(
-          "listAssigneeCandidates",
-          "failed",
-          "Linear omitted the assignee candidates.",
-        );
-      if (
-        members.nodes.length > input.first ||
-        (input.visibility === "restricted" &&
-          data.users?.nodes.some((user) => user.teams === undefined))
-      )
-        return yield* fail(
-          "listAssigneeCandidates",
-          "failed",
-          "Linear returned invalid assignee membership data.",
-        );
-      const eligibleUsers =
-        input.visibility === "restricted"
-          ? data.users!.nodes.filter((user) =>
-              user.teams!.nodes.some(({ id }) => teamIds.includes(id)),
-            )
-          : members.nodes;
-      return {
-        organization: data.organization,
-        teams: {
-          nodes: [
-            {
-              ...team,
-              members: { ...members, nodes: eligibleUsers.filter((user) => user.active) },
-            },
-          ],
-        },
-      };
+  const listAssigneeCandidates: LinearApi["Service"]["listAssigneeCandidates"] = Effect.fn(
+    "LinearApi.listAssigneeCandidates",
+  )(function* (input) {
+    const data = yield* execute("listAssigneeCandidates", client.T3AssigneeCandidates, {
+      key: input.key,
+      first: input.first,
+      after: input.after ?? null,
+      publicTeam: input.visibility !== undefined && input.visibility !== "private",
+      readMembers: input.visibility === "private",
+      restricted: input.visibility === "restricted",
+      membershipTeamIds: input.membershipTeamIds ?? [],
+      filter: {
+        active: { eq: true },
+        ...(input.id === undefined ? {} : { id: { eq: input.id } }),
+      },
     });
+    const team = data.teams.nodes[0];
+    if (team === undefined) return { organization: data.organization, teams: { nodes: [] } };
+    if (input.workspace !== undefined && data.organization.urlKey.toLowerCase() !== input.workspace)
+      return yield* fail(
+        "listAssigneeCandidates",
+        "failed",
+        "This scope belongs to another Linear workspace.",
+      );
+    const teamIds = assigneeTeamIds(team);
+    if (
+      teamIds === null ||
+      (input.visibility !== undefined &&
+        (team.visibility !== input.visibility ||
+          input.membershipTeamIds === undefined ||
+          teamIds.length !== input.membershipTeamIds.length ||
+          teamIds.some((id, index) => id !== input.membershipTeamIds?.[index])))
+    )
+      return yield* fail("listAssigneeCandidates", "failed", "This Linear team's privacy changed.");
+    if (input.visibility === undefined) {
+      const page = yield* listAssigneeCandidates({
+        ...input,
+        visibility: team.visibility,
+        membershipTeamIds: teamIds,
+      });
+      if (
+        page.organization.id !== data.organization.id ||
+        page.organization.urlKey !== data.organization.urlKey ||
+        page.teams.nodes[0]?.id !== team.id
+      )
+        return yield* fail(
+          "listAssigneeCandidates",
+          "failed",
+          "This Linear team or workspace changed.",
+        );
+      return page;
+    }
+    const members = input.visibility === "private" ? team.members : data.users;
+    if (members === undefined)
+      return yield* fail(
+        "listAssigneeCandidates",
+        "failed",
+        "Linear omitted the assignee candidates.",
+      );
+    if (
+      members.nodes.length > input.first ||
+      (input.visibility === "restricted" &&
+        data.users?.nodes.some((user) => user.teams === undefined))
+    )
+      return yield* fail(
+        "listAssigneeCandidates",
+        "failed",
+        "Linear returned invalid assignee membership data.",
+      );
+    const eligibleUsers =
+      input.visibility === "restricted"
+        ? data.users!.nodes.filter((user) =>
+            user.teams!.nodes.some(({ id }) => teamIds.includes(id)),
+          )
+        : members.nodes;
+    return {
+      organization: data.organization,
+      teams: {
+        nodes: [
+          {
+            ...team,
+            members: { ...members, nodes: eligibleUsers.filter((user) => user.active) },
+          },
+        ],
+      },
+    };
+  });
   const updateComment: LinearApi["Service"]["updateComment"] = (id, body) =>
     mutate("editComment", client.T3CommentUpdate, { id, input: { body } });
 

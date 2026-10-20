@@ -41,16 +41,15 @@ export function createIssueTrackerEnvironmentAtoms<R, E>(
     connections,
     scopes: createEnvironmentQueryAtomFamily(runtime, {
       label: "environment-data:issue-trackers:scopes",
-      execute: (input: IssueTrackerScopesInput) =>
-        Effect.gen(function* () {
-          const registry = yield* AtomRegistry.AtomRegistry;
-          const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
-          const result = yield* Effect.promise(() =>
-            readScopes.run(registry, { environmentId: supervisor.target.environmentId, input }),
-          );
-          if (result._tag === "Failure") return yield* Effect.failCause(result.cause);
-          return result.value;
-        }),
+      execute: Effect.fn("issueTrackers.readScopes")(function* (input: IssueTrackerScopesInput) {
+        const registry = yield* AtomRegistry.AtomRegistry;
+        const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
+        const result = yield* Effect.promise(() =>
+          readScopes.run(registry, { environmentId: supervisor.target.environmentId, input }),
+        );
+        if (result._tag === "Failure") return yield* Effect.failCause(result.cause);
+        return result.value;
+      }),
     }),
     /** Saves a credential the tracker accepted, or removes the stored one with a null token. */
     connect: createEnvironmentRpcCommand(runtime, {
