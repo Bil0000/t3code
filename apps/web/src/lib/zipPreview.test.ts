@@ -620,6 +620,22 @@ describe("loadZipPreview", () => {
     }
   });
 
+  it.each([0, 2])("rejects an EOCD count of %s for a one-file directory", async (count) => {
+    const bytes = await (await archive(new JSZip().file("a.txt", "hello"))).arrayBuffer();
+    const view = new DataView(bytes);
+    view.setUint16(bytes.byteLength - 22 + 8, count, true);
+    view.setUint16(bytes.byteLength - 22 + 10, count, true);
+    const parse = vi.spyOn(JSZip.prototype, "loadAsync");
+    try {
+      await expect(loadZipPreview(new Blob([bytes]), signal())).rejects.toThrow(
+        /corrupt|valid ZIP/i,
+      );
+      expect(parse).not.toHaveBeenCalled();
+    } finally {
+      parse.mockRestore();
+    }
+  });
+
   it("accepts an ordinary ZIP comment and prepended data", async () => {
     const zip = new JSZip().file("a.txt", "hello");
     const bytes = await zip.generateAsync({ type: "arraybuffer", comment: "Archive notes" });

@@ -84,7 +84,6 @@ function checkArchiveDirectory(bytes: ArrayBuffer) {
   }
   if (count > MAX_FILES + MAX_FOLDERS) throw new Error(ENTRY_LIMIT_ERROR);
   let offset = end - directorySize;
-  let actualCount = 0;
   let fileCount = 0;
   let folderCount = 0;
   const checksums: number[] = [];
@@ -93,7 +92,6 @@ function checkArchiveDirectory(bytes: ArrayBuffer) {
     if (offset + 46 > end || view.getUint32(offset, true) !== 0x02014b50) {
       throw new Error(INVALID_ARCHIVE_ERROR);
     }
-    if (++actualCount > MAX_FILES + MAX_FOLDERS) throw new Error(ENTRY_LIMIT_ERROR);
     const nameLength = view.getUint16(offset + 28, true);
     const nextOffset =
       offset +
@@ -130,7 +128,7 @@ function checkArchiveDirectory(bytes: ArrayBuffer) {
     checksums.push(view.getInt32(offset + 16, true));
     offset = nextOffset;
   }
-  if (offset !== end || actualCount !== count) throw new Error(INVALID_ARCHIVE_ERROR);
+  if (offset !== end || checksums.length !== count) throw new Error(INVALID_ARCHIVE_ERROR);
   return checksums;
 }
 
