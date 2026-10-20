@@ -121,13 +121,93 @@ it.layer(Broker.layer.pipe(Layer.provide(NodeServices.layer)), { timeout: "10 se
         }),
     );
 
+    it.effect("lists the online target regardless of client registration order", () =>
+      Effect.gen(function* () {
+        const broker = yield* Broker.EnvironmentReadBroker;
+        for (const status of ["offline", "unsupported", "permission-denied"] as const) {
+          for (const onlineFirst of [true, false]) {
+            yield* Effect.scoped(
+              Effect.gen(function* () {
+                const unavailable = {
+                  clientId: "unavailable",
+                  environments: [{ ...registration.environments[0]!, name: "Unavailable", status }],
+                };
+                for (const client of onlineFirst
+                  ? [registration, unavailable]
+                  : [unavailable, registration]) {
+                  const ready = yield* Deferred.make<void>();
+                  yield* broker.connect(owner, client).pipe(
+                    Stream.runForEach(() => Deferred.succeed(ready, undefined)),
+                    Effect.forkScoped,
+                  );
+                  yield* Deferred.await(ready);
+                }
+                expect(yield* broker.list(owner.sessionId)).toEqual(registration.environments);
+                expect(yield* broker.list()).toEqual(registration.environments);
+              }),
+            );
+          }
+        }
+      }),
+    );
+
+    it.effect("routes reads through an online client regardless of registration order", () =>
+      Effect.gen(function* () {
+        const broker = yield* Broker.EnvironmentReadBroker;
+        for (const status of ["offline", "unsupported", "permission-denied"] as const) {
+          for (const onlineFirst of [true, false]) {
+            yield* Effect.scoped(
+              Effect.gen(function* () {
+                const unavailable = {
+                  clientId: "unavailable",
+                  environments: [{ ...registration.environments[0]!, status }],
+                };
+                for (const client of onlineFirst
+                  ? [registration, unavailable]
+                  : [unavailable, registration]) {
+                  const ready = yield* Deferred.make<void>();
+                  yield* broker.connect(owner, client).pipe(
+                    Stream.runForEach((event) =>
+                      event.type === "connected"
+                        ? Deferred.succeed(ready, undefined)
+                        : broker.respond(owner, {
+                            clientId: client.clientId,
+                            connectionId: event.connectionId,
+                            requestId: event.requestId,
+                            response: { status: "ok", result },
+                          }),
+                    ),
+                    Effect.forkScoped,
+                  );
+                  yield* Deferred.await(ready);
+                }
+                expect(yield* broker.invoke(owner.sessionId, environmentId, request)).toEqual(
+                  result,
+                );
+                expect(yield* broker.invoke(undefined, environmentId, request)).toEqual(result);
+              }),
+            );
+          }
+        }
+      }),
+    );
+
     it.effect("does not mix registries from different authenticated clients", () =>
       Effect.gen(function* () {
         const broker = yield* Broker.EnvironmentReadBroker;
         const readyA = yield* Deferred.make<void>();
         const readyB = yield* Deferred.make<void>();
         yield* broker.connect(owner, registration).pipe(
-          Stream.runForEach(() => Deferred.succeed(readyA, undefined)),
+          Stream.runForEach((event) =>
+            event.type === "connected"
+              ? Deferred.succeed(readyA, undefined)
+              : broker.respond(owner, {
+                  clientId: registration.clientId,
+                  connectionId: event.connectionId,
+                  requestId: event.requestId,
+                  response: { status: "ok", result },
+                }),
+          ),
           Effect.forkScoped,
         );
         yield* broker
@@ -135,7 +215,9 @@ it.layer(Broker.layer.pipe(Layer.provide(NodeServices.layer)), { timeout: "10 se
             { sessionId: "session-b", socketId: "b" },
             {
               ...registration,
-              environments: [{ ...registration.environments[0]!, name: "Other" }],
+              environments: [
+                { ...registration.environments[0]!, name: "Other", status: "offline" },
+              ],
             },
           )
           .pipe(
@@ -145,7 +227,17 @@ it.layer(Broker.layer.pipe(Layer.provide(NodeServices.layer)), { timeout: "10 se
         yield* Deferred.await(readyA);
         yield* Deferred.await(readyB);
         expect(yield* broker.list(owner.sessionId)).toEqual(registration.environments);
+        expect(yield* broker.list("session-b")).toEqual([
+          { ...registration.environments[0]!, name: "Other", status: "offline" },
+        ]);
         expect(yield* broker.list("unrelated")).toEqual([]);
+        expect(yield* broker.invoke(owner.sessionId, environmentId, request)).toEqual(result);
+        expect(
+          (yield* broker.invoke("session-b", environmentId, request).pipe(Effect.flip)).code,
+        ).toBe("offline");
+        expect(
+          (yield* broker.invoke("unrelated", environmentId, request).pipe(Effect.flip)).code,
+        ).toBe("offline");
         expect((yield* broker.list().pipe(Effect.flip)).code).toBe("permission-denied");
         expect(
           (yield* broker.invoke(undefined, environmentId, request).pipe(Effect.flip)).code,

@@ -122,15 +122,15 @@ const make = Effect.gen(function* () {
 
   const list = Effect.fn("EnvironmentReadBroker.list")(function* (sessionId?: string) {
     const selected = yield* selectConnections(sessionId);
-    return [
-      ...new Map(
-        selected.flatMap((connection) =>
-          connection.registration.environments.map(
-            (target) => [target.environmentId, target] as const,
-          ),
-        ),
-      ).values(),
-    ].slice(0, 100);
+    const targets = new Map<EnvironmentId, EnvironmentReadTarget>();
+    for (const connection of selected) {
+      for (const target of connection.registration.environments) {
+        if (target.status === "online" || targets.get(target.environmentId)?.status !== "online") {
+          targets.set(target.environmentId, target);
+        }
+      }
+    }
+    return [...targets.values()].slice(0, 100);
   });
 
   const respond = Effect.fn("EnvironmentReadBroker.respond")(function* (
@@ -189,7 +189,12 @@ const make = Effect.gen(function* () {
     request: EnvironmentReadRequest,
   ) {
     const selected = yield* selectConnections(sessionId, environmentId);
-    const connection = selected.at(-1);
+    const connection =
+      selected.findLast((connection) =>
+        connection.registration.environments.some(
+          (target) => target.environmentId === environmentId && target.status === "online",
+        ),
+      ) ?? selected.at(-1);
     const target = connection?.registration.environments.find(
       (entry) => entry.environmentId === environmentId,
     );
