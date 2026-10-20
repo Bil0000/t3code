@@ -1,5 +1,6 @@
 import {
   type IssueDetail,
+  type IssueSummary,
   type IssueRef,
   type IssueTrackerKind,
   type OrchestrationV2ThreadShell,
@@ -40,6 +41,31 @@ function listThreadIssues(
       title: link.snapshot?.title ?? null,
       state: link.snapshot?.state ?? null,
     })),
+  };
+}
+
+function summaryFields(issue: IssueSummary) {
+  return {
+    ...(issue.itemType === undefined ? {} : { itemType: issue.itemType }),
+    displayKey: issue.displayKey,
+    title: issue.title,
+    state: issue.state,
+    author: issue.author?.login ?? null,
+    authorDetails: issue.author,
+    assigneeDetails: issue.assignees,
+    assignees: issue.assignees.map((actor) => actor.login),
+    labels: issue.labels.map((label) => label.name),
+    labelDetails: issue.labels,
+    ...(issue.labelsTruncated === undefined ? {} : { labelsTruncated: issue.labelsTruncated }),
+    ...(issue.milestone === undefined ? {} : { milestone: issue.milestone }),
+    createdAt: issue.createdAt,
+    updatedAt: issue.updatedAt,
+    closedAt: issue.closedAt,
+    commentCount: issue.commentCount,
+    ...(issue.reactions === undefined ? {} : { reactions: issue.reactions }),
+    ...(issue.reactionsTruncated === undefined
+      ? {}
+      : { reactionsTruncated: issue.reactionsTruncated }),
   };
 }
 
@@ -136,6 +162,24 @@ const make = Effect.gen(function* () {
     key: target.key,
   });
 
+  const readsTarget = <P extends IssueTargetInput, A, E, R>(
+    read: (input: P, target: IssueService.ResolvedIssueTarget) => Effect.Effect<A, E, R>,
+  ) =>
+    McpToolAccess.reads((input: P) =>
+      resolveTarget(input).pipe(Effect.flatMap((target) => read(input, target))),
+    );
+
+  const writesTarget = <P extends IssueTargetInput, E, R>(
+    write: (input: P, target: IssueService.ResolvedIssueTarget) => Effect.Effect<void, E, R>,
+  ) =>
+    McpToolAccess.writesWithCapability((input: P) =>
+      Effect.gen(function* () {
+        const target = yield* resolveTarget(input);
+        yield* write(input, target);
+        return identityOf(target);
+      }),
+    );
+
   const linkFailure = <E>(cause: Cause.Cause<E>) =>
     Cause.hasInterruptsOnly(cause)
       ? Effect.failCause(cause as Cause.Cause<never>)
@@ -162,59 +206,43 @@ const make = Effect.gen(function* () {
         };
       }),
     ),
-    read_issue_history: McpToolAccess.reads((input) =>
-      Effect.gen(function* () {
-        const target = yield* resolveTarget(input);
-        return yield* issues.history({
-          ...refOf(target),
-          ...(input.order === undefined ? {} : { order: input.order }),
-          ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
-          ...(input.limit === undefined ? {} : { limit: input.limit }),
-        });
+    read_issue_history: readsTarget((input, target) =>
+      issues.history({
+        ...refOf(target),
+        ...(input.order === undefined ? {} : { order: input.order }),
+        ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+        ...(input.limit === undefined ? {} : { limit: input.limit }),
       }),
     ),
-    read_issue_dependencies: McpToolAccess.reads((input) =>
-      Effect.gen(function* () {
-        const target = yield* resolveTarget(input);
-        return yield* issues.dependencies({
-          ...refOf(target),
-          direction: input.direction,
-          ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
-          ...(input.limit === undefined ? {} : { limit: input.limit }),
-        });
+    read_issue_dependencies: readsTarget((input, target) =>
+      issues.dependencies({
+        ...refOf(target),
+        direction: input.direction,
+        ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+        ...(input.limit === undefined ? {} : { limit: input.limit }),
       }),
     ),
-    set_issue_dependency: McpToolAccess.writesWithCapability((input) =>
-      Effect.gen(function* () {
-        const target = yield* resolveTarget(input);
-        yield* issues.setDependency({
-          ...refOf(target),
-          direction: input.direction,
-          targetScope: input.targetScope,
-          targetKey: input.targetKey,
-          linked: input.linked,
-        });
-        return identityOf(target);
+    set_issue_dependency: writesTarget((input, target) =>
+      issues.setDependency({
+        ...refOf(target),
+        direction: input.direction,
+        targetScope: input.targetScope,
+        targetKey: input.targetKey,
+        linked: input.linked,
       }),
     ),
-    read_issue_hierarchy: McpToolAccess.reads((input) =>
-      Effect.gen(function* () {
-        const target = yield* resolveTarget(input);
-        return yield* issues.hierarchy({
-          ...refOf(target),
-          ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
-          ...(input.limit === undefined ? {} : { limit: input.limit }),
-        });
+    read_issue_hierarchy: readsTarget((input, target) =>
+      issues.hierarchy({
+        ...refOf(target),
+        ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+        ...(input.limit === undefined ? {} : { limit: input.limit }),
       }),
     ),
-    read_issue_linked_pull_requests: McpToolAccess.reads((input) =>
-      Effect.gen(function* () {
-        const target = yield* resolveTarget(input);
-        return yield* issues.linkedPullRequests({
-          ...refOf(target),
-          ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
-          ...(input.limit === undefined ? {} : { limit: input.limit }),
-        });
+    read_issue_linked_pull_requests: readsTarget((input, target) =>
+      issues.linkedPullRequests({
+        ...refOf(target),
+        ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+        ...(input.limit === undefined ? {} : { limit: input.limit }),
       }),
     ),
     read_issue_templates: McpToolAccess.reads((input) =>
@@ -268,64 +296,40 @@ const make = Effect.gen(function* () {
         });
       }),
     ),
-    update_issue: McpToolAccess.writesWithCapability((input) =>
-      Effect.gen(function* () {
-        const target = yield* resolveTarget(input);
-        yield* issues.update({
-          ...refOf(target),
-          ...(input.richBody === undefined ? {} : { richBody: input.richBody }),
-          ...(input.title === undefined ? {} : { title: input.title }),
-          ...(input.body === undefined ? {} : { body: input.body }),
-          ...(input.labels === undefined ? {} : { labels: input.labels }),
-          ...(input.assignees === undefined ? {} : { assignees: input.assignees }),
-        });
-        return identityOf(target);
+    update_issue: writesTarget((input, target) =>
+      issues.update({
+        ...refOf(target),
+        ...(input.richBody === undefined ? {} : { richBody: input.richBody }),
+        ...(input.title === undefined ? {} : { title: input.title }),
+        ...(input.body === undefined ? {} : { body: input.body }),
+        ...(input.labels === undefined ? {} : { labels: input.labels }),
+        ...(input.assignees === undefined ? {} : { assignees: input.assignees }),
       }),
     ),
-    edit_issue_comment: McpToolAccess.writesWithCapability((input) =>
-      Effect.gen(function* () {
-        const target = yield* resolveTarget(input);
-        yield* issues.editComment({
-          ...refOf(target),
-          commentId: input.commentId,
-          body: input.body,
-          ...(input.richBody === undefined ? {} : { richBody: input.richBody }),
-        });
-        return identityOf(target);
+    edit_issue_comment: writesTarget((input, target) =>
+      issues.editComment({
+        ...refOf(target),
+        commentId: input.commentId,
+        body: input.body,
+        ...(input.richBody === undefined ? {} : { richBody: input.richBody }),
       }),
     ),
-    set_issue_reaction: McpToolAccess.writesWithCapability((input) =>
-      Effect.gen(function* () {
-        const target = yield* resolveTarget(input);
-        yield* issues.react({
-          ...refOf(target),
-          ...(input.subjectId === undefined ? {} : { subjectId: input.subjectId }),
-          content: input.content,
-          reacted: input.reacted,
-        });
-        return identityOf(target);
+    set_issue_reaction: writesTarget((input, target) =>
+      issues.react({
+        ...refOf(target),
+        ...(input.subjectId === undefined ? {} : { subjectId: input.subjectId }),
+        content: input.content,
+        reacted: input.reacted,
       }),
     ),
-    set_issue_labels: McpToolAccess.writesWithCapability((input) =>
-      Effect.gen(function* () {
-        const target = yield* resolveTarget(input);
-        yield* issues.update({ ...refOf(target), labels: input.labels });
-        return identityOf(target);
-      }),
+    set_issue_labels: writesTarget((input, target) =>
+      issues.update({ ...refOf(target), labels: input.labels }),
     ),
-    set_issue_assignees: McpToolAccess.writesWithCapability((input) =>
-      Effect.gen(function* () {
-        const target = yield* resolveTarget(input);
-        yield* issues.update({ ...refOf(target), assignees: input.assignees });
-        return identityOf(target);
-      }),
+    set_issue_assignees: writesTarget((input, target) =>
+      issues.update({ ...refOf(target), assignees: input.assignees }),
     ),
-    set_issue_parent: McpToolAccess.writesWithCapability((input) =>
-      Effect.gen(function* () {
-        const target = yield* resolveTarget(input);
-        yield* issues.setParent({ ...refOf(target), parentKey: input.parentKey });
-        return identityOf(target);
-      }),
+    set_issue_parent: writesTarget((input, target) =>
+      issues.setParent({ ...refOf(target), parentKey: input.parentKey }),
     ),
     list_issues: McpToolAccess.reads((input) =>
       Effect.gen(function* () {
@@ -356,28 +360,7 @@ const make = Effect.gen(function* () {
             scope: entry.scope,
             key: entry.key,
             url: entry.url,
-            ...(entry.itemType === undefined ? {} : { itemType: entry.itemType }),
-            displayKey: entry.displayKey,
-            title: entry.title,
-            state: entry.state,
-            author: entry.author?.login ?? null,
-            authorDetails: entry.author,
-            assigneeDetails: entry.assignees,
-            assignees: entry.assignees.map((actor) => actor.login),
-            labels: entry.labels.map((label) => label.name),
-            labelDetails: entry.labels,
-            ...(entry.labelsTruncated === undefined
-              ? {}
-              : { labelsTruncated: entry.labelsTruncated }),
-            ...(entry.milestone === undefined ? {} : { milestone: entry.milestone }),
-            createdAt: entry.createdAt,
-            updatedAt: entry.updatedAt,
-            closedAt: entry.closedAt,
-            commentCount: entry.commentCount,
-            ...(entry.reactions === undefined ? {} : { reactions: entry.reactions }),
-            ...(entry.reactionsTruncated === undefined
-              ? {}
-              : { reactionsTruncated: entry.reactionsTruncated }),
+            ...summaryFields(entry),
           })),
           nextCursors: result.nextCursors,
           errors: result.errors.map((error) => ({
@@ -388,43 +371,21 @@ const make = Effect.gen(function* () {
         };
       }),
     ),
-    read_issue: McpToolAccess.reads((input) =>
+    read_issue: readsTarget((input, target) =>
       Effect.gen(function* () {
-        const target = yield* resolveTarget(input);
         const detail = yield* issues.detail(refOf(target));
         return {
           ...identityOf(target, detail),
-          ...(detail.itemType === undefined ? {} : { itemType: detail.itemType }),
-          displayKey: detail.displayKey,
-          title: detail.title,
-          state: detail.state,
+          ...summaryFields(detail),
           writable: detail.writable,
           capabilities: detail.capabilities,
           ...(detail.states === undefined ? {} : { states: detail.states }),
           viewer: detail.viewer,
           viewerPermissions: detail.viewerPermissions,
-          author: detail.author?.login ?? null,
-          authorDetails: detail.author,
-          assigneeDetails: detail.assignees,
-          assignees: detail.assignees.map((actor) => actor.login),
-          labels: detail.labels.map((label) => label.name),
-          labelDetails: detail.labels,
-          ...(detail.labelsTruncated === undefined
-            ? {}
-            : { labelsTruncated: detail.labelsTruncated }),
-          ...(detail.milestone === undefined ? {} : { milestone: detail.milestone }),
-          createdAt: detail.createdAt,
-          updatedAt: detail.updatedAt,
-          closedAt: detail.closedAt,
           body: detail.body,
           ...(detail.richBody === undefined ? {} : { richBody: detail.richBody }),
           ...(detail.externalLinks === undefined ? {} : { externalLinks: detail.externalLinks }),
           ...(detail.bodyEditable === undefined ? {} : { bodyEditable: detail.bodyEditable }),
-          commentCount: detail.commentCount,
-          ...(detail.reactions === undefined ? {} : { reactions: detail.reactions }),
-          ...(detail.reactionsTruncated === undefined
-            ? {}
-            : { reactionsTruncated: detail.reactionsTruncated }),
           events: detail.events,
           ...(detail.historyTruncated === undefined
             ? {}
@@ -521,24 +482,16 @@ const make = Effect.gen(function* () {
         });
       }),
     ),
-    comment_on_issue: McpToolAccess.writesWithCapability((input) =>
-      Effect.gen(function* () {
-        const target = yield* resolveTarget(input);
-        yield* issues.comment({ ...refOf(target), body: input.body });
-        return identityOf(target);
-      }),
+    comment_on_issue: writesTarget((input, target) =>
+      issues.comment({ ...refOf(target), body: input.body }),
     ),
-    set_issue_state: McpToolAccess.writesWithCapability((input) =>
-      Effect.gen(function* () {
-        const target = yield* resolveTarget(input);
-        yield* issues.setState({
-          ...refOf(target),
-          state: input.state,
-          ...(input.transitionId === undefined ? {} : { transitionId: input.transitionId }),
-          ...(input.fieldValues === undefined ? {} : { fieldValues: input.fieldValues }),
-          ...(input.closeReason === undefined ? {} : { closeReason: input.closeReason }),
-        });
-        return identityOf(target);
+    set_issue_state: writesTarget((input, target) =>
+      issues.setState({
+        ...refOf(target),
+        state: input.state,
+        ...(input.transitionId === undefined ? {} : { transitionId: input.transitionId }),
+        ...(input.fieldValues === undefined ? {} : { fieldValues: input.fieldValues }),
+        ...(input.closeReason === undefined ? {} : { closeReason: input.closeReason }),
       }),
     ),
     link_issue: writesThread((input) =>

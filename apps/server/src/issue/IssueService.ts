@@ -403,8 +403,18 @@ export const make = Effect.gen(function* () {
       }),
     );
 
+  const trackerTarget = (project: SupportedProject) => ({
+    cwd: project.project.workspaceRoot,
+    host: project.host,
+    scope: project.scope,
+  });
+
   const withConnection = (project: ProjectTrackerBinding) =>
     Effect.provideService(IssueTrackerHost.ConnectionId, project.connectionId);
+  const withTrackerContext =
+    (project: ProjectTrackerBinding, operation: string) =>
+    <A, R>(effect: Effect.Effect<A, IssueTrackerError, R>) =>
+      effect.pipe(withConnection(project), Effect.mapError(toIssueError(operation)));
   const accountFields = (project: ProjectTrackerBinding) =>
     project.connectionId === undefined ? {} : { connectionId: project.connectionId };
   const trackerKeyOf = (project: ProjectTrackerBinding) =>
@@ -533,9 +543,7 @@ export const make = Effect.gen(function* () {
   ) =>
     project.api
       .getViewerPermissions({
-        cwd: project.project.workspaceRoot,
-        host: project.host,
-        scope: project.scope,
+        ...trackerTarget(project),
         key: ref.key,
       })
       .pipe(
@@ -598,563 +606,523 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  const list: IssueService["Service"]["list"] = (input) =>
-    Effect.gen(function* () {
-      const resolved = yield* listProjects(input);
-      let supported = resolved.supported.filter(
-        (project) => input.tracker === undefined || project.tracker === input.tracker,
+  const list = Effect.fn("IssueService.list")(function* (input: IssueListInput) {
+    const resolved = yield* listProjects(input);
+    let supported = resolved.supported.filter(
+      (project) => input.tracker === undefined || project.tracker === input.tracker,
+    );
+    const unimplemented = new Map(
+      [...resolved.unimplemented].filter(
+        ([, source]) => input.tracker === undefined || source.tracker === input.tracker,
+      ),
+    );
+    if (input.scope !== undefined) {
+      const scope = input.scope;
+      const own = supported.filter(
+        (project) =>
+          issueScopeKeyOf(project) === issueScopeKeyOf({ tracker: project.tracker, scope }),
       );
-      const unimplemented = new Map(
-        [...resolved.unimplemented].filter(
-          ([, source]) => input.tracker === undefined || source.tracker === input.tracker,
-        ),
-      );
-      if (input.scope !== undefined) {
-        const scope = input.scope;
-        const own = supported.filter(
-          (project) =>
-            issueScopeKeyOf(project) === issueScopeKeyOf({ tracker: project.tracker, scope }),
-        );
-        const lenders =
-          own.length > 0
-            ? own
-            : supported.filter(
-                (project) =>
-                  !isStandaloneIssueTracker(project.api) &&
-                  (project.tracker !== "forgejo" ||
-                    issueScopeKeyOf(project).split("/").slice(0, -2).join("/") ===
-                      issueScopeKeyOf({ tracker: project.tracker, scope })
-                        .split("/")
-                        .slice(0, -2)
-                        .join("/")),
-              );
-        if (lenders.length === 0)
-          return yield* new IssueUnavailableError({ reason: "tracker-unsupported" });
-        if (new Set(lenders.map(trackerKeyOf)).size > 1)
+      const lenders =
+        own.length > 0
+          ? own
+          : supported.filter(
+              (project) =>
+                !isStandaloneIssueTracker(project.api) &&
+                (project.tracker !== "forgejo" ||
+                  issueScopeKeyOf(project).split("/").slice(0, -2).join("/") ===
+                    issueScopeKeyOf({ tracker: project.tracker, scope })
+                      .split("/")
+                      .slice(0, -2)
+                      .join("/")),
+            );
+      if (lenders.length === 0)
+        return yield* new IssueUnavailableError({ reason: "tracker-unsupported" });
+      if (new Set(lenders.map(trackerKeyOf)).size > 1)
+        return yield* new IssueOperationError({
+          operation: "list",
+          detail: "Choose one tracker, host and saved account for this scope.",
+        });
+      supported =
+        own.length > 0
+          ? own
+          : lenders.map((project) => ({
+              ...project,
+              scope: issueScopeKeyOf({ tracker: project.tracker, scope }),
+            }));
+    }
+    const limit = input.limit ?? DEFAULT_LIST_LIMIT;
+    // Worktrees of one repository are separate projects; read each scope once.
+    const scopes = new Map<string, SupportedProject>();
+    for (const project of supported) {
+      const key = issueListCursorKey(project);
+      if (!scopes.has(key)) scopes.set(key, project);
+    }
+    const continuing = input.cursors === undefined ? undefined : { ...input.cursors };
+    if (continuing !== undefined) {
+      const legacySources =
+        input.projectId !== undefined &&
+        [...scopes.values()].some(
+          (project) => continuing[`${project.host} ${project.scope}`] !== undefined,
+        )
+          ? yield* listProjects({ host: input.host })
+          : { supported, unimplemented };
+      const trackersByHost = new Map<string, Set<IssueTrackerKind>>();
+      for (const source of [...legacySources.supported, ...legacySources.unimplemented.values()]) {
+        const kinds = trackersByHost.get(source.host) ?? new Set<IssueTrackerKind>();
+        kinds.add(source.tracker);
+        trackersByHost.set(source.host, kinds);
+      }
+      for (const [key, project] of scopes) {
+        if (project.connectionId !== undefined) continue;
+        const legacy = continuing[`${project.host} ${project.scope}`];
+        if (legacy === undefined || continuing[key] !== undefined) continue;
+        if (trackersByHost.get(project.host)!.size > 1)
           return yield* new IssueOperationError({
             operation: "list",
-            detail: "Choose one tracker, host and saved account for this scope.",
+            detail: "This issue cursor does not identify one tracker. Refresh the issue list.",
           });
-        supported =
-          own.length > 0
-            ? own
-            : lenders.map((project) => ({
-                ...project,
-                scope: issueScopeKeyOf({ tracker: project.tracker, scope }),
-              }));
+        continuing[key] = legacy;
       }
-      const limit = input.limit ?? DEFAULT_LIST_LIMIT;
-      // Worktrees of one repository are separate projects; read each scope once.
-      const scopes = new Map<string, SupportedProject>();
-      for (const project of supported) {
-        const key = issueListCursorKey(project);
-        if (!scopes.has(key)) scopes.set(key, project);
-      }
-      const continuing = input.cursors === undefined ? undefined : { ...input.cursors };
-      if (continuing !== undefined) {
-        const legacySources =
-          input.projectId !== undefined &&
-          [...scopes.values()].some(
-            (project) => continuing[`${project.host} ${project.scope}`] !== undefined,
-          )
-            ? yield* listProjects({ host: input.host })
-            : { supported, unimplemented };
-        const trackersByHost = new Map<string, Set<IssueTrackerKind>>();
-        for (const source of [
-          ...legacySources.supported,
-          ...legacySources.unimplemented.values(),
-        ]) {
-          const kinds = trackersByHost.get(source.host) ?? new Set<IssueTrackerKind>();
-          kinds.add(source.tracker);
-          trackersByHost.set(source.host, kinds);
-        }
-        for (const [key, project] of scopes) {
-          if (project.connectionId !== undefined) continue;
-          const legacy = continuing[`${project.host} ${project.scope}`];
-          if (legacy === undefined || continuing[key] !== undefined) continue;
-          if (trackersByHost.get(project.host)!.size > 1)
-            return yield* new IssueOperationError({
-              operation: "list",
-              detail: "This issue cursor does not identify one tracker. Refresh the issue list.",
-            });
-          continuing[key] = legacy;
-        }
-      }
-      const viewers = new Map<string, string>();
-      const viewerReads = new Map<string, Effect.Effect<string, IssueTrackerError>>();
-      const viewerKeyOf = (project: SupportedProject) =>
-        project.tracker === "azure-devops"
+    }
+    const viewers = new Map<string, string>();
+    const viewerReads = new Map<string, Effect.Effect<string, IssueTrackerError>>();
+    const viewerKeyOf = (project: SupportedProject) =>
+      project.tracker === "azure-devops"
+        ? issueListCursorKey({
+            ...project,
+            host: new URL("https://" + project.host).host,
+            scope: issueScopeKeyOf(project).split("/")[0] ?? "",
+          })
+        : project.tracker === "forgejo"
           ? issueListCursorKey({
               ...project,
-              host: new URL("https://" + project.host).host,
-              scope: issueScopeKeyOf(project).split("/")[0] ?? "",
+              scope: issueScopeKeyOf(project).split("/").slice(0, -2).join("/"),
             })
-          : project.tracker === "forgejo"
-            ? issueListCursorKey({
-                ...project,
-                scope: issueScopeKeyOf(project).split("/").slice(0, -2).join("/"),
-              })
-            : trackerKeyOf(project);
-      const viewerInstances = new Map<string, Set<string>>();
-      for (const project of supported) {
-        const hostKey = issueTrackerHostKey(project);
-        const instances = viewerInstances.get(hostKey) ?? new Set<string>();
-        instances.add(viewerKeyOf(project));
-        viewerInstances.set(hostKey, instances);
-      }
-      const trackers = new Map<string, IssueTrackerSummary>();
-      const entries: IssueListEntry[] = [];
-      const errors: IssueListProjectError[] = [];
-      const nextCursors: Record<string, string> = {};
+          : trackerKeyOf(project);
+    const viewerInstances = new Map<string, Set<string>>();
+    for (const project of supported) {
+      const hostKey = issueTrackerHostKey(project);
+      const instances = viewerInstances.get(hostKey) ?? new Set<string>();
+      instances.add(viewerKeyOf(project));
+      viewerInstances.set(hostKey, instances);
+    }
+    const trackers = new Map<string, IssueTrackerSummary>();
+    const entries: IssueListEntry[] = [];
+    const errors: IssueListProjectError[] = [];
+    const nextCursors: Record<string, string> = {};
 
-      const viewerFor = (project: SupportedProject) =>
-        Effect.gen(function* () {
-          const key = viewerKeyOf(project);
-          let read = viewerReads.get(key);
-          if (read === undefined) {
-            read = yield* Effect.cached(
-              project.api
-                .getViewer({
-                  cwd: project.project.workspaceRoot,
-                  host: project.host,
-                  ...(project.tracker === "azure-devops" ? { scope: project.scope } : {}),
-                })
-                .pipe(withConnection(project)),
-            );
-            viewerReads.set(key, read);
-          }
-          const viewer = yield* read;
-          if (
-            project.tracker === "forgejo" ||
-            project.tracker === "azure-devops" ||
-            project.connectionId !== undefined ||
-            viewerInstances.get(issueTrackerHostKey(project))!.size > 1
-          )
-            viewers.set(issueListCursorKey(project), viewer);
-          const hostKey = issueTrackerHostKey(project);
-          if (viewerInstances.get(hostKey)!.size === 1) viewers.set(hostKey, viewer);
-          return viewer;
-        });
-
-      // Every project counts, including worktrees of a scope read once below.
-      for (const project of supported) {
-        const existing = trackers.get(trackerKeyOf(project));
-        trackers.set(
-          trackerKeyOf(project),
-          existing === undefined
-            ? {
-                tracker: project.tracker,
-                ...accountFields(project),
-                host: project.host,
-                projectCount: 1,
-                capabilities: project.api.capabilities,
-                configured: true,
-                detail: null,
-              }
-            : { ...existing, projectCount: existing.projectCount + 1 },
+    const viewerFor = Effect.fn("IssueService.viewerFor")(function* (project: SupportedProject) {
+      const key = viewerKeyOf(project);
+      let read = viewerReads.get(key);
+      if (read === undefined) {
+        read = yield* Effect.cached(
+          project.api
+            .getViewer({
+              cwd: project.project.workspaceRoot,
+              host: project.host,
+              ...(project.tracker === "azure-devops" ? { scope: project.scope } : {}),
+            })
+            .pipe(withConnection(project)),
         );
+        viewerReads.set(key, read);
       }
-      const recordFailure = (project: SupportedProject, failure: IssueTrackerError) => {
-        const existing = trackers.get(trackerKeyOf(project));
-        if (existing !== undefined && isTrackerUnusable(failure))
-          trackers.set(trackerKeyOf(project), {
-            ...existing,
-            configured: false,
-            detail: failure.detail,
-          });
-      };
-
-      yield* Effect.forEach(
-        scopes,
-        ([key, project]) =>
-          Effect.gen(function* () {
-            // A continuation names the scopes it wants; one not named has nothing to add.
-            if (continuing !== undefined && continuing[key] === undefined) return;
-            const involvement = input.involvement ?? "all";
-            if (
-              project.api.capabilities.involvements !== undefined &&
-              !project.api.capabilities.involvements.includes(involvement)
-            ) {
-              errors.push({
-                projectId: project.project.id,
-                projectTitle: project.project.title,
-                tracker: project.tracker,
-                ...accountFields(project),
-                host: project.host,
-                message: `This tracker does not support ${involvement} issue lists.`,
-              });
-              return;
-            }
-            const unsupportedSort =
-              input.sort !== undefined &&
-              project.api.capabilities.listSorts !== undefined &&
-              !project.api.capabilities.listSorts.includes(input.sort);
-            const unsupportedOrder =
-              input.order !== undefined &&
-              project.api.capabilities.listOrders !== undefined &&
-              !project.api.capabilities.listOrders.includes(input.order);
-            if (unsupportedSort || unsupportedOrder) {
-              errors.push({
-                projectId: project.project.id,
-                projectTitle: project.project.title,
-                tracker: project.tracker,
-                ...accountFields(project),
-                host: project.host,
-                message: "This tracker does not support the selected issue order.",
-              });
-              return;
-            }
-            const cursor = continuing?.[key];
-            const page = yield* viewerFor(project).pipe(
-              Effect.flatMap((viewer) =>
-                project.api
-                  .listIssues({
-                    cwd: project.project.workspaceRoot,
-                    host: project.host,
-                    scope: project.scope,
-                    state: input.state,
-                    ...(input.stateCategories === undefined
-                      ? {}
-                      : { stateCategories: input.stateCategories }),
-                    ...(input.sort === undefined ? {} : { sort: input.sort }),
-                    ...(input.order === undefined ? {} : { order: input.order }),
-                    involvement,
-                    viewer,
-                    limit,
-                    query: input.query,
-                    cursor,
-                  })
-                  .pipe(withConnection(project)),
-              ),
-              Effect.result,
-            );
-            if (page._tag === "Failure") {
-              recordFailure(project, page.failure);
-              errors.push({
-                projectId: project.project.id,
-                projectTitle: project.project.title,
-                tracker: project.tracker,
-                ...accountFields(project),
-                host: project.host,
-                message: page.failure.detail,
-              });
-              return;
-            }
-            for (const item of page.success.items) {
-              entries.push({
-                ...item,
-                tracker: project.tracker,
-                ...accountFields(project),
-                host: project.host,
-                scope: project.scope,
-                projectId: project.project.id,
-                projectTitle: project.project.title,
-              });
-            }
-            if (page.success.nextCursor !== null) nextCursors[key] = page.success.nextCursor;
-          }),
-        { concurrency: SCOPE_CONCURRENCY, discard: true },
-      );
-
-      for (const source of unimplemented.values()) {
-        const { host, tracker, projectCount } = source;
-        trackers.set(issueTrackerHostKey(source), {
-          tracker,
-          host,
-          projectCount,
-          capabilities: null,
-          configured: false,
-          detail: "Issues cannot be browsed for this host yet.",
-        });
-      }
-      entries.sort((a, b) => {
-        const difference =
-          input.sort === "comments"
-            ? (b.commentCount ?? 0) - (a.commentCount ?? 0)
-            : input.sort === "created"
-              ? b.createdAt.localeCompare(a.createdAt)
-              : b.updatedAt.localeCompare(a.updatedAt);
-        return input.order === "asc" ? -difference : difference;
-      });
-      return {
-        sources: supported.map((project) => ({
-          projectId: project.project.id,
-          projectTitle: project.project.title,
-          tracker: project.tracker,
-          ...accountFields(project),
-          host: project.host,
-          scope: project.scope,
-          capabilities: project.api.capabilities,
-        })),
-        viewers: Object.fromEntries(viewers),
-        trackers: [...trackers.values()],
-        entries,
-        errors,
-        nextCursors,
-      };
+      const viewer = yield* read;
+      if (
+        project.tracker === "forgejo" ||
+        project.tracker === "azure-devops" ||
+        project.connectionId !== undefined ||
+        viewerInstances.get(issueTrackerHostKey(project))!.size > 1
+      )
+        viewers.set(issueListCursorKey(project), viewer);
+      const hostKey = issueTrackerHostKey(project);
+      if (viewerInstances.get(hostKey)!.size === 1) viewers.set(hostKey, viewer);
+      return viewer;
     });
 
-  const detail: IssueService["Service"]["detail"] = (input) =>
-    requireProject(input).pipe(
-      Effect.flatMap((project) =>
-        project.api
-          .getIssue({
-            ...accountFields(project),
-            cwd: project.project.workspaceRoot,
-            host: project.host,
-            scope: project.scope,
-            key: input.key,
-          })
-          .pipe(
-            withConnection(project),
-            Effect.mapError(toIssueError("detail")),
-            Effect.map((issue): IssueDetail => ({
-              ...issue,
+    // Every project counts, including worktrees of a scope read once below.
+    for (const project of supported) {
+      const existing = trackers.get(trackerKeyOf(project));
+      trackers.set(
+        trackerKeyOf(project),
+        existing === undefined
+          ? {
+              tracker: project.tracker,
+              ...accountFields(project),
+              host: project.host,
+              projectCount: 1,
+              capabilities: project.api.capabilities,
+              configured: true,
+              detail: null,
+            }
+          : { ...existing, projectCount: existing.projectCount + 1 },
+      );
+    }
+    const recordFailure = (project: SupportedProject, failure: IssueTrackerError) => {
+      const existing = trackers.get(trackerKeyOf(project));
+      if (existing !== undefined && isTrackerUnusable(failure))
+        trackers.set(trackerKeyOf(project), {
+          ...existing,
+          configured: false,
+          detail: failure.detail,
+        });
+    };
+
+    yield* Effect.forEach(
+      scopes,
+      ([key, project]) =>
+        Effect.gen(function* () {
+          // A continuation names the scopes it wants; one not named has nothing to add.
+          if (continuing !== undefined && continuing[key] === undefined) return;
+          const involvement = input.involvement ?? "all";
+          if (
+            project.api.capabilities.involvements !== undefined &&
+            !project.api.capabilities.involvements.includes(involvement)
+          ) {
+            errors.push({
+              projectId: project.project.id,
+              projectTitle: project.project.title,
+              tracker: project.tracker,
+              ...accountFields(project),
+              host: project.host,
+              message: `This tracker does not support ${involvement} issue lists.`,
+            });
+            return;
+          }
+          const unsupportedSort =
+            input.sort !== undefined &&
+            project.api.capabilities.listSorts !== undefined &&
+            !project.api.capabilities.listSorts.includes(input.sort);
+          const unsupportedOrder =
+            input.order !== undefined &&
+            project.api.capabilities.listOrders !== undefined &&
+            !project.api.capabilities.listOrders.includes(input.order);
+          if (unsupportedSort || unsupportedOrder) {
+            errors.push({
+              projectId: project.project.id,
+              projectTitle: project.project.title,
+              tracker: project.tracker,
+              ...accountFields(project),
+              host: project.host,
+              message: "This tracker does not support the selected issue order.",
+            });
+            return;
+          }
+          const cursor = continuing?.[key];
+          const page = yield* viewerFor(project).pipe(
+            Effect.flatMap((viewer) =>
+              project.api
+                .listIssues({
+                  ...trackerTarget(project),
+                  state: input.state,
+                  ...(input.stateCategories === undefined
+                    ? {}
+                    : { stateCategories: input.stateCategories }),
+                  ...(input.sort === undefined ? {} : { sort: input.sort }),
+                  ...(input.order === undefined ? {} : { order: input.order }),
+                  involvement,
+                  viewer,
+                  limit,
+                  query: input.query,
+                  cursor,
+                })
+                .pipe(withConnection(project)),
+            ),
+            Effect.result,
+          );
+          if (page._tag === "Failure") {
+            recordFailure(project, page.failure);
+            errors.push({
+              projectId: project.project.id,
+              projectTitle: project.project.title,
+              tracker: project.tracker,
+              ...accountFields(project),
+              host: project.host,
+              message: page.failure.detail,
+            });
+            return;
+          }
+          for (const item of page.success.items) {
+            entries.push({
+              ...item,
               tracker: project.tracker,
               ...accountFields(project),
               host: project.host,
               scope: project.scope,
               projectId: project.project.id,
               projectTitle: project.project.title,
-              writable: project.writable,
-              capabilities: issue.capabilities ?? project.api.capabilities,
-            })),
-          ),
-      ),
+            });
+          }
+          if (page.success.nextCursor !== null) nextCursors[key] = page.success.nextCursor;
+        }),
+      { concurrency: SCOPE_CONCURRENCY, discard: true },
     );
 
-  const comments: IssueService["Service"]["comments"] = (input) =>
-    requireProject(input).pipe(
-      Effect.flatMap((project) =>
-        project.api
-          .getComments({
-            cwd: project.project.workspaceRoot,
-            host: project.host,
-            scope: project.scope,
-            key: input.key,
-            ...accountFields(project),
-            ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
-            order: input.order ?? "desc",
-            ...(input.viewer === undefined ? {} : { viewer: input.viewer }),
-          })
-          .pipe(withConnection(project), Effect.mapError(toIssueError("comments"))),
-      ),
-    );
+    for (const source of unimplemented.values()) {
+      const { host, tracker, projectCount } = source;
+      trackers.set(issueTrackerHostKey(source), {
+        tracker,
+        host,
+        projectCount,
+        capabilities: null,
+        configured: false,
+        detail: "Issues cannot be browsed for this host yet.",
+      });
+    }
+    entries.sort((a, b) => {
+      const difference =
+        input.sort === "comments"
+          ? (b.commentCount ?? 0) - (a.commentCount ?? 0)
+          : input.sort === "created"
+            ? b.createdAt.localeCompare(a.createdAt)
+            : b.updatedAt.localeCompare(a.updatedAt);
+      return input.order === "asc" ? -difference : difference;
+    });
+    return {
+      sources: supported.map((project) => ({
+        projectId: project.project.id,
+        projectTitle: project.project.title,
+        tracker: project.tracker,
+        ...accountFields(project),
+        host: project.host,
+        scope: project.scope,
+        capabilities: project.api.capabilities,
+      })),
+      viewers: Object.fromEntries(viewers),
+      trackers: [...trackers.values()],
+      entries,
+      errors,
+      nextCursors,
+    };
+  });
 
-  const history: IssueService["Service"]["history"] = (input) =>
-    requireProject(input).pipe(
-      Effect.flatMap((project) =>
-        project.api.getHistory === undefined || !project.api.capabilities.events
-          ? Effect.fail(unsupported("history", "issue history"))
-          : project.api
-              .getHistory({
-                ...accountFields(project),
-                order: input.order ?? "desc",
-                cwd: project.project.workspaceRoot,
-                host: project.host,
-                scope: project.scope,
-                key: input.key,
-                ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
-                limit: input.limit ?? DEFAULT_LIST_LIMIT,
-              })
-              .pipe(withConnection(project), Effect.mapError(toIssueError("history"))),
-      ),
-    );
-
-  const linkedPullRequests: IssueService["Service"]["linkedPullRequests"] = (input) =>
-    requireProject(input).pipe(
-      Effect.flatMap((project) =>
-        project.api.getLinkedPullRequests === undefined ||
-        !project.api.capabilities.linkedPullRequests
-          ? Effect.fail(unsupported("linkedPullRequests", "linked pull requests"))
-          : project.api
-              .getLinkedPullRequests({
-                cwd: project.project.workspaceRoot,
-                host: project.host,
-                scope: project.scope,
-                key: input.key,
-                ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
-                limit: input.limit ?? DEFAULT_LIST_LIMIT,
-              })
-              .pipe(withConnection(project), Effect.mapError(toIssueError("linkedPullRequests"))),
-      ),
-    );
-
-  const dependencies: IssueService["Service"]["dependencies"] = (input) =>
-    requireProject(input).pipe(
-      Effect.flatMap((project) =>
-        project.api.getDependencies === undefined || !project.api.capabilities.dependencies
-          ? Effect.fail(unsupported("dependencies", "dependencies"))
-          : project.api
-              .getDependencies({
-                cwd: project.project.workspaceRoot,
-                host: project.host,
-                scope: project.scope,
-                key: input.key,
-                direction: input.direction,
-                ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
-                ...(input.limit === undefined ? {} : { limit: input.limit }),
-              })
-              .pipe(withConnection(project), Effect.mapError(toIssueError("dependencies"))),
-      ),
-    );
-
-  const setDependency: IssueService["Service"]["setDependency"] = (input) =>
-    Effect.gen(function* () {
-      const project = yield* requireWritable(input, "setDependency");
-      if (project.api.setDependency === undefined || !project.api.capabilities.dependencies)
-        return yield* unsupported("setDependency", "dependencies");
-      yield* requirePermissions(
-        project,
-        input,
-        "setDependency",
-        (permissions) => permissions.updateDependencies ?? permissions.edit,
+  const detail = Effect.fn("IssueService.detail")(function* (input: IssueRef) {
+    const project = yield* requireProject(input);
+    return yield* project.api
+      .getIssue({
+        ...accountFields(project),
+        ...trackerTarget(project),
+        key: input.key,
+      })
+      .pipe(
+        withTrackerContext(project, "detail"),
+        Effect.map((issue): IssueDetail => ({
+          ...issue,
+          tracker: project.tracker,
+          ...accountFields(project),
+          host: project.host,
+          scope: project.scope,
+          projectId: project.project.id,
+          projectTitle: project.project.title,
+          writable: project.writable,
+          capabilities: issue.capabilities ?? project.api.capabilities,
+        })),
       );
-      yield* project.api
-        .setDependency({
-          cwd: project.project.workspaceRoot,
-          host: project.host,
-          scope: project.scope,
-          key: input.key,
-          direction: input.direction,
-          targetScope: input.targetScope,
-          targetKey: input.targetKey,
-          linked: input.linked,
-        })
-        .pipe(withConnection(project), Effect.mapError(toIssueError("setDependency")));
-    });
+  });
 
-  const hierarchy: IssueService["Service"]["hierarchy"] = (input) =>
-    requireProject(input).pipe(
-      Effect.flatMap((project) =>
-        project.api.getHierarchy === undefined || !project.api.capabilities.subIssues
-          ? Effect.fail(unsupported("hierarchy", "sub-issues"))
-          : project.api
-              .getHierarchy({
-                cwd: project.project.workspaceRoot,
-                host: project.host,
-                scope: project.scope,
-                key: input.key,
-                ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
-                limit: input.limit ?? DEFAULT_LIST_LIMIT,
-              })
-              .pipe(withConnection(project), Effect.mapError(toIssueError("hierarchy"))),
-      ),
+  const comments = Effect.fn("IssueService.comments")(function* (input: IssueCommentsPageInput) {
+    const project = yield* requireProject(input);
+    return yield* project.api
+      .getComments({
+        ...trackerTarget(project),
+        key: input.key,
+        ...accountFields(project),
+        ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+        order: input.order ?? "desc",
+        ...(input.viewer === undefined ? {} : { viewer: input.viewer }),
+      })
+      .pipe(withTrackerContext(project, "comments"));
+  });
+
+  const history = Effect.fn("IssueService.history")(function* (input: IssueHistoryInput) {
+    const project = yield* requireProject(input);
+    if (project.api.getHistory === undefined || !project.api.capabilities.events)
+      return yield* unsupported("history", "issue history");
+    return yield* project.api
+      .getHistory({
+        ...accountFields(project),
+        order: input.order ?? "desc",
+        ...trackerTarget(project),
+        key: input.key,
+        ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+        limit: input.limit ?? DEFAULT_LIST_LIMIT,
+      })
+      .pipe(withTrackerContext(project, "history"));
+  });
+
+  const linkedPullRequests = Effect.fn("IssueService.linkedPullRequests")(function* (
+    input: IssuePageRef,
+  ) {
+    const project = yield* requireProject(input);
+    if (
+      project.api.getLinkedPullRequests === undefined ||
+      !project.api.capabilities.linkedPullRequests
+    )
+      return yield* unsupported("linkedPullRequests", "linked pull requests");
+    return yield* project.api
+      .getLinkedPullRequests({
+        ...trackerTarget(project),
+        key: input.key,
+        ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+        limit: input.limit ?? DEFAULT_LIST_LIMIT,
+      })
+      .pipe(withTrackerContext(project, "linkedPullRequests"));
+  });
+
+  const dependencies = Effect.fn("IssueService.dependencies")(function* (
+    input: IssueDependenciesInput,
+  ) {
+    const project = yield* requireProject(input);
+    if (project.api.getDependencies === undefined || !project.api.capabilities.dependencies)
+      return yield* unsupported("dependencies", "dependencies");
+    return yield* project.api
+      .getDependencies({
+        ...trackerTarget(project),
+        key: input.key,
+        direction: input.direction,
+        ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+        ...(input.limit === undefined ? {} : { limit: input.limit }),
+      })
+      .pipe(withTrackerContext(project, "dependencies"));
+  });
+
+  const setDependency = Effect.fn("IssueService.setDependency")(function* (
+    input: IssueSetDependencyInput,
+  ) {
+    const project = yield* requireWritable(input, "setDependency");
+    if (project.api.setDependency === undefined || !project.api.capabilities.dependencies)
+      return yield* unsupported("setDependency", "dependencies");
+    yield* requirePermissions(
+      project,
+      input,
+      "setDependency",
+      (permissions) => permissions.updateDependencies ?? permissions.edit,
     );
+    yield* project.api
+      .setDependency({
+        ...trackerTarget(project),
+        key: input.key,
+        direction: input.direction,
+        targetScope: input.targetScope,
+        targetKey: input.targetKey,
+        linked: input.linked,
+      })
+      .pipe(withTrackerContext(project, "setDependency"));
+  });
 
-  const labelCandidates: IssueService["Service"]["labelCandidates"] = (input) =>
-    requireProject(input).pipe(
-      Effect.flatMap((project) =>
-        project.api.listLabelCandidates === undefined || !project.api.capabilities.labels
-          ? Effect.fail(unsupported("labelCandidates", "label choices"))
-          : project.api
-              .listLabelCandidates({
-                cwd: project.project.workspaceRoot,
-                host: project.host,
-                scope: project.scope,
-                ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
-                limit: input.limit ?? DEFAULT_LIST_LIMIT,
-              })
-              .pipe(withConnection(project), Effect.mapError(toIssueError("labelCandidates"))),
-      ),
-    );
+  const hierarchy = Effect.fn("IssueService.hierarchy")(function* (input: IssuePageRef) {
+    const project = yield* requireProject(input);
+    if (project.api.getHierarchy === undefined || !project.api.capabilities.subIssues)
+      return yield* unsupported("hierarchy", "sub-issues");
+    return yield* project.api
+      .getHierarchy({
+        ...trackerTarget(project),
+        key: input.key,
+        ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+        limit: input.limit ?? DEFAULT_LIST_LIMIT,
+      })
+      .pipe(withTrackerContext(project, "hierarchy"));
+  });
 
-  const assigneeCandidates: IssueService["Service"]["assigneeCandidates"] = (input) =>
-    requireProject(input).pipe(
-      Effect.flatMap((project) =>
-        project.api.listAssigneeCandidates === undefined || !project.api.capabilities.assignees
-          ? Effect.fail(unsupported("assigneeCandidates", "assignee choices"))
-          : project.api
-              .listAssigneeCandidates({
-                cwd: project.project.workspaceRoot,
-                host: project.host,
-                scope: project.scope,
-                ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
-                limit: input.limit ?? DEFAULT_LIST_LIMIT,
-              })
-              .pipe(withConnection(project), Effect.mapError(toIssueError("assigneeCandidates"))),
-      ),
-    );
+  const labelCandidates = Effect.fn("IssueService.labelCandidates")(function* (
+    input: IssueScopePageRef,
+  ) {
+    const project = yield* requireProject(input);
+    if (project.api.listLabelCandidates === undefined || !project.api.capabilities.labels)
+      return yield* unsupported("labelCandidates", "label choices");
+    return yield* project.api
+      .listLabelCandidates({
+        ...trackerTarget(project),
+        ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+        limit: input.limit ?? DEFAULT_LIST_LIMIT,
+      })
+      .pipe(withTrackerContext(project, "labelCandidates"));
+  });
 
-  const templates: IssueService["Service"]["templates"] = (input) =>
-    requireProject(input).pipe(
-      Effect.flatMap((project) =>
-        project.api.listTemplates === undefined || !project.api.capabilities.templates
-          ? Effect.fail(unsupported("templates", "issue templates"))
-          : project.api
-              .listTemplates({
-                cwd: project.project.workspaceRoot,
-                host: project.host,
-                scope: project.scope,
-                ...(input.metadataOnly === undefined ? {} : { metadataOnly: input.metadataOnly }),
-                ...(input.templateKey === undefined ? {} : { templateKey: input.templateKey }),
-              })
-              .pipe(withConnection(project), Effect.mapError(toIssueError("templates"))),
-      ),
-    );
+  const assigneeCandidates = Effect.fn("IssueService.assigneeCandidates")(function* (
+    input: IssueScopePageRef,
+  ) {
+    const project = yield* requireProject(input);
+    if (project.api.listAssigneeCandidates === undefined || !project.api.capabilities.assignees)
+      return yield* unsupported("assigneeCandidates", "assignee choices");
+    return yield* project.api
+      .listAssigneeCandidates({
+        ...trackerTarget(project),
+        ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+        limit: input.limit ?? DEFAULT_LIST_LIMIT,
+      })
+      .pipe(withTrackerContext(project, "assigneeCandidates"));
+  });
 
-  const candidates: IssueService["Service"]["candidates"] = (input) =>
-    requireProject(input).pipe(
-      Effect.flatMap((project) =>
-        project.api.listCandidates === undefined ||
-        !(
-          project.api.capabilities.labels ||
-          project.api.capabilities.assignees ||
-          project.api.capabilities.createIssueTypes ||
-          project.api.capabilities.createFields ||
-          project.api.capabilities.stateFields
-        )
-          ? Effect.fail(unsupported("candidates", "labels, assignees, or issue types"))
-          : project.api
-              .listCandidates({
-                cwd: project.project.workspaceRoot,
-                host: project.host,
-                scope: project.scope,
-                ...(input.key === undefined ? {} : { key: input.key }),
-                ...(input.issueType === undefined ? {} : { issueType: input.issueType }),
-              })
-              .pipe(withConnection(project), Effect.mapError(toIssueError("candidates"))),
-      ),
-    );
+  const templates = Effect.fn("IssueService.templates")(function* (input: IssueTemplatesInput) {
+    const project = yield* requireProject(input);
+    if (project.api.listTemplates === undefined || !project.api.capabilities.templates)
+      return yield* unsupported("templates", "issue templates");
+    return yield* project.api
+      .listTemplates({
+        ...trackerTarget(project),
+        ...(input.metadataOnly === undefined ? {} : { metadataOnly: input.metadataOnly }),
+        ...(input.templateKey === undefined ? {} : { templateKey: input.templateKey }),
+      })
+      .pipe(withTrackerContext(project, "templates"));
+  });
 
-  const create: IssueService["Service"]["create"] = (input) =>
-    Effect.gen(function* () {
-      const project = yield* requireWritable(input, "create", true);
-      const { capabilities } = project.api;
-      if (project.api.create === undefined || !capabilities.create)
-        return yield* unsupported("create", "filing issues");
-      if (input.fieldValues !== undefined && !capabilities.createFields)
-        return yield* unsupported("create", "native create fields");
-      if (input.issueType !== undefined && !capabilities.createIssueTypes)
-        return yield* unsupported("create", "selecting an issue type");
-      if (input.parentKey !== undefined && !capabilities.createSubIssue)
-        return yield* unsupported("create", "creating sub-issues");
-      if (input.templateKey !== undefined && !capabilities.templates)
-        return yield* unsupported("create", "issue templates");
-      if (
-        capabilities.maxAssignees !== undefined &&
-        input.assignees.length > capabilities.maxAssignees
+  const candidates = Effect.fn("IssueService.candidates")(function* (input: IssueCandidatesInput) {
+    const project = yield* requireProject(input);
+    if (
+      project.api.listCandidates === undefined ||
+      !(
+        project.api.capabilities.labels ||
+        project.api.capabilities.assignees ||
+        project.api.capabilities.createIssueTypes ||
+        project.api.capabilities.createFields ||
+        project.api.capabilities.stateFields
       )
-        return yield* new IssueOperationError({
-          operation: "create",
-          detail: "The issue has more assignees than this tracker allows.",
-        });
-      return yield* project.api
-        .create({
-          cwd: project.project.workspaceRoot,
-          host: project.host,
-          scope: project.scope,
-          title: input.title,
-          body: input.body,
-          labels: input.labels,
-          assignees: input.assignees,
-          ...(input.fieldValues === undefined ? {} : { fieldValues: input.fieldValues }),
-          ...(input.issueType === undefined ? {} : { issueType: input.issueType }),
-          ...(input.parentKey === undefined ? {} : { parentKey: input.parentKey }),
-          ...(input.templateKey === undefined ? {} : { templateKey: input.templateKey }),
-        })
-        .pipe(withConnection(project), Effect.mapError(toIssueError("create")));
-    });
+    )
+      return yield* unsupported("candidates", "labels, assignees, or issue types");
+    return yield* project.api
+      .listCandidates({
+        ...trackerTarget(project),
+        ...(input.key === undefined ? {} : { key: input.key }),
+        ...(input.issueType === undefined ? {} : { issueType: input.issueType }),
+      })
+      .pipe(withTrackerContext(project, "candidates"));
+  });
+
+  const create = Effect.fn("IssueService.create")(function* (input: IssueCreateInput) {
+    const project = yield* requireWritable(input, "create", true);
+    const { capabilities } = project.api;
+    if (project.api.create === undefined || !capabilities.create)
+      return yield* unsupported("create", "filing issues");
+    if (input.fieldValues !== undefined && !capabilities.createFields)
+      return yield* unsupported("create", "native create fields");
+    if (input.issueType !== undefined && !capabilities.createIssueTypes)
+      return yield* unsupported("create", "selecting an issue type");
+    if (input.parentKey !== undefined && !capabilities.createSubIssue)
+      return yield* unsupported("create", "creating sub-issues");
+    if (input.templateKey !== undefined && !capabilities.templates)
+      return yield* unsupported("create", "issue templates");
+    if (
+      capabilities.maxAssignees !== undefined &&
+      input.assignees.length > capabilities.maxAssignees
+    )
+      return yield* new IssueOperationError({
+        operation: "create",
+        detail: "The issue has more assignees than this tracker allows.",
+      });
+    return yield* project.api
+      .create({
+        ...trackerTarget(project),
+        title: input.title,
+        body: input.body,
+        labels: input.labels,
+        assignees: input.assignees,
+        ...(input.fieldValues === undefined ? {} : { fieldValues: input.fieldValues }),
+        ...(input.issueType === undefined ? {} : { issueType: input.issueType }),
+        ...(input.parentKey === undefined ? {} : { parentKey: input.parentKey }),
+        ...(input.templateKey === undefined ? {} : { templateKey: input.templateKey }),
+      })
+      .pipe(withTrackerContext(project, "create"));
+  });
 
   const comment: IssueService["Service"]["comment"] = (input) =>
     requireWritable(input, "comment").pipe(
@@ -1175,13 +1143,11 @@ export const make = Effect.gen(function* () {
               Effect.andThen(
                 project.api
                   .comment({
-                    cwd: project.project.workspaceRoot,
-                    host: project.host,
-                    scope: project.scope,
+                    ...trackerTarget(project),
                     key: input.key,
                     body: input.body,
                   })
-                  .pipe(withConnection(project), Effect.mapError(toIssueError("comment"))),
+                  .pipe(withTrackerContext(project, "comment")),
               ),
             );
       }),
@@ -1230,9 +1196,7 @@ export const make = Effect.gen(function* () {
           Effect.andThen(
             project.api
               .update({
-                cwd: project.project.workspaceRoot,
-                host: project.host,
-                scope: project.scope,
+                ...trackerTarget(project),
                 key: input.key,
                 title: input.title,
                 body: input.body,
@@ -1240,7 +1204,7 @@ export const make = Effect.gen(function* () {
                 labels: input.labels,
                 assignees: input.assignees,
               })
-              .pipe(withConnection(project), Effect.mapError(toIssueError("update"))),
+              .pipe(withTrackerContext(project, "update")),
           ),
         );
       }),
@@ -1274,240 +1238,225 @@ export const make = Effect.gen(function* () {
           Effect.andThen(
             project.api
               .setState({
-                cwd: project.project.workspaceRoot,
-                host: project.host,
-                scope: project.scope,
+                ...trackerTarget(project),
                 key: input.key,
                 state: input.state,
                 ...(input.transitionId === undefined ? {} : { transitionId: input.transitionId }),
                 ...(input.fieldValues === undefined ? {} : { fieldValues: input.fieldValues }),
                 closeReason: input.closeReason,
               })
-              .pipe(withConnection(project), Effect.mapError(toIssueError("setState"))),
+              .pipe(withTrackerContext(project, "setState")),
           ),
         );
       }),
     );
 
-  const react: IssueService["Service"]["react"] = (input) =>
-    Effect.gen(function* () {
-      const api = registry.get(input.tracker);
-      if (api === null) return yield* new IssueUnavailableError({ reason: "tracker-unsupported" });
-      const { capabilities } = api;
-      const supported =
-        input.subjectId === undefined
-          ? capabilities.reactions
-          : (capabilities.commentReactions ?? capabilities.reactions);
-      if (api.setReaction === undefined || !supported)
-        return yield* unsupported("react", "reactions");
-      if (
-        capabilities.reactionContents !== undefined &&
-        !capabilities.reactionContents.includes(input.content)
-      )
-        return yield* unsupported("react", `the reaction "${input.content}"`);
-      const project = yield* requireWritable(input, "react", true);
-      yield* api
-        .setReaction({
-          cwd: project.project.workspaceRoot,
-          host: project.host,
-          scope: project.scope,
-          key: input.key,
-          subjectId: input.subjectId,
-          content: input.content,
-          reacted: input.reacted,
-        })
-        .pipe(withConnection(project), Effect.mapError(toIssueError("react")));
-    });
+  const react = Effect.fn("IssueService.react")(function* (input: IssueReactionInput) {
+    const api = registry.get(input.tracker);
+    if (api === null) return yield* new IssueUnavailableError({ reason: "tracker-unsupported" });
+    const { capabilities } = api;
+    const supported =
+      input.subjectId === undefined
+        ? capabilities.reactions
+        : (capabilities.commentReactions ?? capabilities.reactions);
+    if (api.setReaction === undefined || !supported)
+      return yield* unsupported("react", "reactions");
+    if (
+      capabilities.reactionContents !== undefined &&
+      !capabilities.reactionContents.includes(input.content)
+    )
+      return yield* unsupported("react", `the reaction "${input.content}"`);
+    const project = yield* requireWritable(input, "react", true);
+    yield* api
+      .setReaction({
+        ...trackerTarget(project),
+        key: input.key,
+        subjectId: input.subjectId,
+        content: input.content,
+        reacted: input.reacted,
+      })
+      .pipe(withTrackerContext(project, "react"));
+  });
 
-  const editComment: IssueService["Service"]["editComment"] = (input) =>
-    Effect.gen(function* () {
-      const project = yield* requireWritable(input, "editComment", true);
-      if (project.api.editComment === undefined || !project.api.capabilities.editComment)
-        return yield* unsupported("editComment", "editing comments");
-      if (input.richBody !== undefined && !project.api.capabilities.richText)
-        return yield* unsupported("editComment", "rich text");
-      if (input.body.trim().length === 0 && input.richBody === undefined)
-        return yield* new IssueOperationError({
-          operation: "editComment",
-          detail: "A comment needs some text.",
-        });
-      yield* project.api
-        .editComment({
-          cwd: project.project.workspaceRoot,
-          host: project.host,
-          scope: project.scope,
-          key: input.key,
-          commentId: input.commentId,
-          body: input.body,
-          ...(input.richBody === undefined ? {} : { richBody: input.richBody }),
-        })
-        .pipe(withConnection(project), Effect.mapError(toIssueError("editComment")));
-    });
-
-  const setParent: IssueService["Service"]["setParent"] = (input) =>
-    Effect.gen(function* () {
-      const project = yield* requireWritable(input, "setParent");
-      if (project.api.setParent === undefined || !project.api.capabilities.updateParent)
-        return yield* unsupported("setParent", "changing parent issues");
-      if (input.parentKey === input.key)
-        return yield* new IssueOperationError({
-          operation: "setParent",
-          detail: "An issue cannot be its own parent.",
-        });
-      yield* requirePermissions(
-        project,
-        input,
-        "setParent",
-        (permissions) => permissions.updateParent ?? permissions.edit,
-      );
-      yield* project.api
-        .setParent({
-          cwd: project.project.workspaceRoot,
-          host: project.host,
-          scope: project.scope,
-          key: input.key,
-          parentKey: input.parentKey,
-        })
-        .pipe(withConnection(project), Effect.mapError(toIssueError("setParent")));
-    });
-
-  const resolveUrl: IssueService["Service"]["resolveUrl"] = (
-    url,
-    preferredProjectId,
-    connectionId,
-  ) =>
-    Effect.gen(function* () {
-      const target = yield* Effect.try({
-        try: () => new URL(url),
-        catch: () =>
-          new IssueOperationError({
-            operation: "resolveUrl",
-            reason: "not-found",
-            detail: "This is not a recognised issue URL.",
-          }),
+  const editComment = Effect.fn("IssueService.editComment")(function* (
+    input: IssueEditCommentInput,
+  ) {
+    const project = yield* requireWritable(input, "editComment", true);
+    if (project.api.editComment === undefined || !project.api.capabilities.editComment)
+      return yield* unsupported("editComment", "editing comments");
+    if (input.richBody !== undefined && !project.api.capabilities.richText)
+      return yield* unsupported("editComment", "rich text");
+    if (input.body.trim().length === 0 && input.richBody === undefined)
+      return yield* new IssueOperationError({
+        operation: "editComment",
+        detail: "A comment needs some text.",
       });
-      const available = yield* listProjects({});
-      const supported = available.supported.filter(
-        (project) => project.host.split("/")[0] === target.host.toLowerCase(),
-      );
-      const parsed =
-        supported.map((project) => parseIssueUrl(url, project)).find((link) => link !== null) ??
-        parseIssueUrl(url);
-      if (parsed === null) {
-        return yield* new IssueOperationError({
+    yield* project.api
+      .editComment({
+        ...trackerTarget(project),
+        key: input.key,
+        commentId: input.commentId,
+        body: input.body,
+        ...(input.richBody === undefined ? {} : { richBody: input.richBody }),
+      })
+      .pipe(withTrackerContext(project, "editComment"));
+  });
+
+  const setParent = Effect.fn("IssueService.setParent")(function* (input: IssueSetParentInput) {
+    const project = yield* requireWritable(input, "setParent");
+    if (project.api.setParent === undefined || !project.api.capabilities.updateParent)
+      return yield* unsupported("setParent", "changing parent issues");
+    if (input.parentKey === input.key)
+      return yield* new IssueOperationError({
+        operation: "setParent",
+        detail: "An issue cannot be its own parent.",
+      });
+    yield* requirePermissions(
+      project,
+      input,
+      "setParent",
+      (permissions) => permissions.updateParent ?? permissions.edit,
+    );
+    yield* project.api
+      .setParent({
+        ...trackerTarget(project),
+        key: input.key,
+        parentKey: input.parentKey,
+      })
+      .pipe(withTrackerContext(project, "setParent"));
+  });
+
+  const resolveUrl = Effect.fn("IssueService.resolveUrl")(function* (
+    url: string,
+    preferredProjectId?: ProjectId,
+    connectionId?: string,
+  ) {
+    const target = yield* Effect.try({
+      try: () => new URL(url),
+      catch: () =>
+        new IssueOperationError({
           operation: "resolveUrl",
           reason: "not-found",
           detail: "This is not a recognised issue URL.",
+        }),
+    });
+    const available = yield* listProjects({});
+    const supported = available.supported.filter(
+      (project) => project.host.split("/")[0] === target.host.toLowerCase(),
+    );
+    const parsed =
+      supported.map((project) => parseIssueUrl(url, project)).find((link) => link !== null) ??
+      parseIssueUrl(url);
+    if (parsed === null) {
+      return yield* new IssueOperationError({
+        operation: "resolveUrl",
+        reason: "not-found",
+        detail: "This is not a recognised issue URL.",
+      });
+    }
+    const scope =
+      parsed.tracker === "forgejo"
+        ? parseForgejoRemote(target.href)!
+            .path.split("/")
+            .slice(0, parsed.scope.split("/").length)
+            .join("/")
+        : parsed.scope;
+    const preferred = supported.find(
+      (project) => project.project.id === preferredProjectId && project.tracker === parsed.tracker,
+    );
+    if (preferred !== undefined && preferred.host !== parsed.host)
+      return yield* new IssueUnavailableError({ reason: "tracker-unsupported" });
+    const selectedAccount = connectionId ?? preferred?.connectionId;
+    const onTracker = supported.filter(
+      (project) =>
+        project.tracker === parsed.tracker &&
+        project.host === parsed.host &&
+        ((connectionId === undefined && preferred === undefined) ||
+          project.connectionId === selectedAccount),
+    );
+    if (
+      connectionId !== undefined &&
+      preferredProjectId !== undefined &&
+      !onTracker.some((project) => project.project.id === preferredProjectId)
+    )
+      return yield* new IssueUnavailableError({ reason: "tracker-unsupported" });
+    const preferFirst = (projects: ReadonlyArray<SupportedProject>) =>
+      projects.find((project) => project.project.id === preferredProjectId) ?? projects[0];
+    const legacyScope =
+      parsed.workspace === undefined ? undefined : parsed.scope.slice(parsed.workspace.length + 1);
+    const canonicalProjects = onTracker.filter(
+      (project) =>
+        issueScopeKeyOf(project) === issueScopeKeyOf({ tracker: project.tracker, scope }),
+    );
+    const ownProjects =
+      canonicalProjects.length > 0
+        ? canonicalProjects
+        : legacyScope === undefined
+          ? []
+          : onTracker.filter(
+              (project) =>
+                isStandaloneIssueTracker(project.api) &&
+                !project.scope.includes("/") &&
+                project.scope.toLowerCase() === legacyScope,
+            );
+    const own = preferFirst(ownProjects);
+    const lenders =
+      own === undefined
+        ? onTracker.filter(
+            (project) =>
+              !isStandaloneIssueTracker(project.api) ||
+              project.tracker === "jira" ||
+              (project.tracker === "linear" &&
+                parsed.workspace !== undefined &&
+                project.scope.includes("/") &&
+                project.scope.split("/")[0]?.toLowerCase() === parsed.workspace),
+          )
+        : ownProjects;
+    if (new Set(lenders.map((project) => project.connectionId)).size > 1)
+      return yield* new IssueUnavailableError({ reason: "tracker-unsupported" });
+    const lender = own ?? preferFirst(lenders);
+    if (lender === undefined) {
+      return yield* new IssueUnavailableError({ reason: "tracker-unsupported" });
+    }
+    if (parsed.workspace !== undefined && !lender.scope.includes("/")) {
+      const issue = yield* lender.api
+        .getIssue({
+          ...trackerTarget(lender),
+          key: parsed.key,
+        })
+        .pipe(withTrackerContext(lender, "resolveUrl"));
+      const canonical = parseIssueUrl(issue.url, lender);
+      if (
+        canonical === null ||
+        canonical.tracker !== parsed.tracker ||
+        canonical.host !== parsed.host ||
+        canonical.scope !== parsed.scope ||
+        canonical.key !== parsed.key ||
+        canonical.workspace !== parsed.workspace
+      ) {
+        return yield* new IssueOperationError({
+          operation: "resolveUrl",
+          reason: "not-found",
+          detail: "This URL does not match the issue returned by the configured tracker.",
         });
       }
-      const scope =
-        parsed.tracker === "forgejo"
-          ? parseForgejoRemote(target.href)!
-              .path.split("/")
-              .slice(0, parsed.scope.split("/").length)
-              .join("/")
-          : parsed.scope;
-      const preferred = supported.find(
-        (project) =>
-          project.project.id === preferredProjectId && project.tracker === parsed.tracker,
-      );
-      if (preferred !== undefined && preferred.host !== parsed.host)
-        return yield* new IssueUnavailableError({ reason: "tracker-unsupported" });
-      const selectedAccount = connectionId ?? preferred?.connectionId;
-      const onTracker = supported.filter(
-        (project) =>
-          project.tracker === parsed.tracker &&
-          project.host === parsed.host &&
-          ((connectionId === undefined && preferred === undefined) ||
-            project.connectionId === selectedAccount),
-      );
-      if (
-        connectionId !== undefined &&
-        preferredProjectId !== undefined &&
-        !onTracker.some((project) => project.project.id === preferredProjectId)
-      )
-        return yield* new IssueUnavailableError({ reason: "tracker-unsupported" });
-      const preferFirst = (projects: ReadonlyArray<SupportedProject>) =>
-        projects.find((project) => project.project.id === preferredProjectId) ?? projects[0];
-      const legacyScope =
-        parsed.workspace === undefined
-          ? undefined
-          : parsed.scope.slice(parsed.workspace.length + 1);
-      const canonicalProjects = onTracker.filter(
-        (project) =>
-          issueScopeKeyOf(project) === issueScopeKeyOf({ tracker: project.tracker, scope }),
-      );
-      const ownProjects =
-        canonicalProjects.length > 0
-          ? canonicalProjects
-          : legacyScope === undefined
-            ? []
-            : onTracker.filter(
-                (project) =>
-                  isStandaloneIssueTracker(project.api) &&
-                  !project.scope.includes("/") &&
-                  project.scope.toLowerCase() === legacyScope,
-              );
-      const own = preferFirst(ownProjects);
-      const lenders =
-        own === undefined
-          ? onTracker.filter(
-              (project) =>
-                !isStandaloneIssueTracker(project.api) ||
-                project.tracker === "jira" ||
-                (project.tracker === "linear" &&
-                  parsed.workspace !== undefined &&
-                  project.scope.includes("/") &&
-                  project.scope.split("/")[0]?.toLowerCase() === parsed.workspace),
-            )
-          : ownProjects;
-      if (new Set(lenders.map((project) => project.connectionId)).size > 1)
-        return yield* new IssueUnavailableError({ reason: "tracker-unsupported" });
-      const lender = own ?? preferFirst(lenders);
-      if (lender === undefined) {
-        return yield* new IssueUnavailableError({ reason: "tracker-unsupported" });
-      }
-      if (parsed.workspace !== undefined && !lender.scope.includes("/")) {
-        const issue = yield* lender.api
-          .getIssue({
-            cwd: lender.project.workspaceRoot,
-            host: lender.host,
-            scope: lender.scope,
-            key: parsed.key,
-          })
-          .pipe(withConnection(lender), Effect.mapError(toIssueError("resolveUrl")));
-        const canonical = parseIssueUrl(issue.url, lender);
-        if (
-          canonical === null ||
-          canonical.tracker !== parsed.tracker ||
-          canonical.host !== parsed.host ||
-          canonical.scope !== parsed.scope ||
-          canonical.key !== parsed.key ||
-          canonical.workspace !== parsed.workspace
-        ) {
-          return yield* new IssueOperationError({
-            operation: "resolveUrl",
-            reason: "not-found",
-            detail: "This URL does not match the issue returned by the configured tracker.",
-          });
-        }
-      }
-      return {
-        projectId: lender.project.id,
-        tracker: lender.tracker,
-        ...accountFields(lender),
-        host: lender.host,
-        scope:
-          own?.scope ??
-          (parsed.tracker === "jira"
-            ? parsed.scope.toUpperCase()
-            : issueScopeKeyOf({ tracker: parsed.tracker, scope })),
-        key: parsed.key,
-        writable:
-          own !== undefined &&
-          !(parsed.tracker === "gitlab" && scope.toLowerCase().startsWith("group:")),
-      };
-    });
+    }
+    return {
+      projectId: lender.project.id,
+      tracker: lender.tracker,
+      ...accountFields(lender),
+      host: lender.host,
+      scope:
+        own?.scope ??
+        (parsed.tracker === "jira"
+          ? parsed.scope.toUpperCase()
+          : issueScopeKeyOf({ tracker: parsed.tracker, scope })),
+      key: parsed.key,
+      writable:
+        own !== undefined &&
+        !(parsed.tracker === "gitlab" && scope.toLowerCase().startsWith("group:")),
+    };
+  });
 
   const requireReferenceProject = Effect.fn("IssueService.requireReferenceProject")(function* (
     projectId: ProjectId | undefined,
@@ -1520,59 +1469,61 @@ export const make = Effect.gen(function* () {
     return project.value;
   });
 
-  const resolveSource: IssueService["Service"]["resolveSource"] = (input) =>
-    Effect.gen(function* () {
-      const project = yield* requireReferenceProject(input.projectId);
-      const available = yield* sources(project.id);
-      if (available.length === 0)
-        return yield* new IssueProjectNotFoundError({ projectId: project.id });
-      const matches =
-        input.tracker === undefined
-          ? available
-          : available.filter((source) => source.tracker === input.tracker);
-      const selected = matches.filter((source) => source.connectionId === input.connectionId);
-      const binding = selected.length === 1 ? selected[0] : undefined;
-      if (binding === undefined)
-        return yield* new IssueSourceSelectionError({
-          projectId: project.id,
-          ...(input.tracker === undefined ? {} : { tracker: input.tracker }),
-          sources: available,
-        });
-      return { project, binding };
-    });
+  const resolveSource = Effect.fn("IssueService.resolveSource")(function* (
+    input: Pick<ResolveIssueTargetInput, "projectId" | "tracker" | "connectionId">,
+  ) {
+    const project = yield* requireReferenceProject(input.projectId);
+    const available = yield* sources(project.id);
+    if (available.length === 0)
+      return yield* new IssueProjectNotFoundError({ projectId: project.id });
+    const matches =
+      input.tracker === undefined
+        ? available
+        : available.filter((source) => source.tracker === input.tracker);
+    const selected = matches.filter((source) => source.connectionId === input.connectionId);
+    const binding = selected.length === 1 ? selected[0] : undefined;
+    if (binding === undefined)
+      return yield* new IssueSourceSelectionError({
+        projectId: project.id,
+        ...(input.tracker === undefined ? {} : { tracker: input.tracker }),
+        sources: available,
+      });
+    return { project, binding };
+  });
 
-  const resolveTarget: IssueService["Service"]["resolveTarget"] = (input) =>
-    Effect.gen(function* () {
-      if (input.url !== undefined) {
-        const resolved = yield* resolveUrl(input.url, input.projectId, input.connectionId);
-        return { ...resolved, url: input.url };
-      }
-      if (input.key === undefined) return yield* new IssueTargetIncompleteError();
-      if (input.scope !== undefined && input.tracker !== undefined && input.host !== undefined) {
-        const project = yield* requireReferenceProject(input.projectId);
-        return {
-          projectId: project.id,
-          tracker: input.tracker,
-          ...(input.connectionId === undefined ? {} : { connectionId: input.connectionId }),
-          host: input.host,
-          scope: input.scope,
-          key: input.key,
-          url: null,
-          writable: false,
-        };
-      }
-      const { project, binding } = yield* resolveSource(input);
+  const resolveTarget = Effect.fn("IssueService.resolveTarget")(function* (
+    input: ResolveIssueTargetInput,
+  ) {
+    if (input.url !== undefined) {
+      const resolved = yield* resolveUrl(input.url, input.projectId, input.connectionId);
+      return { ...resolved, url: input.url };
+    }
+    if (input.key === undefined) return yield* new IssueTargetIncompleteError();
+    if (input.scope !== undefined && input.tracker !== undefined && input.host !== undefined) {
+      const project = yield* requireReferenceProject(input.projectId);
       return {
         projectId: project.id,
-        tracker: binding.tracker,
-        ...(binding.connectionId === undefined ? {} : { connectionId: binding.connectionId }),
-        host: input.host ?? binding.host,
-        scope: input.scope ?? binding.scope,
+        tracker: input.tracker,
+        ...(input.connectionId === undefined ? {} : { connectionId: input.connectionId }),
+        host: input.host,
+        scope: input.scope,
         key: input.key,
         url: null,
-        writable: true,
+        writable: false,
       };
-    });
+    }
+    const { project, binding } = yield* resolveSource(input);
+    return {
+      projectId: project.id,
+      tracker: binding.tracker,
+      ...(binding.connectionId === undefined ? {} : { connectionId: binding.connectionId }),
+      host: input.host ?? binding.host,
+      scope: input.scope ?? binding.scope,
+      key: input.key,
+      url: null,
+      writable: true,
+    };
+  });
 
   return IssueService.of({
     resolveSource,
