@@ -1,4 +1,7 @@
 import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
+import { ENVIRONMENT_READ_WS_METHODS } from "@t3tools/contracts";
+import * as EnvironmentReadBroker from "./mcp/EnvironmentReadBroker.ts";
+import * as EnvironmentReadService from "./mcp/EnvironmentReadService.ts";
 import * as Crypto from "effect/Crypto";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
 
@@ -1231,6 +1234,10 @@ export const layerWsRpc = (
         yield* Effect.context<Effect.Services<ReturnType<typeof remoteSshDeviceHosts>>>();
       const orchestrationEngine = yield* Orchestrator.OrchestratorV2;
       const crypto = yield* Crypto.Crypto;
+      const environmentReadBroker = yield* EnvironmentReadBroker.EnvironmentReadBroker;
+      const environmentReadService = yield* EnvironmentReadService.EnvironmentReadService;
+      const socketId = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+      const bridgeOwner = { sessionId: currentSessionId, socketId };
       const serverCommandId = (tag: string) =>
         crypto.randomUUIDv4().pipe(
           Effect.orDie,
@@ -2895,6 +2902,11 @@ export const layerWsRpc = (
               (unsubscribe) => Effect.sync(unsubscribe),
             ),
           ),
+        [ENVIRONMENT_READ_WS_METHODS.subscribe]: (input) =>
+          environmentReadBroker.connect(bridgeOwner, input),
+        [ENVIRONMENT_READ_WS_METHODS.respond]: (input) =>
+          environmentReadBroker.respond(bridgeOwner, input),
+        [ENVIRONMENT_READ_WS_METHODS.read]: (input) => environmentReadService.read(input),
         [WS_METHODS.previewOpen]: (input) => previewManager.open(input),
         [WS_METHODS.previewNavigate]: (input) => previewManager.navigate(input),
         [WS_METHODS.previewResize]: (input) => previewManager.resize(input),
@@ -3134,6 +3146,8 @@ export const WS_RPC_SERVER_OPTIONS = {
 export const layer = Layer.unwrap(
   Effect.gen(function* () {
     const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
+    const environmentReadBroker = yield* EnvironmentReadBroker.EnvironmentReadBroker;
+    const environmentReadService = yield* EnvironmentReadService.EnvironmentReadService;
     const serverBrowser = yield* ServerBrowser.ServerBrowser;
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const pullRequests = yield* PullRequestService.PullRequestService;
@@ -3216,6 +3230,15 @@ export const layer = Layer.unwrap(
               // their defects, not the rest of the server's.
               Layer.provide(DefectReporter.layer),
               Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
+              Layer.provide(
+                Layer.succeed(EnvironmentReadBroker.EnvironmentReadBroker, environmentReadBroker),
+              ),
+              Layer.provide(
+                Layer.succeed(
+                  EnvironmentReadService.EnvironmentReadService,
+                  environmentReadService,
+                ),
+              ),
               Layer.provide(AgentSessionScanner.layer),
               Layer.provide(ProviderMaintenanceRunner.layer),
               Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),

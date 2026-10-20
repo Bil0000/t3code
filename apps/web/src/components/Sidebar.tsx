@@ -2678,7 +2678,7 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
                 <RelativeTimeLabel timestamp={threadTimeTimestamp(thread)} />
               </span>
             </span>
-            {props.searchMatch ? (
+            {props.searchMatch && props.searchMatch.source !== "title" ? (
               <ThreadSearchMatchExcerpt
                 match={{
                   source: props.searchMatch.source,

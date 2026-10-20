@@ -1,3 +1,4 @@
+import { ENVIRONMENT_READ_WS_METHODS } from "./environmentRead.ts";
 import * as Schema from "effect/Schema";
 import { GitPreparePullRequestThreadInput, GitRunStackedActionInput } from "./git.ts";
 import {
@@ -13,6 +14,9 @@ import { WS_METHODS } from "./rpc.ts";
 
 /** Incremental client enforcement; the server still authorizes every request. */
 export const CLIENT_GUARDED_RPC_SCOPES = {
+  [ENVIRONMENT_READ_WS_METHODS.read]: AuthOrchestrationReadScope,
+  [ENVIRONMENT_READ_WS_METHODS.subscribe]: AuthOrchestrationReadScope,
+  [ENVIRONMENT_READ_WS_METHODS.respond]: AuthOrchestrationReadScope,
   [WS_METHODS.previewClose]: AuthPreviewOperateScope,
   [WS_METHODS.serverRunStorageCleanup]: AuthSettingsWriteScope,
   [WS_METHODS.serverCheckOtlpEndpoint]: AuthSettingsWriteScope,

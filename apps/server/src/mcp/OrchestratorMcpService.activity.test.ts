@@ -182,6 +182,76 @@ it("readThread prefers activity-run status over a newer cancelled queued run", a
   }).pipe(Effect.provide(layer), Effect.runPromise);
 });
 
+it("reads a completed child's persisted history without acknowledgement or hydration", async () => {
+  const shell = {
+    ...liveThreadShell(childThreadId, { activeRunId: null }),
+    status: "completed" as const,
+    lineage: {
+      parentThreadId,
+      relationshipToParent: "subagent" as const,
+      rootThreadId: parentThreadId,
+    },
+  };
+  const projection = {
+    ...idleThreadProjection(shell),
+    runs: [makeRun({ id: childRunId, ordinal: 1, status: "completed" })],
+    visibleTurnItems: [
+      {
+        position: 0,
+        visibility: "local",
+        sourceThreadId: childThreadId,
+        sourceItemId: "result-item",
+        item: {
+          id: "result-item",
+          runId: childRunId,
+          type: "assistant_message",
+          messageId: "result-message",
+          status: "completed",
+          title: null,
+          text: "Completed child result",
+          createdAt: now,
+          updatedAt: now,
+        },
+      },
+    ],
+  } as unknown as OrchestrationV2ThreadProjection;
+  const layer = layerOrchestratorService.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.mock(ThreadManagementService.ThreadManagementService)({
+          getThreadShell: (id) =>
+            id === childThreadId
+              ? Effect.succeed(shell)
+              : Effect.die("A persisted read must not load the parent."),
+          getPersistedThreadRecords: () => Effect.succeed(projection),
+          getPersistedTimelinePage: () =>
+            Effect.succeed({ items: projection.visibleTurnItems, totalItems: 1, hasMore: false }),
+          getProjectThreadRecords: () => Effect.die("A persisted read must not hydrate."),
+          getThreadRecords: () => Effect.die("A persisted read must not hydrate messages."),
+          getTimelinePage: () => Effect.die("A persisted read must not hydrate the timeline."),
+          dispatch: () => Effect.die("A persisted read must not acknowledge the child result."),
+        }),
+        ServerSettings.layerTest(),
+        Layer.mock(ProviderRegistry.ProviderRegistry)({}),
+        Layer.mock(ProjectService.ProjectService)({}),
+        Layer.mock(SecretRequests.SecretRequests)({}),
+        Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+        Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({}),
+        NodeCrypto.layer,
+      ),
+    ),
+  );
+  await Effect.gen(function* () {
+    const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+    const result = yield* service.readThreadHistory({ threadId: childThreadId });
+    expect(result.thread.parentThreadId).toBe(parentThreadId);
+    expect(result.items).toMatchObject([
+      { type: "assistant_message", text: "Completed child result", textTruncated: false },
+    ]);
+    expect(result.hasMore).toBe(false);
+  }).pipe(Effect.provide(layer), Effect.runPromise);
+});
+
 it("readThread prefers waiting activity status over a newer cancelled queued run", async () => {
   const projection = {
     thread: baseThread({

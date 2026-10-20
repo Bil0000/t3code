@@ -15,6 +15,10 @@ import {
   type StoredGitHubRoutingPermission,
 } from "../connection/githubRoutingPermissions.ts";
 import {
+  AgentThreadReadPermissions,
+  type StoredAgentThreadReadGrant,
+} from "../connection/agentThreadReadPermissions.ts";
+import {
   createAtomCommandScheduler,
   createRuntimeCommand,
   followStreamInEnvironment,
@@ -88,6 +92,38 @@ export function createEnvironmentCatalogAtoms<R, E>(
         });
       const permissions = yield* GitHubRoutingPermissions;
       yield* permissions.set(entry, input.permission);
+    }),
+  });
+
+  const agentThreadReadGrantsAtom = runtime.atom(
+    Stream.unwrap(
+      AgentThreadReadPermissions.pipe(Effect.map((permissions) => permissions.changes)),
+    ),
+    { initialValue: [] as ReadonlyArray<StoredAgentThreadReadGrant> },
+  );
+  const agentThreadReadGrantsValueAtom = Atom.make((get) =>
+    Option.getOrElse(AsyncResult.value(get(agentThreadReadGrantsAtom)), () => []),
+  );
+  const setAgentThreadReadGrant = createRuntimeCommand(runtime, {
+    label: "environment-catalog:agent-thread-read-grant",
+    scheduler: commandScheduler,
+    concurrency: serial,
+    execute: Effect.fn(function* (input: {
+      readonly sourceEnvironmentId: EnvironmentIdType;
+      readonly destinationEnvironmentId: EnvironmentIdType;
+      readonly allowed: boolean;
+    }) {
+      const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+      const entries = yield* SubscriptionRef.get(registry.entries);
+      const source = entries.get(input.sourceEnvironmentId);
+      const destination = entries.get(input.destinationEnvironmentId);
+      if (source === undefined || destination === undefined)
+        return yield* new EnvironmentRegistry.EnvironmentNotRegisteredError({
+          environmentId:
+            source === undefined ? input.sourceEnvironmentId : input.destinationEnvironmentId,
+        });
+      const permissions = yield* AgentThreadReadPermissions;
+      yield* permissions.set(source, destination, input.allowed);
     }),
   });
 
@@ -189,6 +225,8 @@ export function createEnvironmentCatalogAtoms<R, E>(
 
   return {
     catalogAtom,
+    agentThreadReadGrantsValueAtom,
+    setAgentThreadReadGrant,
     catalogValueAtom,
     githubRoutingPermissionsValueAtom,
     setGitHubRoutingPermission,

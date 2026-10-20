@@ -1,3 +1,4 @@
+import { AgentThreadReadSettings } from "../connection/AgentThreadReadSettings";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 import { useNavigation } from "@react-navigation/native";
 import { useAtomValue } from "@effect/atom-react";
@@ -180,6 +181,7 @@ export function SettingsEnvironmentsRouteScreen() {
             : {})}
         />
         <GitHubRoutingSettings />
+        <AgentThreadReadSettings />
       </ScrollView>
     </SettingsScreen>
   );

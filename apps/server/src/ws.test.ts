@@ -32,6 +32,8 @@ import { ChildProcessSpawner } from "effect/process";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
+import * as EnvironmentReadBroker from "./mcp/EnvironmentReadBroker.ts";
+import * as EnvironmentReadService from "./mcp/EnvironmentReadService.ts";
 import * as ServerBrowser from "./preview/ServerBrowser.ts";
 import * as AcpRegistryRuntimeCoordinator from "@t3tools/provider-acp-registry/server/AcpRegistryRuntimeCoordinator";
 import * as AcpRegistrySupport from "@t3tools/provider-acp-registry/server/AcpRegistrySupport";
@@ -684,6 +686,8 @@ it.effect(
         Layer.mergeAll(
           Layer.fresh(layerConfigSources),
           Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({}),
+          Layer.mock(EnvironmentReadBroker.EnvironmentReadBroker)({}),
+          Layer.mock(EnvironmentReadService.EnvironmentReadService)({}),
           Layer.mock(ServerBrowser.ServerBrowser)({}),
         ),
       ),

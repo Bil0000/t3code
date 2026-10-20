@@ -1,5 +1,9 @@
 import {
   BackgroundActivityProfile,
+  EnvironmentReadTarget,
+  EnvironmentBrowseInput,
+  EnvironmentBrowseResult,
+  EnvironmentReadError,
   BackgroundActivityProfileSelection,
   ExecutionEnvironmentDescriptor,
   OrchestratorMcpFailure,
@@ -13,6 +17,7 @@ import * as ThreadCommandExecutor from "../../../orchestration-v2/ThreadCommandE
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as Settings from "../../../serverSettings.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import * as EnvironmentReadService from "../../EnvironmentReadService.ts";
 
 const PreferenceFields = {
   defaultThreadEnvMode: ServerSettings.fields.defaultThreadEnvMode,
@@ -64,4 +69,38 @@ const EnvironmentPreferencesTool = Tool.make("t3_environment_preferences_update"
   }),
   success: Schema.Struct(PreferenceFields),
 }).annotate(Tool.Destructive, true);
-export const EnvironmentToolkit = Toolkit.make(EnvironmentReadTool, EnvironmentPreferencesTool);
+const EnvironmentListTool = Tool.make("t3_environment_list", {
+  description:
+    "List this environment and explicitly shared read sources from a connected client. Sharing is off by default. A remote target may be offline, denied, or unsupported. Results include the target environmentId.",
+  success: Schema.Struct({ environments: Schema.Array(EnvironmentReadTarget) }),
+  failure: Schema.Union([EnvironmentReadError, OrchestratorMcpFailure]),
+  failureMode: "return",
+  dependencies: [
+    McpInvocationContext.McpInvocationContext,
+    EnvironmentReadService.EnvironmentReadService,
+    ThreadManagementService.ThreadManagementService,
+  ],
+})
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false);
+const EnvironmentBrowseTool = Tool.make("t3_environment_browse", {
+  description:
+    "Read projects and threads from an explicitly shared environment. Omit environmentId for local reads. request.operation is project.list, project.read, thread.list, thread.search, or thread.read. Use project.list then thread.search to find a topic; paginate with nextCursor. Archive reads require archived='include' or 'only'. Thread history pages use nextPosition/afterPosition and itemId/textOffset. This tool never acknowledges child results or writes remote state. Target environmentId is returned; all IDs belong to that environment.",
+  parameters: EnvironmentBrowseInput,
+  success: EnvironmentBrowseResult,
+  failure: Schema.Union([EnvironmentReadError, OrchestratorMcpFailure]),
+  failureMode: "return",
+  dependencies: [
+    McpInvocationContext.McpInvocationContext,
+    EnvironmentReadService.EnvironmentReadService,
+    ThreadManagementService.ThreadManagementService,
+  ],
+})
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false);
+export const EnvironmentToolkit = Toolkit.make(
+  EnvironmentReadTool,
+  EnvironmentPreferencesTool,
+  EnvironmentListTool,
+  EnvironmentBrowseTool,
+);

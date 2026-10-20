@@ -183,6 +183,9 @@ export interface OrchestratorMcpServiceShape {
     scope: McpInvocationScope,
     input: OrchestratorMcpThreadReadInput,
   ) => Effect.Effect<OrchestratorMcpThreadReadResult, OrchestratorMcpFailure>;
+  readonly readThreadHistory: (
+    input: OrchestratorMcpThreadReadInput,
+  ) => Effect.Effect<OrchestratorMcpThreadReadResult, OrchestratorMcpFailure>;
   readonly sendToThread: (
     scope: McpInvocationScope,
     input: OrchestratorMcpThreadSendInput,
@@ -1190,24 +1193,32 @@ const make = Effect.gen(function* () {
   };
 
   const loadReadableThread = Effect.fn("OrchestratorMcpService.loadReadableThread")(function* (
-    scope: McpInvocationScope,
     threadId: ThreadId,
+    hydrate: boolean,
   ) {
-    const { parent } = yield* loadCaller(scope);
     const shell = yield* threadManagement
       .getThreadShell(threadId)
       .pipe(Effect.mapError(threadManagementFailure));
     if (shell === null || shell.deletedAt !== null) {
       return yield* failure("thread_not_found", `Thread ${threadId} is no longer available.`);
     }
-    const target = yield* threadManagement
-      .getProjectThreadRecords({ projectId: shell.projectId, threadId }, [
-        "runs",
-        "runtimeRequests",
-        "contextTransfers",
-      ])
-      .pipe(Effect.mapError(threadManagementFailure));
-    return { parent, target, shell } as const;
+    const target = yield* (
+      hydrate
+        ? threadManagement.getProjectThreadRecords({ projectId: shell.projectId, threadId }, [
+            "runs",
+            "runtimeRequests",
+            "contextTransfers",
+          ])
+        : threadManagement.getPersistedThreadRecords(threadId, [
+            "runs",
+            "runtimeRequests",
+            "contextTransfers",
+          ])
+    ).pipe(Effect.mapError(threadManagementFailure));
+    if (target.thread.deletedAt !== null || target.thread.projectId !== shell.projectId) {
+      return yield* failure("thread_not_found", `Thread ${threadId} is no longer available.`);
+    }
+    return { target, shell } as const;
   });
 
   const loadProviders = providerRegistry.getProviders;
@@ -1716,6 +1727,65 @@ const make = Effect.gen(function* () {
       yield* resolveInteractionMode(limits.interactionMode, modes.interactionMode);
     }
     return task;
+  });
+
+  const readThreadPage = Effect.fn("OrchestratorMcpService.readThreadPage")(function* (
+    input: OrchestratorMcpThreadReadInput,
+    hydrate: boolean,
+  ) {
+    const { target, shell } = yield* loadReadableThread(input.threadId, hydrate);
+    const view = input.view ?? "messages";
+    const afterPosition = input.afterPosition ?? -1;
+    const limit = input.limit ?? DEFAULT_THREAD_READ_LIMIT;
+    const maxChars = input.maxCharsPerItem ?? DEFAULT_THREAD_ITEM_MAX_CHARS;
+    const timeline = yield* (
+      hydrate ? threadManagement.getTimelinePage : threadManagement.getPersistedTimelinePage
+    )(input.threadId, {
+      afterPosition,
+      limit,
+      view,
+      ...(input.itemId === undefined ? {} : { itemId: input.itemId }),
+    }).pipe(Effect.mapError(threadManagementFailure));
+    const page = timeline.items;
+    const messageIdsByThread = new Map<ThreadId, Array<MessageId>>();
+    for (const row of page) {
+      if (row.item.type !== "user_message" && row.item.type !== "assistant_message") continue;
+      const ids = messageIdsByThread.get(row.sourceThreadId) ?? [];
+      ids.push(row.item.messageId);
+      messageIdsByThread.set(row.sourceThreadId, ids);
+    }
+    const sourceMessages = yield* Effect.forEach(
+      [...messageIdsByThread],
+      ([threadId, messageIds]) =>
+        (hydrate ? threadManagement.getThreadRecords : threadManagement.getPersistedThreadRecords)(
+          threadId,
+          ["messages"],
+          { messageIds },
+        ).pipe(
+          Effect.map((records) => [threadId, records.messages] as const),
+          Effect.mapError(threadManagementFailure),
+        ),
+      { concurrency: 1 },
+    );
+    const messagesByThreadId = new Map(sourceMessages);
+    const result = {
+      thread: threadDetail(target, timeline.totalItems, shell, yield* Clock.currentTimeMillis),
+      recentRuns: target.runs
+        .toSorted((left, right) => right.ordinal - left.ordinal)
+        .slice(0, input.runLimit ?? DEFAULT_THREAD_RUN_LIMIT)
+        .map(threadRun),
+      items: page.map((row) =>
+        timelineItem({
+          row,
+          maxChars,
+          messagesByThreadId,
+          ...(input.itemId === undefined ? {} : { textOffset: input.textOffset ?? 0 }),
+        }),
+      ),
+      nextPosition: page.at(-1)?.position ?? null,
+      hasMore: timeline.hasMore,
+    } satisfies OrchestratorMcpThreadReadResult;
+    return { result, target, page, maxChars };
   });
 
   return OrchestratorMcpService.of({
@@ -2570,6 +2640,7 @@ const make = Effect.gen(function* () {
         .listProjectThreads({
           projectId,
           includeSubagents: input.includeSubagents !== false,
+          ...(input.archived === undefined ? {} : { archived: input.archived }),
         })
         .pipe(
           Effect.mapError((error) =>
@@ -2607,37 +2678,8 @@ const make = Effect.gen(function* () {
       } satisfies OrchestratorMcpThreadListResult;
     }),
     readThread: Effect.fn("OrchestratorMcpService.readThread")(function* (scope, input) {
-      const { parent, target, shell } = yield* loadReadableThread(scope, input.threadId);
-      const view = input.view ?? "messages";
-      const afterPosition = input.afterPosition ?? -1;
-      const limit = input.limit ?? DEFAULT_THREAD_READ_LIMIT;
-      const maxChars = input.maxCharsPerItem ?? DEFAULT_THREAD_ITEM_MAX_CHARS;
-      const timeline = yield* threadManagement
-        .getTimelinePage(input.threadId, {
-          afterPosition,
-          limit,
-          view,
-          ...(input.itemId === undefined ? {} : { itemId: input.itemId }),
-        })
-        .pipe(Effect.mapError(threadManagementFailure));
-      const page = timeline.items;
-      const messageIdsByThread = new Map<ThreadId, Array<MessageId>>();
-      for (const row of page) {
-        if (row.item.type !== "user_message" && row.item.type !== "assistant_message") continue;
-        const ids = messageIdsByThread.get(row.sourceThreadId) ?? [];
-        ids.push(row.item.messageId);
-        messageIdsByThread.set(row.sourceThreadId, ids);
-      }
-      const sourceMessages = yield* Effect.forEach(
-        [...messageIdsByThread],
-        ([threadId, messageIds]) =>
-          threadManagement.getThreadRecords(threadId, ["messages"], { messageIds }).pipe(
-            Effect.map((records) => [threadId, records.messages] as const),
-            Effect.mapError(threadManagementFailure),
-          ),
-        { concurrency: 1 },
-      );
-      const messagesByThreadId = new Map(sourceMessages);
+      const { parent } = yield* loadCaller(scope);
+      const { result, target, page, maxChars } = yield* readThreadPage(input, true);
       const returnedRunIds = new Set(
         page.filter((row) => row.sourceThreadId === target.thread.id).map((row) => row.item.runId),
       );
@@ -2680,24 +2722,11 @@ const make = Effect.gen(function* () {
           }
         }
       }
-      return {
-        thread: threadDetail(target, timeline.totalItems, shell, yield* Clock.currentTimeMillis),
-        recentRuns: target.runs
-          .toSorted((left, right) => right.ordinal - left.ordinal)
-          .slice(0, input.runLimit ?? DEFAULT_THREAD_RUN_LIMIT)
-          .map(threadRun),
-        items: page.map((row) =>
-          timelineItem({
-            row,
-            maxChars,
-            messagesByThreadId,
-            ...(input.itemId === undefined ? {} : { textOffset: input.textOffset ?? 0 }),
-          }),
-        ),
-        nextPosition: page.at(-1)?.position ?? null,
-        hasMore: timeline.hasMore,
-      } satisfies OrchestratorMcpThreadReadResult;
+      return result;
     }),
+    readThreadHistory: Effect.fn("OrchestratorMcpService.readThreadHistory")((input) =>
+      readThreadPage(input, false).pipe(Effect.map(({ result }) => result)),
+    ),
     sendToThread: Effect.fn("OrchestratorMcpService.sendToThread")(function* (scope, input) {
       const { parent, limits, target } = yield* loadScopedThread(scope, input.threadId);
       yield* assertLiveCallerForOtherThread(scope, parent, target);

@@ -1,4 +1,13 @@
 import {
+  ENVIRONMENT_READ_WS_METHODS,
+  EnvironmentReadRegistration,
+  EnvironmentReadStreamEvent,
+  EnvironmentReadResponse,
+  EnvironmentReadRequest,
+  EnvironmentReadResult,
+  EnvironmentReadError,
+} from "./environmentRead.ts";
+import {
   OrchestrationV2SearchThreadError,
   OrchestrationV2SearchThreadInput,
   OrchestrationV2SearchThreadResult,
@@ -1552,6 +1561,22 @@ const WsSubscribePreviewEventsRpc = Rpc.make(WS_METHODS.subscribePreviewEvents, 
   stream: true,
 });
 
+const WsEnvironmentReadSubscribeRpc = Rpc.make(ENVIRONMENT_READ_WS_METHODS.subscribe, {
+  payload: EnvironmentReadRegistration,
+  success: EnvironmentReadStreamEvent,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+const WsEnvironmentReadRespondRpc = Rpc.make(ENVIRONMENT_READ_WS_METHODS.respond, {
+  payload: EnvironmentReadResponse,
+  error: Schema.Union([EnvironmentReadError, EnvironmentAuthorizationError]),
+});
+const WsEnvironmentReadRpc = Rpc.make(ENVIRONMENT_READ_WS_METHODS.read, {
+  payload: EnvironmentReadRequest,
+  success: EnvironmentReadResult,
+  error: Schema.Union([EnvironmentReadError, EnvironmentAuthorizationError]),
+});
+
 const WsSubscribeDiscoveredLocalServersRpc = Rpc.make(WS_METHODS.subscribeDiscoveredLocalServers, {
   payload: Schema.Struct({
     configuredUrls: Schema.optional(ConfiguredLocalServerUrls),
@@ -2046,6 +2071,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsPreviewReportProfilesRpc,
   WsPreviewReportStatusRpc,
   WsSubscribePreviewEventsRpc,
+  WsEnvironmentReadSubscribeRpc,
+  WsEnvironmentReadRespondRpc,
+  WsEnvironmentReadRpc,
   WsSubscribeDiscoveredLocalServersRpc,
   WsDeviceConfigureRpc,
   WsDeviceListRpc,

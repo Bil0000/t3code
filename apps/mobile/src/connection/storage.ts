@@ -13,6 +13,8 @@ import {
   ConnectionTransientError,
   CredentialStore,
   ProfileStore,
+  AgentThreadReadPermissions,
+  makeAgentThreadReadPermissions,
   GitHubRoutingPermissions,
   makeGitHubRoutingPermissions,
 } from "@t3tools/client-runtime/connection";
@@ -42,6 +44,11 @@ function targetPersistenceError(
 export const layer = Layer.effectContext(
   Effect.gen(function* () {
     const catalog = yield* CatalogStore.make();
+    const agentThreadReadPermissions = yield* makeAgentThreadReadPermissions({
+      read: catalog.read.pipe(Effect.map((document) => document.agentThreadReadGrants ?? [])),
+      write: (agentThreadReadGrants) =>
+        catalog.update((document) => ({ ...document, agentThreadReadGrants })),
+    });
     const githubRoutingPermissions = yield* makeGitHubRoutingPermissions({
       read: catalog.read.pipe(Effect.map((document) => document.githubRoutingPermissions ?? [])),
       write: (githubRoutingPermissions) =>
@@ -151,6 +158,7 @@ export const layer = Layer.effectContext(
     });
     return Context.make(Persistence.ConnectionTargetStore, targetStore).pipe(
       Context.add(GitHubRoutingPermissions, githubRoutingPermissions),
+      Context.add(AgentThreadReadPermissions, agentThreadReadPermissions),
       Context.add(Persistence.ConnectionRegistrationStore, registrationStore),
       Context.add(ProfileStore.ConnectionProfileStore, profileStore),
       Context.add(CredentialStore.ConnectionCredentialStore, credentialStore),

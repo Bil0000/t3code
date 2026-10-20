@@ -103,6 +103,22 @@ shown there apply only to the route marked **In use**; other routes are not
 checked. Direct pairing and T3 Connect have separate sessions and may grant
 different permissions.
 
+### Let agents find threads on other machines
+
+In **Settings → Connections → Agent thread sharing**, choose which machines may
+read each other's projects and threads. On mobile, use **Settings → Environments**.
+Sharing is off by default and is saved on this client.
+
+Then ask your agent to find a project, search a topic, or read a thread on another
+machine. It uses `t3_environment_list` to find shared machines and
+`t3_environment_browse` to list, search, and read their threads. Search matches
+titles and message text; the agent can include archived threads and read more pages.
+
+Keep this client open and connected to both machines. A machine that is offline or
+does not support sharing cannot be read. This setting permits reads, including
+thread messages; it does not permit changes on the other machine. Turn sharing off
+in the same settings section to stop further reads.
+
 ### Balance new threads across machines
 
 Auto balance is off by default. On web and desktop, enable it in

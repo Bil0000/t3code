@@ -252,3 +252,58 @@ it.effect("searches on the reader worker while the writer is busy", () =>
     }).pipe(Effect.provide(layerFile));
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
+
+it.layer(layerTest)("ThreadSearch discovery", (it) => {
+  it.effect("filters a project before paging and searches titles with an archive choice", () =>
+    Effect.gen(function* () {
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const search = yield* ThreadSearch.ThreadSearch;
+      const project = ProjectId.make("project:target");
+      const other = ProjectId.make("project:other");
+      yield* createProject(project);
+      yield* createProject(other);
+      yield* projections.apply(thread(ThreadId.make("needle-title"), project));
+      yield* projections.apply(
+        thread(ThreadId.make("needle-archive"), project, { archivedAt: at(1) }),
+      );
+      yield* projections.apply(thread(ThreadId.make("00-other"), other));
+      yield* projections.apply(message(ThreadId.make("00-other"), "other-first", "user", "needle"));
+      yield* projections.apply(thread(ThreadId.make("message-target"), project));
+      yield* projections.apply(
+        message(ThreadId.make("message-target"), "target-message", "user", "needle"),
+      );
+      const first = yield* search.search({ query: "needle", projectId: project, limit: 1 });
+      assert.deepEqual(
+        first.matches.map((m) => m.threadId),
+        ["message-target"],
+      );
+      assert.equal(first.nextCursor, 1);
+      const second = yield* search.search({
+        query: "needle",
+        projectId: project,
+        limit: 1,
+        cursor: 1,
+      });
+      assert.deepEqual(
+        second.matches.map((m) => [m.threadId, m.source]),
+        [["needle-title", "title"]],
+      );
+      assert.isNull(second.nextCursor);
+      const archived = yield* search.search({
+        query: "needle",
+        projectId: project,
+        archived: "only",
+      });
+      assert.deepEqual(
+        archived.matches.map((m) => m.threadId),
+        ["needle-archive"],
+      );
+      const all = yield* search.search({
+        query: "needle",
+        projectId: project,
+        archived: "include",
+      });
+      assert.lengthOf(all.matches, 3);
+    }),
+  );
+});

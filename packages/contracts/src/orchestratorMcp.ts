@@ -310,6 +310,7 @@ const OrchestratorMcpProjectTarget = Schema.optional(
 );
 
 export const OrchestratorMcpThreadListInput = Schema.Struct({
+  archived: Schema.optional(Schema.Literals(["exclude", "include", "only"])),
   projectId: OrchestratorMcpProjectTarget,
   statuses: Schema.optional(
     Schema.Array(OrchestratorMcpThreadStatus).check(Schema.isMaxLength(10)),

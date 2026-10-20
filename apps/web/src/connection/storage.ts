@@ -23,6 +23,7 @@ import {
   ConnectionBlockedError,
   CredentialStore,
   ProfileStore,
+  AgentThreadReadPermissions,
   GitHubRoutingPermissions,
   StoredGitHubRoutingPermission,
   gitHubRoutingConnectionKey,
@@ -39,6 +40,8 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { projectFaviconCache } from "../assets/projectFaviconCache";
+
+import { makeBrowserAgentThreadReadPermissions } from "./agentThreadReadPermissions";
 
 const DATABASE_NAME = "t3code:connection-runtime";
 const DATABASE_VERSION = 4;
@@ -624,6 +627,7 @@ export const layer = Layer.effectContext(
     );
     const catalog = yield* makeCatalogStore(makeCatalogBackend(database));
     const githubRoutingPermissions = makeBrowserGitHubRoutingPermissions();
+    const agentThreadReadPermissions = makeBrowserAgentThreadReadPermissions();
     // Remembers each thread row's encoding, so a save only encodes rows that changed.
     const encodeStoredShellSnapshot = makeStoredShellSnapshotEncoder({
       yieldToHost: yieldToBrowserTask,
@@ -931,6 +935,7 @@ export const layer = Layer.effectContext(
 
     return Context.make(Persistence.ConnectionTargetStore, targetStore).pipe(
       Context.add(GitHubRoutingPermissions, githubRoutingPermissions),
+      Context.add(AgentThreadReadPermissions, agentThreadReadPermissions),
       Context.add(Persistence.ConnectionRegistrationStore, registrationStore),
       Context.add(ProfileStore.ConnectionProfileStore, profileStore),
       Context.add(CredentialStore.ConnectionCredentialStore, credentialStore),

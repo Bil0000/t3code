@@ -1,4 +1,5 @@
 import {
+  ENVIRONMENT_READ_WS_METHODS,
   AuthEnvironmentMaintainScope,
   AuthDiagnosticsReadScope,
   AuthFilesystemReadScope,
@@ -33,6 +34,11 @@ import {
 import * as RpcAuthorization from "./RpcAuthorization.ts";
 
 describe("RPC authorization scopes", () => {
+  it("protects the fixed environment read bridge with orchestration read scope", () => {
+    for (const method of Object.values(ENVIRONMENT_READ_WS_METHODS)) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationReadScope);
+    }
+  });
   it("declares exactly one scope for every RPC in the server group", () => {
     expect(new Set(Object.keys(RPC_REQUIRED_SCOPES))).toEqual(new Set(WsRpcGroup.requests.keys()));
   });

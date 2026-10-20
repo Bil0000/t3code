@@ -570,6 +570,96 @@ it.effect("preserves failed legacy materialization when reading checkpoint conte
   }).pipe(Effect.provide(layerTest));
 });
 
+it.effect("reads persisted history without invoking the legacy importer", () => {
+  const threadId = ThreadId.make("thread:persisted-only");
+  const projection = {
+    thread: { id: threadId },
+    runs: [],
+  } as unknown as OrchestrationV2ThreadProjection;
+  const layerTest = ThreadManagementService.layerWithLegacyImporter.pipe(
+    Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.mock(Orchestrator.OrchestratorV2)({
+          getThreadRecords: () => Effect.succeed(projection),
+          getTimelinePage: () => Effect.succeed({ items: [], totalItems: 0, hasMore: false }),
+        }),
+        Layer.mock(LegacyV1ThreadImporter.LegacyV1ThreadImporter)({
+          ensureTranscript: () => Effect.die("A read-only request must not import records."),
+        }),
+      ),
+    ),
+    Layer.provide(ServerSettings.layerTest()),
+    Layer.provide(layerReceiptsTest),
+  );
+  return Effect.gen(function* () {
+    const service = yield* ThreadManagementService.ThreadManagementService;
+    expect(yield* service.getPersistedThreadRecords(threadId, ["runs"])).toBe(projection);
+    expect(
+      yield* service.getPersistedTimelinePage(threadId, {
+        afterPosition: -1,
+        limit: 10,
+        view: "messages",
+      }),
+    ).toEqual({ items: [], totalItems: 0, hasMore: false });
+  }).pipe(Effect.provide(layerTest));
+});
+
+it.effect("lists archived threads only when requested and sorts the combined list", () => {
+  const projectId = ProjectId.make("project:archived-list");
+  const active = {
+    id: ThreadId.make("active"),
+    projectId,
+    archivedAt: null,
+    lineage: { relationshipToParent: null },
+    updatedAt: DateTime.makeUnsafe("2026-10-19T00:00:00Z"),
+  } as unknown as OrchestrationV2ThreadShell;
+  const archived = {
+    ...active,
+    id: ThreadId.make("archived"),
+    archivedAt: DateTime.makeUnsafe("2026-10-20T00:00:00Z"),
+    updatedAt: DateTime.makeUnsafe("2026-10-20T00:00:00Z"),
+  };
+  const layerTest = ThreadManagementService.layer.pipe(
+    Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
+    Layer.provide(
+      Layer.mock(Orchestrator.OrchestratorV2)({
+        getShellSnapshot: (options) =>
+          Effect.succeed({
+            schemaVersion: 2,
+            snapshotSequence: 0,
+            threads: options?.location === "archive" ? [] : [active],
+            archivedThreads: options?.location === "active" ? [] : [archived],
+          }),
+      }),
+    ),
+    Layer.provide(ServerSettings.layerTest()),
+    Layer.provide(layerReceiptsTest),
+  );
+  return Effect.gen(function* () {
+    const service = yield* ThreadManagementService.ThreadManagementService;
+    expect(
+      (yield* service.listProjectThreads({ projectId, includeSubagents: false })).map(
+        (row) => row.id,
+      ),
+    ).toEqual(["active"]);
+    expect(
+      (yield* service.listProjectThreads({
+        projectId,
+        includeSubagents: false,
+        archived: "include",
+      })).map((row) => row.id),
+    ).toEqual(["archived", "active"]);
+    expect(
+      (yield* service.listProjectThreads({
+        projectId,
+        includeSubagents: false,
+        archived: "only",
+      })).map((row) => row.id),
+    ).toEqual(["archived"]);
+  }).pipe(Effect.provide(layerTest));
+});
+
 it.effect.each([
   { finalStatus: "completed" as const, timedOut: false },
   { finalStatus: "failed" as const, timedOut: false },

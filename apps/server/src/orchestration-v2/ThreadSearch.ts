@@ -26,7 +26,13 @@ export class ThreadSearchError extends Schema.TaggedError<ThreadSearchError>()(
   }
 }
 
-const SearchRequest = Schema.Struct({ pattern: Schema.String, limit: Schema.Int });
+const SearchRequest = Schema.Struct({
+  pattern: Schema.String,
+  limit: Schema.Int,
+  cursor: Schema.Int,
+  projectId: Schema.NullOr(ProjectId),
+  archived: Schema.String,
+});
 const SearchRow = Schema.Struct({
   threadId: ThreadId,
   projectId: ProjectId,
@@ -75,7 +81,7 @@ export const make = Effect.gen(function* () {
   const searchRows = SqlSchema.findAll({
     Request: SearchRequest,
     Result: SearchRow,
-    execute: ({ pattern, limit }) => sql`
+    execute: ({ pattern, limit, cursor, projectId, archived }) => sql`
       WITH candidate AS (
         SELECT
           threads.thread_id,
@@ -91,11 +97,25 @@ export const make = Effect.gen(function* () {
         INNER JOIN projection_projects AS projects
           ON projects.project_id = threads.project_id
         WHERE threads.deleted_at IS NULL
-          AND threads.archived_at IS NULL
+          AND (${archived} = 'include' OR
+            (${archived} = 'only' AND threads.archived_at IS NOT NULL) OR
+            (${archived} = 'exclude' AND threads.archived_at IS NULL))
+          AND (${projectId} IS NULL OR threads.project_id = ${projectId})
           AND projects.deleted_at IS NULL
           AND messages.streaming = 0
           AND messages.role IN ('user', 'assistant')
           AND json_extract(messages.payload_json, '$.text') LIKE ${pattern} ESCAPE '!'
+        UNION ALL
+        SELECT threads.thread_id, threads.project_id, 'title', threads.title, NULL,
+          threads.thread_id, threads.updated_at
+        FROM orchestration_v2_projection_threads AS threads
+        INNER JOIN projection_projects AS projects ON projects.project_id = threads.project_id
+        WHERE threads.deleted_at IS NULL AND projects.deleted_at IS NULL
+          AND (${archived} = 'include' OR
+            (${archived} = 'only' AND threads.archived_at IS NOT NULL) OR
+            (${archived} = 'exclude' AND threads.archived_at IS NULL))
+          AND (${projectId} IS NULL OR threads.project_id = ${projectId})
+          AND threads.title LIKE ${pattern} ESCAPE '!'
       ),
       ranked AS (
         SELECT
@@ -104,12 +124,12 @@ export const make = Effect.gen(function* () {
           role AS source,
           match_text,
           message_created_at,
-          CASE role WHEN 'user' THEN 0 ELSE 1 END AS match_rank,
+          CASE role WHEN 'user' THEN 0 WHEN 'assistant' THEN 1 ELSE 2 END AS match_rank,
           thread_updated_at,
           ROW_NUMBER() OVER (
             PARTITION BY thread_id
             ORDER BY
-              CASE role WHEN 'user' THEN 0 ELSE 1 END ASC,
+              CASE role WHEN 'user' THEN 0 WHEN 'assistant' THEN 1 ELSE 2 END ASC,
               message_created_at DESC,
               message_id ASC
           ) AS thread_match_rank
@@ -125,6 +145,7 @@ export const make = Effect.gen(function* () {
       WHERE thread_match_rank = 1
       ORDER BY match_rank ASC, thread_updated_at DESC, thread_id ASC
       LIMIT ${limit}
+      OFFSET ${cursor}
     `,
   });
 
@@ -136,7 +157,10 @@ export const make = Effect.gen(function* () {
         .withTransaction(
           searchRows({
             pattern: `%${escapeLikePattern(input.query)}%`,
-            limit: input.limit ?? 50,
+            limit: (input.limit ?? 50) + 1,
+            cursor: input.cursor ?? 0,
+            projectId: input.projectId ?? null,
+            archived: input.archived ?? "exclude",
           }),
         )
         .pipe(
@@ -150,7 +174,9 @@ export const make = Effect.gen(function* () {
           ),
         );
       return {
-        matches: rows.map((row) => ({
+        nextCursor:
+          rows.length > (input.limit ?? 50) ? (input.cursor ?? 0) + (input.limit ?? 50) : null,
+        matches: rows.slice(0, input.limit ?? 50).map((row) => ({
           threadId: row.threadId,
           projectId: row.projectId,
           source: row.source,

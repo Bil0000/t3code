@@ -1,3 +1,4 @@
+import { AgentThreadReadSettings } from "./AgentThreadReadSettings";
 import { Toolbar } from "../../components/ui/Toolbar";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 
@@ -70,6 +71,7 @@ export function ConnectionsRouteScreen() {
           onUpdate={onUpdateEnvironment}
         />
         <GitHubRoutingSettings />
+        <AgentThreadReadSettings />
       </ScrollView>
     </View>
   );

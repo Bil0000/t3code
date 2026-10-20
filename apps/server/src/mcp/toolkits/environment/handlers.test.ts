@@ -21,6 +21,7 @@ import * as Settings from "../../../serverSettings.ts";
 import * as McpHttpServer from "../../McpHttpServer.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
+import * as EnvironmentReadService from "../../EnvironmentReadService.ts";
 import { liveThreadShell } from "../../McpToolAccess.testkit.ts";
 import * as EnvironmentHandlers from "./handlers.ts";
 import { EnvironmentToolkit } from "./tools.ts";
@@ -87,6 +88,7 @@ it.effect("updates preferences for a thread caller through the /mcp registration
           }),
         ),
         Layer.provide(layerEnvironment),
+        Layer.provide(Layer.mock(EnvironmentReadService.EnvironmentReadService)({})),
         Layer.provide(Settings.layerTest()),
       ),
     ),
@@ -99,6 +101,7 @@ it.effect("refuses a preferences update when the caller's turn ends while it wai
     const updates = yield* Ref.make(0);
     const checked = yield* Deferred.make<void>();
     const layerDependencies = Layer.mergeAll(
+      Layer.mock(EnvironmentReadService.EnvironmentReadService)({}),
       ThreadCommandExecutor.layer,
       Layer.succeed(McpInvocationContext.McpInvocationContext, {
         environmentId,
