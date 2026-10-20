@@ -202,13 +202,16 @@ const make = Effect.gen(function* () {
       return yield* new EnvironmentReadError({ code: "offline", environmentId });
     if (target.status !== "online")
       return yield* new EnvironmentReadError({ code: target.status, environmentId });
-    if (pending.size >= 32)
-      return yield* new EnvironmentReadError({ code: "offline", environmentId });
     const deferred = yield* Deferred.make<EnvironmentReadResult, EnvironmentReadError>();
     const requestId = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
     const entry = { connection, environmentId, request, deferred };
     return yield* Effect.acquireUseRelease(
-      Effect.sync(() => {
+      Effect.gen(function* () {
+        if (
+          pending.size >= 32 ||
+          [...pending.values()].filter((entry) => entry.connection === connection).length >= 8
+        )
+          return yield* new EnvironmentReadError({ code: "offline", environmentId });
         pending.set(requestId, entry);
       }),
       () =>

@@ -100,6 +100,34 @@ it.layer(layerTest)("EnvironmentReadService", (it) => {
       }),
   );
 
+  it.effect("reports ambiguous sharing while keeping local reads available", () =>
+    Effect.gen(function* () {
+      const service = yield* Service.EnvironmentReadService;
+      const broker = yield* Broker.EnvironmentReadBroker;
+      for (const session of [owner, { sessionId: "other-client", socketId: "other-socket" }]) {
+        const ready = yield* Deferred.make<void>();
+        yield* broker
+          .connect(session, {
+            clientId: "client",
+            environments: [{ environmentId: remoteId, name: "Remote", status: "online" }],
+          })
+          .pipe(
+            Stream.runForEach(() => Deferred.succeed(ready, undefined)),
+            Effect.forkScoped,
+          );
+        yield* Deferred.await(ready);
+      }
+      const agentScope = { ...scope, client: undefined };
+      expect((yield* service.list(agentScope).pipe(Effect.flip)).code).toBe("permission-denied");
+      expect(yield* service.browse(agentScope, { request: { operation: "project.list" } })).toEqual(
+        {
+          environmentId,
+          result: { operation: "project.list", data: { projects: [project], nextCursor: null } },
+        },
+      );
+    }),
+  );
+
   it.effect("routes a granted target through its client and returns its identity", () =>
     Effect.gen(function* () {
       const service = yield* Service.EnvironmentReadService;

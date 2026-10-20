@@ -245,6 +245,113 @@ it.layer(Broker.layer.pipe(Layer.provide(NodeServices.layer)), { timeout: "10 se
       }),
     );
 
+    it.effect("keeps a responsive connection available while another connection stalls", () =>
+      Effect.gen(function* () {
+        const broker = yield* Broker.EnvironmentReadBroker;
+        const readyA = yield* Deferred.make<void>();
+        const readyB = yield* Deferred.make<void>();
+        const stalled = yield* Deferred.make<void>();
+        const responsiveId = EnvironmentId.make("responsive");
+        const responsiveOwner = { sessionId: "session-b", socketId: "socket-b" };
+        let received = 0;
+        yield* broker.connect(owner, registration).pipe(
+          Stream.runForEach((event) => {
+            if (event.type === "connected") return Deferred.succeed(readyA, undefined);
+            received++;
+            return received === 8 ? Deferred.succeed(stalled, undefined) : Effect.void;
+          }),
+          Effect.forkScoped,
+        );
+        yield* broker
+          .connect(responsiveOwner, {
+            clientId: "responsive-client",
+            environments: [{ environmentId: responsiveId, name: "Responsive", status: "online" }],
+          })
+          .pipe(
+            Stream.runForEach((event) =>
+              event.type === "connected"
+                ? Deferred.succeed(readyB, undefined)
+                : broker.respond(responsiveOwner, {
+                    clientId: "responsive-client",
+                    connectionId: event.connectionId,
+                    requestId: event.requestId,
+                    response: { status: "ok", result },
+                  }),
+            ),
+            Effect.forkScoped,
+          );
+        yield* Deferred.await(readyA);
+        yield* Deferred.await(readyB);
+        for (let index = 0; index < 8; index++) {
+          yield* broker.invoke(owner.sessionId, environmentId, request).pipe(Effect.forkScoped);
+        }
+        yield* Deferred.await(stalled);
+        expect(
+          (yield* broker.invoke(owner.sessionId, environmentId, request).pipe(Effect.flip)).code,
+        ).toBe("offline");
+        expect(yield* broker.invoke(responsiveOwner.sessionId, responsiveId, request)).toEqual(
+          result,
+        );
+      }),
+    );
+
+    it.effect(
+      "retains the global limit across connections and releases capacity on disconnect",
+      () =>
+        Effect.gen(function* () {
+          const broker = yield* Broker.EnvironmentReadBroker;
+          const clients = yield* Effect.forEach([0, 1, 2, 3, 4], (index) =>
+            Effect.gen(function* () {
+              const clientOwner = { sessionId: `session-${index}`, socketId: `socket-${index}` };
+              const targetId = EnvironmentId.make(`remote-${index}`);
+              const ready = yield* Deferred.make<void>();
+              const stalled = yield* Deferred.make<void>();
+              let received = 0;
+              const stream = yield* broker
+                .connect(clientOwner, {
+                  clientId: registration.clientId,
+                  environments: [{ environmentId: targetId, name: "Remote", status: "online" }],
+                })
+                .pipe(
+                  Stream.runForEach((event) => {
+                    if (event.type === "connected") return Deferred.succeed(ready, undefined);
+                    if (index === 4)
+                      return broker.respond(clientOwner, {
+                        clientId: registration.clientId,
+                        connectionId: event.connectionId,
+                        requestId: event.requestId,
+                        response: { status: "ok", result },
+                      });
+                    received++;
+                    return received === 8 ? Deferred.succeed(stalled, undefined) : Effect.void;
+                  }),
+                  Effect.forkScoped,
+                );
+              yield* Deferred.await(ready);
+              return { clientOwner, targetId, stream, stalled };
+            }),
+          );
+          for (const client of clients.slice(0, 4)) {
+            for (let index = 0; index < 8; index++) {
+              yield* broker
+                .invoke(client.clientOwner.sessionId, client.targetId, request)
+                .pipe(Effect.flip, Effect.forkScoped);
+            }
+            yield* Deferred.await(client.stalled);
+          }
+          const responsive = clients[4]!;
+          expect(
+            (yield* broker
+              .invoke(responsive.clientOwner.sessionId, responsive.targetId, request)
+              .pipe(Effect.flip)).code,
+          ).toBe("offline");
+          yield* Fiber.interrupt(clients[0]!.stream);
+          expect(
+            yield* broker.invoke(responsive.clientOwner.sessionId, responsive.targetId, request),
+          ).toEqual(result);
+        }),
+    );
+
     it.effect("reports unavailable targets and times out without retaining a request", () =>
       Effect.gen(function* () {
         const broker = yield* Broker.EnvironmentReadBroker;
