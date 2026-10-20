@@ -1,7 +1,7 @@
-import { act, type ComponentProps } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
+import { type ComponentProps } from "react";
+import { expect, it, vi } from "vite-plus/test";
 import { EnvironmentId, IssueTrackerKind, ProjectId } from "@t3tools/contracts";
+import { act, render } from "../../../test/render";
 import { IssueReactionBar } from "./IssueDetailPanel";
 
 const state = vi.hoisted(() => ({ react: vi.fn(), toast: vi.fn() }));
@@ -22,42 +22,33 @@ const reference = {
 const reactions = [
   { content: "thumbs-up" as const, count: 2, actors: [], viewerHasReacted: false },
 ];
-let root: Root;
-let container: HTMLDivElement;
-const renderReactions = (props: Partial<ComponentProps<typeof IssueReactionBar>> = {}) =>
-  root.render(
-    <IssueReactionBar
-      viewer="viewer"
-      reactions={reactions}
-      canReact
-      contents={undefined}
-      environmentId={environmentId}
-      reference={reference}
-      {...props}
-    />,
-  );
+const reactionBar = (props: Partial<ComponentProps<typeof IssueReactionBar>> = {}) => (
+  <IssueReactionBar
+    viewer="viewer"
+    reactions={reactions}
+    canReact
+    contents={undefined}
+    environmentId={environmentId}
+    reference={reference}
+    {...props}
+  />
+);
 
-beforeEach(() => {
-  vi.clearAllMocks();
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
-});
-afterEach(async () => {
-  await act(async () => root.unmount());
-  container.remove();
-  vi.unstubAllGlobals();
-});
+function setup() {
+  state.react.mockReset();
+  state.toast.mockReset();
+}
 
 it.each([undefined, "latest-comment", "held-older-comment"])(
   "retains a successful add when a reverse write fails with stale native data (%s)",
   async (subjectId) => {
+    setup();
     state.react
       .mockResolvedValueOnce({ _tag: "Success" })
       .mockResolvedValueOnce({ _tag: "Failure" })
       .mockResolvedValueOnce({ _tag: "Success" });
-    await act(async () => renderReactions({ subjectId }));
+    await using screen = await render(reactionBar({ subjectId }), { router: false });
+    const { container } = screen;
     const pill = () =>
       container.querySelector<HTMLButtonElement>('button[aria-label^="thumbs up,"]')!;
     await act(async () => pill().click());
@@ -92,7 +83,9 @@ it.each([
   { canReact: true, contents: [] },
   { canReact: true, contents: ["heart" as const] },
 ])("keeps unsupported reaction counts read-only for %j", async ({ canReact, contents }) => {
-  await act(async () => renderReactions({ canReact, contents }));
+  setup();
+  await using screen = await render(reactionBar({ canReact, contents }), { router: false });
+  const { container } = screen;
   const pill = container.querySelector<HTMLButtonElement>('button[aria-label^="thumbs up,"]')!;
   expect(pill.disabled).toBe(true);
   await act(async () => pill.click());
@@ -109,19 +102,23 @@ it.each(
 )(
   "trusts refreshed unknown-owner reactions but keeps cached choices: %j",
   async ({ subjectId, viewer, reacted }) => {
+    setup();
     state.react.mockResolvedValue({ _tag: "Success" });
     const native = [{ ...reactions[0]!, viewerHasReacted: !reacted }];
-    const render = (value: typeof native) =>
-      renderReactions({ viewer, reactions: value, subjectId });
+    await using screen = await render(reactionBar({ viewer, reactions: native, subjectId }), {
+      router: false,
+    });
+    const { container } = screen;
+    const rerender = (value: typeof native) =>
+      screen.rerender(reactionBar({ viewer, reactions: value, subjectId }));
     const pill = () =>
       container.querySelector<HTMLButtonElement>('button[aria-label^="thumbs up,"]')!;
-    await act(async () => render(native));
     await act(async () => pill().click());
     const optimisticCount = reacted ? "3" : "1";
     expect(pill().textContent).toContain(optimisticCount);
-    await act(async () => render(native));
+    await rerender(native);
     expect(pill().textContent).toContain(optimisticCount);
-    await act(async () => render([...native]));
+    await rerender([...native]);
     expect(pill().textContent).toContain(viewer === null ? "2" : optimisticCount);
     expect(pill().getAttribute("aria-pressed")).toBe(String(viewer === null ? !reacted : reacted));
     await act(async () => pill().click());
@@ -133,18 +130,21 @@ it.each(
 );
 
 it("does not restore an unknown owner's old choice after a late reverse failure", async () => {
+  setup();
   let fail!: (value: { _tag: "Failure" }) => void;
   const reverse = new Promise<{ _tag: "Failure" }>((resolve) => {
     fail = resolve;
   });
   state.react.mockResolvedValueOnce({ _tag: "Success" }).mockReturnValueOnce(reverse);
-  const render = (value: typeof reactions) => renderReactions({ viewer: null, reactions: value });
+  await using screen = await render(reactionBar({ viewer: null, reactions }), { router: false });
+  const { container } = screen;
+  const rerender = (value: typeof reactions) =>
+    screen.rerender(reactionBar({ viewer: null, reactions: value }));
   const pill = () =>
     container.querySelector<HTMLButtonElement>('button[aria-label^="thumbs up,"]')!;
-  await act(async () => render(reactions));
   await act(async () => pill().click());
   await act(async () => pill().click());
-  await act(async () => render([...reactions]));
+  await rerender([...reactions]);
   await act(async () => fail({ _tag: "Failure" }));
   expect(pill().getAttribute("aria-pressed")).toBe("false");
   expect(pill().textContent).toContain("2");
@@ -152,23 +152,34 @@ it("does not restore an unknown owner's old choice after a late reverse failure"
 });
 
 it("does not treat missing comment reactions as a fresh native empty array", async () => {
+  setup();
   state.react.mockResolvedValue({ _tag: "Success" });
-  const render = (value: typeof reactions | undefined) =>
-    renderReactions({ viewer: null, reactions: value, subjectId: "comment" });
+  await using screen = await render(
+    reactionBar({ viewer: null, reactions, subjectId: "comment" }),
+    {
+      router: false,
+    },
+  );
+  const { container } = screen;
+  const rerender = (value: typeof reactions | undefined) =>
+    screen.rerender(reactionBar({ viewer: null, reactions: value, subjectId: "comment" }));
   const pill = () => container.querySelector<HTMLButtonElement>('button[aria-label^="thumbs up,"]');
-  await act(async () => render(reactions));
   await act(async () => pill()!.click());
-  await act(async () => render(undefined));
-  await act(async () => render(undefined));
+  await rerender(undefined);
+  await rerender(undefined);
   expect(pill()?.getAttribute("aria-pressed")).toBe("true");
-  await act(async () => render([]));
+  await rerender([]);
   expect(pill()).toBeNull();
   expect(state.react).toHaveBeenCalledTimes(1);
 });
 
 it("keeps picker selection, keyboard focus and Escape dismissal", async () => {
+  setup();
   state.react.mockResolvedValue({ _tag: "Success" });
-  await act(async () => renderReactions({ contents: ["thumbs-up", "heart"] }));
+  await using screen = await render(reactionBar({ contents: ["thumbs-up", "heart"] }), {
+    router: false,
+  });
+  const { container } = screen;
   const trigger = container.querySelector<HTMLButtonElement>('[aria-label="Add a reaction"]')!;
   await act(async () => {
     trigger.focus();
@@ -199,6 +210,7 @@ it("keeps picker selection, keyboard focus and Escape dismissal", async () => {
     );
   });
   expect(trigger.getAttribute("aria-expanded")).toBe("false");
+  await expect.element(trigger).toHaveFocus();
   expect(document.activeElement).toBe(trigger);
   expect(state.react).toHaveBeenCalledTimes(1);
   await act(async () => pill().click());
@@ -210,13 +222,17 @@ it("keeps picker selection, keyboard focus and Escape dismissal", async () => {
 it.each([undefined, "latest-comment", "held-older-comment"])(
   "disables both controls for a pending reaction and rolls back failure (%s)",
   async (subjectId) => {
+    setup();
     let finish!: (value: { _tag: "Failure" }) => void;
     state.react.mockReturnValueOnce(
       new Promise<{ _tag: "Failure" }>((resolve) => {
         finish = resolve;
       }),
     );
-    await act(async () => renderReactions({ contents: ["thumbs-up"], subjectId }));
+    await using screen = await render(reactionBar({ contents: ["thumbs-up"], subjectId }), {
+      router: false,
+    });
+    const { container } = screen;
     const pill = () =>
       container.querySelector<HTMLButtonElement>('button[aria-label^="thumbs up,"]')!;
     await act(async () => pill().click());
