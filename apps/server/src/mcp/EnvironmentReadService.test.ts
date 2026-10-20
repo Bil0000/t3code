@@ -1,14 +1,16 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { expect, it } from "@effect/vitest";
-import { EnvironmentId, ProjectId, type Project } from "@t3tools/contracts";
+import { EnvironmentId, ProjectId, ThreadId, type Project } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ThreadSearch from "../orchestration-v2/ThreadSearch.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as Broker from "./EnvironmentReadBroker.ts";
 import * as Service from "./EnvironmentReadService.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
@@ -62,11 +64,66 @@ const layerTest = Service.layer.pipe(
     }),
   ),
   Layer.provide(Layer.mock(OrchestratorMcpService.OrchestratorMcpService)({})),
-  Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),
+  Layer.provideMerge(ThreadSearch.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
   Layer.provideMerge(layerBroker),
 );
 
 it.layer(layerTest)("EnvironmentReadService", (it) => {
+  it.effect("finds title-only matches when browsing and honors explicit title exclusion", () =>
+    Effect.gen(function* () {
+      const service = yield* Service.EnvironmentReadService;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = ThreadId.make("title-only");
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, scripts_json, created_at, updated_at
+        ) VALUES (
+          ${project.id}, ${project.title}, ${project.workspaceRoot}, '[]',
+          ${project.createdAt}, ${project.updatedAt}
+        )
+      `;
+      yield* sql`
+        INSERT INTO orchestration_v2_projection_threads (
+          thread_id, project_id, title, default_provider, runtime_mode, interaction_mode,
+          created_at, updated_at, payload_json
+        ) VALUES (
+          ${threadId}, ${project.id}, 'needle title', 'codex', 'full-access', 'default',
+          ${project.createdAt}, ${project.updatedAt}, '{}'
+        )
+      `;
+      expect(
+        yield* service.browse(scope, {
+          request: { operation: "thread.search", query: "needle" },
+        }),
+      ).toEqual({
+        environmentId,
+        result: {
+          operation: "thread.search",
+          data: {
+            matches: [
+              {
+                threadId,
+                projectId: project.id,
+                source: "title",
+                snippet: "needle title",
+                messageCreatedAt: null,
+              },
+            ],
+            nextCursor: null,
+          },
+        },
+      });
+      expect(
+        yield* service.browse(scope, {
+          request: { operation: "thread.search", query: "needle", includeTitles: false },
+        }),
+      ).toEqual({
+        environmentId,
+        result: { operation: "thread.search", data: { matches: [], nextCursor: null } },
+      });
+    }),
+  );
+
   it.effect(
     "defaults to local, filters before paging, and never falls back from a remote failure",
     () =>

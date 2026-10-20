@@ -2,6 +2,8 @@ import { assert, it } from "@effect/vitest";
 import {
   EventId,
   MessageId,
+  OrchestrationSearchThreadsInput,
+  OrchestrationThreadSearchMatch,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
@@ -15,6 +17,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
@@ -30,6 +33,16 @@ const layerTest = Layer.mergeAll(
 
 const providerInstanceId = ProviderInstanceId.make("codex");
 const at = (minute: number) => DateTime.makeUnsafe(Date.UTC(2026, 8, 27, 0, minute));
+const decodeSearchInput = Schema.decodeEffect(OrchestrationSearchThreadsInput);
+const legacyResult = Schema.Struct({
+  matches: Schema.Array(
+    Schema.Struct({
+      ...OrchestrationThreadSearchMatch.fields,
+      source: Schema.Literals(["user", "assistant"]),
+    }),
+  ),
+});
+const decodeLegacyResult = Schema.decodeEffect(Schema.fromJsonString(legacyResult));
 
 const createProject = (projectId: ProjectId) =>
   Effect.flatMap(ProjectStore.ProjectStoreV2, (projects) =>
@@ -254,6 +267,56 @@ it.effect("searches on the reader worker while the writer is busy", () =>
 );
 
 it.layer(layerTest)("ThreadSearch discovery", (it) => {
+  it.effect("keeps legacy replies decodable and only includes titles when requested", () =>
+    Effect.gen(function* () {
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const search = yield* ThreadSearch.ThreadSearch;
+      const project = ProjectId.make("project:legacy");
+      const user = ThreadId.make("needle-user");
+      const assistant = ThreadId.make("needle-assistant");
+      const title = ThreadId.make("needle-title-only");
+      yield* createProject(project);
+      yield* Effect.forEach(
+        [
+          thread(user, project),
+          message(user, "legacy-user", "user", "needle question"),
+          thread(assistant, project),
+          message(assistant, "legacy-assistant", "assistant", "needle answer"),
+          thread(title, project),
+        ],
+        projections.apply,
+        { discard: true },
+      );
+      const result = yield* search.search({ query: "needle", projectId: project });
+      const decoded = yield* decodeLegacyResult(JSON.stringify(result));
+      assert.deepEqual(
+        decoded.matches.map((match) => [match.threadId, match.source]),
+        [
+          [user, "user"],
+          [assistant, "assistant"],
+        ],
+      );
+      assert.deepEqual(
+        yield* search.search({ query: "needle", projectId: project, includeTitles: false }),
+        result,
+      );
+      const input = yield* decodeSearchInput({
+        query: "needle",
+        projectId: project,
+        includeTitles: true,
+      });
+      const withTitles = yield* search.search(input);
+      assert.deepEqual(
+        withTitles.matches.map((match) => [match.threadId, match.source]),
+        [
+          [user, "user"],
+          [assistant, "assistant"],
+          [title, "title"],
+        ],
+      );
+    }),
+  );
+
   it.effect("filters a project before paging and searches titles with an archive choice", () =>
     Effect.gen(function* () {
       const projections = yield* ProjectionStore.ProjectionStoreV2;
@@ -272,7 +335,12 @@ it.layer(layerTest)("ThreadSearch discovery", (it) => {
       yield* projections.apply(
         message(ThreadId.make("message-target"), "target-message", "user", "needle"),
       );
-      const first = yield* search.search({ query: "needle", projectId: project, limit: 1 });
+      const first = yield* search.search({
+        query: "needle",
+        projectId: project,
+        limit: 1,
+        includeTitles: true,
+      });
       assert.deepEqual(
         first.matches.map((m) => m.threadId),
         ["message-target"],
@@ -283,6 +351,7 @@ it.layer(layerTest)("ThreadSearch discovery", (it) => {
         projectId: project,
         limit: 1,
         cursor: 1,
+        includeTitles: true,
       });
       assert.deepEqual(
         second.matches.map((m) => [m.threadId, m.source]),
@@ -293,6 +362,7 @@ it.layer(layerTest)("ThreadSearch discovery", (it) => {
         query: "needle",
         projectId: project,
         archived: "only",
+        includeTitles: true,
       });
       assert.deepEqual(
         archived.matches.map((m) => m.threadId),
@@ -302,6 +372,7 @@ it.layer(layerTest)("ThreadSearch discovery", (it) => {
         query: "needle",
         projectId: project,
         archived: "include",
+        includeTitles: true,
       });
       assert.lengthOf(all.matches, 3);
     }),

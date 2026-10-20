@@ -15,6 +15,7 @@ export type OrchestrationThreadSearchSource = typeof OrchestrationThreadSearchSo
 // scan input and response size so a search cannot monopolize that connection.
 export const OrchestrationSearchThreadsInput = Schema.Struct({
   projectId: Schema.optional(ProjectId),
+  includeTitles: Schema.optional(Schema.Boolean),
   archived: Schema.optional(Schema.Literals(["exclude", "include", "only"])),
   cursor: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
   query: TrimmedString.check(Schema.isMinLength(2), Schema.isMaxLength(200)),

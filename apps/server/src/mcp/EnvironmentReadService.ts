@@ -106,7 +106,7 @@ const make = Effect.gen(function* () {
         return {
           operation: request.operation,
           data: yield* search
-            .search(request)
+            .search({ ...request, includeTitles: request.includeTitles ?? true })
             .pipe(
               Effect.mapError(
                 (cause) =>

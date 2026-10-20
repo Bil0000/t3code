@@ -103,7 +103,11 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
       const projectId = requested ?? caller?.projectId;
       const threadSearch = yield* ThreadSearch.ThreadSearch;
       return yield* threadSearch
-        .search({ ...query, ...(projectId === undefined ? {} : { projectId }) })
+        .search({
+          ...query,
+          includeTitles: query.includeTitles ?? true,
+          ...(projectId === undefined ? {} : { projectId }),
+        })
         .pipe(Effect.mapError(unavailable));
     }),
   ),

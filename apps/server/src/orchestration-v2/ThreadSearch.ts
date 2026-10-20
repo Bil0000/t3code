@@ -32,6 +32,7 @@ const SearchRequest = Schema.Struct({
   cursor: Schema.Int,
   projectId: Schema.NullOr(ProjectId),
   archived: Schema.String,
+  includeTitles: Schema.Boolean,
 });
 const SearchRow = Schema.Struct({
   threadId: ThreadId,
@@ -81,7 +82,7 @@ export const make = Effect.gen(function* () {
   const searchRows = SqlSchema.findAll({
     Request: SearchRequest,
     Result: SearchRow,
-    execute: ({ pattern, limit, cursor, projectId, archived }) => sql`
+    execute: ({ pattern, limit, cursor, projectId, archived, includeTitles }) => sql`
       WITH candidate AS (
         SELECT
           threads.thread_id,
@@ -110,7 +111,8 @@ export const make = Effect.gen(function* () {
           threads.thread_id, threads.updated_at
         FROM orchestration_v2_projection_threads AS threads
         INNER JOIN projection_projects AS projects ON projects.project_id = threads.project_id
-        WHERE threads.deleted_at IS NULL AND projects.deleted_at IS NULL
+        WHERE ${includeTitles} = 1
+          AND threads.deleted_at IS NULL AND projects.deleted_at IS NULL
           AND (${archived} = 'include' OR
             (${archived} = 'only' AND threads.archived_at IS NOT NULL) OR
             (${archived} = 'exclude' AND threads.archived_at IS NULL))
@@ -161,6 +163,7 @@ export const make = Effect.gen(function* () {
             cursor: input.cursor ?? 0,
             projectId: input.projectId ?? null,
             archived: input.archived ?? "exclude",
+            includeTitles: input.includeTitles === true,
           }),
         )
         .pipe(

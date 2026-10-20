@@ -24,6 +24,7 @@ import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as SqlClient from "effect/sql/SqlClient";
 import { McpAttachmentInput } from "./attachment/input.ts";
 import { McpSchema, McpServer, Tool } from "effect/ai";
 import { FetchHttpClient } from "effect/http";
@@ -41,6 +42,7 @@ import * as ThreadLaunchService from "../../orchestration-v2/ThreadLaunchService
 import * as GitVcsDriver from "../../vcs/GitVcsDriver.ts";
 import * as ThreadManagement from "../../orchestration-v2/ThreadManagementService.ts";
 import * as ThreadSearch from "../../orchestration-v2/ThreadSearch.ts";
+import * as SqlitePersistence from "../../persistence/Sqlite.ts";
 import * as PreviewBrowser from "../../preview/PreviewBrowser.ts";
 import * as ProjectService from "../../project/ProjectService.ts";
 import * as ProviderRegistry from "../../provider/ProviderRegistry.ts";
@@ -154,6 +156,68 @@ const client = McpSchema.McpServerClient.of({
   },
   getClient: Effect.die("unused"),
 });
+
+it.effect("retains title search through the thread tool and honors explicit exclusion", () =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`
+      INSERT INTO projection_projects (
+        project_id, title, workspace_root, scripts_json, created_at, updated_at
+      ) VALUES (
+        'project:mcp-test', 'Search', '/work/search', '[]',
+        '2026-10-20T00:00:00.000Z', '2026-10-20T00:00:00.000Z'
+      )
+    `;
+    yield* sql`
+      INSERT INTO orchestration_v2_projection_threads (
+        thread_id, project_id, title, default_provider, runtime_mode, interaction_mode,
+        created_at, updated_at, payload_json
+      ) VALUES (
+        'title-only', 'project:mcp-test', 'needle title', 'codex', 'full-access', 'default',
+        '2026-10-20T00:00:00.000Z', '2026-10-20T00:00:00.000Z', '{}'
+      )
+    `;
+    for (const includeTitles of [undefined, true, false]) {
+      const result = yield* server
+        .callTool({
+          name: "t3_thread_search",
+          arguments: { query: "needle", ...(includeTitles === undefined ? {} : { includeTitles }) },
+        })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+      expect(result.isError).not.toBe(true);
+      expect(result.structuredContent).toEqual({
+        matches:
+          includeTitles === false
+            ? []
+            : [
+                {
+                  threadId: "title-only",
+                  projectId: "project:mcp-test",
+                  source: "title",
+                  snippet: "needle title",
+                  messageCreatedAt: null,
+                },
+              ],
+        nextCursor: null,
+      });
+    }
+  }).pipe(
+    Effect.provide(
+      McpHttpServer.layerThreadToolkit.pipe(
+        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provideMerge(ThreadSearch.layer),
+        Layer.provideMerge(SqlitePersistence.layerMemory),
+        Layer.provide(NodeCrypto.layer),
+        Layer.provide(McpToolAccessTestkit.liveThreadsLayer),
+        Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
+      ),
+    ),
+  ),
+);
 
 it.effect("checks capability through the production registration", () =>
   Effect.gen(function* () {
