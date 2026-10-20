@@ -1,6 +1,6 @@
 import { FileTree, useFileTree, useFileTreeSearch } from "@pierre/trees/react";
 import { ArrowLeftIcon } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Button } from "~/components/ui/button";
 import { InputGroup, InputGroupInput } from "~/components/ui/input-group";
@@ -58,24 +58,21 @@ function ZipArchiveBrowser(props: { readonly name: string; readonly archive: Zip
   const { resolvedTheme } = useTheme();
   const [viewing, setViewing] = useState<ZipPreviewEntry | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
-  const { paths, files } = useMemo(() => {
-    const occupied = new Set(props.archive.entries.map((entry) => entry.path));
-    const files = new Map<string, ZipPreviewEntry>();
-    const paths = props.archive.entries.map((entry) => {
-      let path = entry.path;
-      if (!entry.isDirectory) {
-        if (occupied.has(`${path}/`)) {
-          do {
-            path += " (file)";
-          } while (occupied.has(path) || occupied.has(`${path}/`));
-          occupied.add(path);
-        }
-        files.set(path, entry);
+  const occupied = new Set(props.archive.entries.map((entry) => entry.path));
+  const files = new Map<string, ZipPreviewEntry>();
+  const paths = props.archive.entries.map((entry) => {
+    let path = entry.path;
+    if (!entry.isDirectory) {
+      if (occupied.has(`${path}/`)) {
+        do {
+          path += " (file)";
+        } while (occupied.has(path) || occupied.has(`${path}/`));
+        occupied.add(path);
       }
-      return path;
-    });
-    return { paths, files };
-  }, [props.archive]);
+      files.set(path, entry);
+    }
+    return path;
+  });
   const { model } = useFileTree({
     paths,
     density: "compact",
