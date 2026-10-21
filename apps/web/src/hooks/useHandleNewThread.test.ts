@@ -150,8 +150,7 @@ vi.mock("@t3tools/contracts", () => ({
   ) =>
     (projectId === null
       ? undefined
-      : settings.projectSettingsOverrides?.[projectId]?.providerInstances?.[instanceId]
-          ?.enabled) ??
+      : settings.projectSettingsOverrides?.[projectId]?.providerInstances?.[instanceId]?.enabled) ??
     settings.providerInstances?.[instanceId]?.enabled ??
     true,
 }));
