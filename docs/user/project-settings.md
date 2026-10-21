@@ -78,18 +78,20 @@ Leaving an edited form asks before discarding unsaved changes.
 
 ## Custom watchers
 
-Ask your agent to watch Jira Cloud issues or an HTTP JSON source and act when
-new items match your conditions. T3 checks the source on an interval without
-running a model. The first successful check records a baseline. Later checks
-start work for new matches, including items that leave and then re-enter the
-matching state. Changes that happen entirely between checks can be missed.
+Create a task in **Settings → Scheduled tasks**, choose **Watcher**, and set
+its source, conditions, check interval, and instructions. You can also ask your
+agent to create one. Watchers support Jira Cloud issues and HTTP JSON sources.
+T3 checks the source without running a model. The first successful check records
+a baseline. Later checks start work for new matches, including items that leave
+and then re-enter the matching state. Changes that happen entirely between
+checks can be missed.
 
-Manage watchers in **Settings → Scheduled tasks** or the thread's automations.
+Manage watchers in **Settings → Scheduled tasks** or the thread's right panel.
 **Check now** reads the source without forcing an agent run. Pause keeps pending
-work; stop removes the watcher. Work already started continues. Ask the agent
-to change the source, conditions, or limit on active runs. Private sources use
-the app's private secret prompt. The environment must stay running to check
-for changes.
+work; stop removes the watcher. Work already started continues. Edit a watcher
+or ask the agent to change its source, conditions, or limit on active runs.
+Enter credentials in the form for a private source; agents use the app's private
+secret prompt. The environment must stay running to check for changes.
 
 ## Webhook automations
 

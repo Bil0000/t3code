@@ -2,18 +2,22 @@ import { useAtomValue } from "@effect/atom-react";
 import { ThreadDetailsControl } from "./ThreadDetailsControl";
 import { useNavigate } from "@tanstack/react-router";
 import {
+  BracesIcon,
   CalendarClockIcon,
   EyeIcon,
   EyeOffIcon,
   PencilIcon,
   PlayIcon,
+  PlusIcon,
   RefreshCwIcon,
   Settings2Icon,
+  TicketIcon,
 } from "lucide-react";
 import { useState } from "react";
 import {
   AuthOrchestrationOperateScope,
   type EnvironmentId,
+  type ProjectId,
   type ScheduledTask,
   type ThreadId,
 } from "@t3tools/contracts";
@@ -82,10 +86,14 @@ function taskScheduleLine(task: ScheduledTask) {
 
 export function ThreadAutomationsPanel(props: {
   readonly environmentId: EnvironmentId;
+  readonly projectId: ProjectId;
   readonly threadId: ThreadId;
 }) {
   const canOperate = useAtomValue(
     serverEnvironment.runScheduledTaskNow.permissionAtom(props.environmentId),
+  );
+  const canUpsert = useAtomValue(
+    serverEnvironment.upsertScheduledTask.permissionAtom(props.environmentId),
   );
   const tasksQuery = useEnvironmentQuery(
     serverEnvironment.scheduledTasksLive({ environmentId: props.environmentId, input: {} }),
@@ -106,7 +114,45 @@ export function ThreadAutomationsPanel(props: {
     (task) => task.threadId === props.threadId,
   );
 
-  if (tasksQuery.error === null && boundTasks.length === 0) return null;
+  const supportsWatchers = tasksQuery.data?.supportsWatchers === true;
+  const canCreateWatcher = canUpsert && supportsWatchers;
+  const createWatcher = () =>
+    void navigate({
+      to: "/settings/scheduled-tasks",
+      search: {
+        environmentId: props.environmentId,
+        createWatcher: true,
+        projectId: props.projectId,
+        threadId: props.threadId,
+      },
+    });
+  const editTask = (task: ScheduledTask) =>
+    void navigate({
+      to: "/settings/scheduled-tasks",
+      search: { environmentId: props.environmentId, taskId: task.id },
+    });
+
+  if (tasksQuery.error === null && boundTasks.length === 0) {
+    return canCreateWatcher ? (
+      <ThreadDetailsSection
+        headingId="thread-details-automations-heading"
+        title="Automations"
+        showHeading={false}
+        data-thread-automations-panel
+      >
+        <ThreadDetailsControl
+          variant="ghost"
+          size="sm"
+          part="row"
+          tone="muted"
+          onClick={createWatcher}
+        >
+          <EyeIcon aria-hidden className="size-4 shrink-0" />
+          Add watcher
+        </ThreadDetailsControl>
+      </ThreadDetailsSection>
+    ) : null;
+  }
 
   const reportFailure = (title: string, error: unknown) => {
     toastManager.add(
@@ -183,27 +229,47 @@ export function ThreadAutomationsPanel(props: {
       title="Automations"
       data-thread-automations-panel
       actions={
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <ThreadDetailsControl
-                size="icon-xs"
-                variant="ghost"
-                part="icon"
-                aria-label="Manage scheduled tasks"
-                onClick={() =>
-                  void navigate({
-                    to: "/settings/scheduled-tasks",
-                    search: { environmentId: props.environmentId },
-                  })
+        <>
+          {canCreateWatcher ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <ThreadDetailsControl
+                    size="icon-xs"
+                    variant="ghost"
+                    part="icon"
+                    aria-label="Add watcher"
+                    onClick={createWatcher}
+                  >
+                    <PlusIcon className="size-3.5" />
+                  </ThreadDetailsControl>
                 }
-              >
-                <Settings2Icon className="size-3.5" />
-              </ThreadDetailsControl>
-            }
-          />
-          <TooltipPopup>Manage scheduled tasks</TooltipPopup>
-        </Tooltip>
+              />
+              <TooltipPopup>Add watcher</TooltipPopup>
+            </Tooltip>
+          ) : null}
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <ThreadDetailsControl
+                  size="icon-xs"
+                  variant="ghost"
+                  part="icon"
+                  aria-label="Manage scheduled tasks"
+                  onClick={() =>
+                    void navigate({
+                      to: "/settings/scheduled-tasks",
+                      search: { environmentId: props.environmentId },
+                    })
+                  }
+                >
+                  <Settings2Icon className="size-3.5" />
+                </ThreadDetailsControl>
+              }
+            />
+            <TooltipPopup>Manage scheduled tasks</TooltipPopup>
+          </Tooltip>
+        </>
       }
     >
       {tasksQuery.error !== null ? (
@@ -218,7 +284,11 @@ export function ThreadAutomationsPanel(props: {
           const line = watch
             ? `${watchStatus(task).label} · ${watchSourceLabel(task.watch.source)}`
             : taskScheduleLine(task);
-          const Icon = watch ? EyeIcon : CalendarClockIcon;
+          const Icon = watch
+            ? task.watch.source.type === "jira"
+              ? TicketIcon
+              : BracesIcon
+            : CalendarClockIcon;
           return (
             <li
               key={task.id}
@@ -240,20 +310,33 @@ export function ThreadAutomationsPanel(props: {
                 />
               </span>
               <Tooltip>
-                <TooltipTrigger render={<div className="min-w-0 flex-1" />}>
+                <TooltipTrigger
+                  render={
+                    watch && supportsWatchers ? (
+                      <button
+                        type="button"
+                        aria-label={`Edit ${task.title}`}
+                        className="min-w-0 flex-1 cursor-pointer rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                        onClick={() => editTask(task)}
+                      />
+                    ) : (
+                      <div className="min-w-0 flex-1" />
+                    )
+                  }
+                >
                   <span className="block truncate text-sm font-medium text-foreground/80">
                     {task.title}
                   </span>
-                  <p
+                  <span
                     className={cn(
-                      "truncate text-2xs",
+                      "block truncate text-2xs",
                       watch && watchStatus(task).tone === "error"
                         ? "text-destructive"
                         : "text-muted-foreground",
                     )}
                   >
                     {line}
-                  </p>
+                  </span>
                 </TooltipTrigger>
                 <TooltipPopup side="left" className={watch ? "max-w-72" : undefined}>
                   <p className="font-medium">{task.title}</p>
@@ -278,34 +361,44 @@ export function ThreadAutomationsPanel(props: {
                   ) : null}
                 </TooltipPopup>
               </Tooltip>
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <ThreadDetailsControl
-                      size="icon-xs"
-                      variant="ghost"
-                      part="icon"
-                      aria-label={watch ? `Stop watching ${task.title}` : `Edit ${task.title}`}
-                      disabled={watch && (!canOperate || busyTaskId !== null)}
-                      onClick={() =>
-                        watch
-                          ? void stopWatching(task)
-                          : void navigate({
-                              to: "/settings/scheduled-tasks",
-                              search: { environmentId: props.environmentId, taskId: task.id },
-                            })
-                      }
-                    >
-                      {watch ? (
-                        <EyeOffIcon className="size-3.5" />
-                      ) : (
+              {watch ? (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <ThreadDetailsControl
+                        size="icon-xs"
+                        variant="ghost"
+                        part="icon"
+                        className="group/watch"
+                        aria-label={`Stop watching ${task.title}`}
+                        disabled={!canOperate || busyTaskId !== null}
+                        onClick={() => void stopWatching(task)}
+                      />
+                    }
+                  >
+                    <EyeIcon aria-hidden className="size-3.5 group-hover/watch:hidden" />
+                    <EyeOffIcon aria-hidden className="hidden size-3.5 group-hover/watch:block" />
+                  </TooltipTrigger>
+                  <TooltipPopup>Stop watching</TooltipPopup>
+                </Tooltip>
+              ) : (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <ThreadDetailsControl
+                        size="icon-xs"
+                        variant="ghost"
+                        part="icon"
+                        aria-label={`Edit ${task.title}`}
+                        onClick={() => editTask(task)}
+                      >
                         <PencilIcon className="size-3.5" />
-                      )}
-                    </ThreadDetailsControl>
-                  }
-                />
-                <TooltipPopup>{watch ? "Stop watching" : "Edit automation"}</TooltipPopup>
-              </Tooltip>
+                      </ThreadDetailsControl>
+                    }
+                  />
+                  <TooltipPopup>Edit automation</TooltipPopup>
+                </Tooltip>
+              )}
               {/* A webhook task runs from its URL; there is no request to run it with. */}
               {task.schedule.type === "webhook" ? null : (
                 <Tooltip>

@@ -368,6 +368,7 @@ export const ScheduledTaskListInput = Schema.Struct({});
 export type ScheduledTaskListInput = typeof ScheduledTaskListInput.Type;
 
 export const ScheduledTaskListResult = Schema.Struct({
+  supportsWatchers: Schema.optional(Schema.Boolean),
   // Trigger types grow over time; a client must not lose the whole list over
   // one task it cannot decode.
   tasks: ForwardCompatibleArray(ScheduledTask),
@@ -386,6 +387,10 @@ export const ScheduledTaskUpsertInput = Schema.Struct({
   schedule: ScheduledTaskUpsertSchedule,
   watch: Schema.optional(Schema.NullOr(ScheduledTaskWatchInput)).annotate({
     description: "Requires an interval schedule. Omit to keep the stored watch; null removes it.",
+  }),
+  watchSecret: Schema.optional(Schema.String.check(Schema.isMinLength(1))).annotate({
+    description:
+      "Write-only watcher credential entered in a client form. Omit to keep stored credentials. Cannot be combined with a secretRef.",
   }),
   projectId: ProjectId,
   threadId: Schema.optional(Schema.NullOr(ThreadId)),

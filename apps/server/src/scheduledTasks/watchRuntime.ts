@@ -111,6 +111,10 @@ export const make = Effect.fn("ScheduledTaskService.makeWatchRuntime")(function*
     const row = existing === null ? undefined : yield* getRow(existing.id);
     const oldSecretName = row?.watch_secret_name ?? null;
     const watch = input.watch === undefined ? existing?.watch : input.watch;
+    if (input.watchSecret !== undefined && watch?.source.auth === undefined)
+      return yield* new ScheduledTaskError({
+        message: "A watcher credential needs an authenticated source.",
+      });
     if (watch == null)
       return {
         config: null,
@@ -127,6 +131,11 @@ export const make = Effect.fn("ScheduledTaskService.makeWatchRuntime")(function*
     const previous = existing?.watch;
     const previousUrl = previous === undefined ? null : watchSourceUrl(previous.source);
     const auth = watch.source.auth;
+    const secretRef = auth !== undefined && "secretRef" in auth ? auth.secretRef : undefined;
+    if (input.watchSecret !== undefined && secretRef !== undefined)
+      return yield* new ScheduledTaskError({
+        message: "Use either a watcher credential or a secret reference, not both.",
+      });
     const sameIdentity =
       existing?.projectId === input.projectId &&
       previousUrl?.origin === url.origin &&
@@ -135,9 +144,10 @@ export const make = Effect.fn("ScheduledTaskService.makeWatchRuntime")(function*
         (previous?.source.auth?.type === "basic" &&
           previous.source.auth.username === auth.username));
     let secretName = sameIdentity ? (row?.watch_secret_name ?? null) : null;
-    if (auth !== undefined && "secretRef" in auth && auth.secretRef !== undefined) {
-      const value = yield* requests
-        .consume({ ref: auth.secretRef, projectId: input.projectId })
+    let value = input.watchSecret;
+    if (secretRef !== undefined) {
+      value = yield* requests
+        .consume({ ref: secretRef, projectId: input.projectId })
         .pipe(
           Effect.catch(() =>
             input.commandId !== undefined && secretName !== null
@@ -145,16 +155,21 @@ export const make = Effect.fn("ScheduledTaskService.makeWatchRuntime")(function*
               : Effect.fail(failure()),
           ),
         );
-      if (value !== undefined) {
+    }
+    if (value !== undefined) {
+      const bytes = new TextEncoder().encode(value);
+      const stored =
+        input.watchSecret !== undefined && secretName !== null
+          ? yield* secrets.get(secretName).pipe(Effect.mapError(failure))
+          : Option.none();
+      if (Option.isNone(stored) || !Buffer.from(stored.value).equals(bytes)) {
         secretName = `scheduled-watch-${yield* newId}`;
-        yield* secrets
-          .set(secretName, new TextEncoder().encode(value))
-          .pipe(Effect.mapError(failure));
+        yield* secrets.set(secretName, bytes).pipe(Effect.mapError(failure));
       }
     }
     if (auth !== undefined && secretName === null)
       return yield* new ScheduledTaskError({
-        message: "Watcher authentication needs a secret reference.",
+        message: "Enter a credential for this watcher.",
       });
     if (auth === undefined) secretName = null;
     const source =

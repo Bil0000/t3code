@@ -1,8 +1,16 @@
-import { EnvironmentId, ThreadId, ScheduledTaskId, type ScheduledTask } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  ProjectId,
+  ThreadId,
+  ScheduledTaskId,
+  type ScheduledTask,
+} from "@t3tools/contracts";
 import { expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
   allowed: true,
+  supportsWatchers: false,
+  navigate: vi.fn(),
   toggle: vi.fn(),
   run: vi.fn(),
   remove: vi.fn(),
@@ -20,7 +28,7 @@ vi.mock(import("@effect/atom-react"), async (importOriginal) => ({
 }));
 vi.mock(import("@tanstack/react-router"), async (importOriginal) => ({
   ...(await importOriginal()),
-  useNavigate: () => vi.fn(),
+  useNavigate: () => state.navigate,
 }));
 vi.mock(import("../../state/use-atom-command"), async (importOriginal) => {
   const { serverEnvironment } = await import("../../state/server");
@@ -36,12 +44,16 @@ vi.mock(import("../../state/use-atom-command"), async (importOriginal) => {
 });
 vi.mock(import("../../state/query"), async (importOriginal) => ({
   ...(await importOriginal()),
-  useEnvironmentQuery: (() => ({ data: { tasks: state.tasks }, error: null })) as never,
+  useEnvironmentQuery: (() => ({
+    data: { tasks: state.tasks, supportsWatchers: state.supportsWatchers },
+    error: null,
+  })) as never,
 }));
 
 import { act, render as renderUi } from "../../../test/render";
 import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
 const environmentId = EnvironmentId.make("remote");
+const projectId = ProjectId.make("project");
 const threadId = ThreadId.make("thread");
 const task = {
   id: ScheduledTaskId.make("task"),
@@ -72,6 +84,8 @@ const watcher = {
 
 async function setup() {
   state.allowed = true;
+  state.supportsWatchers = false;
+  state.navigate.mockReset();
   state.toggle.mockReset().mockResolvedValue({ _tag: "Success" });
   state.run.mockReset().mockResolvedValue({ _tag: "Success" });
   state.remove.mockReset().mockResolvedValue({ _tag: "Success" });
@@ -84,7 +98,11 @@ async function setup() {
     await act(
       async () =>
         await screen.rerender(
-          <ThreadAutomationsPanel environmentId={environmentId} threadId={threadId} />,
+          <ThreadAutomationsPanel
+            environmentId={environmentId}
+            projectId={projectId}
+            threadId={threadId}
+          />,
         ),
     );
   }
@@ -148,4 +166,41 @@ it("keeps a watcher when stopping is not confirmed", async () => {
   await renderPanel();
   await act(async () => byLabel("Stop watching Release watcher").click());
   expect(state.remove).not.toHaveBeenCalled();
+});
+
+it.each([
+  [true, true, true],
+  [false, true, false],
+  [true, false, false],
+])(
+  "offers a new watcher only with write permission and server support (%s, %s)",
+  async (allowed, supportsWatchers, offered) => {
+    await using fixture = await setup();
+    state.tasks = [];
+    state.allowed = allowed;
+    state.supportsWatchers = supportsWatchers;
+    await fixture.renderPanel();
+    const add = fixture.container.querySelector<HTMLElement>("button");
+    expect(add?.textContent ?? null).toBe(offered ? "Add watcher" : null);
+    await act(async () => add?.click());
+    expect(state.navigate).toHaveBeenCalledTimes(offered ? 1 : 0);
+    if (offered) {
+      expect(state.navigate).toHaveBeenCalledWith({
+        to: "/settings/scheduled-tasks",
+        search: { environmentId, createWatcher: true, projectId, threadId },
+      });
+    }
+  },
+);
+
+it("edits a watcher from its row only on a server that supports watchers", async () => {
+  await using fixture = await setup();
+  state.tasks = [watcher];
+  state.supportsWatchers = true;
+  await fixture.renderPanel();
+  await act(async () => fixture.byLabel("Edit Release watcher").click());
+  expect(state.navigate).toHaveBeenCalledWith({
+    to: "/settings/scheduled-tasks",
+    search: { environmentId, taskId: watcher.id },
+  });
 });

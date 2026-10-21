@@ -15,6 +15,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
@@ -201,6 +202,19 @@ const setup = Effect.fn("watchTest.setup")(function* () {
   const timers = () => ticks.get("scheduled-tasks")!;
   return { state, run, check, tick, complete, sql, staleCheck, timers };
 });
+
+it.effect("advertises watcher support in list and subscription snapshots", () =>
+  Effect.gen(function* () {
+    const { run } = yield* setup();
+    yield* run((service) =>
+      Effect.gen(function* () {
+        assert.isTrue((yield* service.list()).supportsWatchers);
+        const snapshot = yield* service.subscribeList().pipe(Stream.runHead);
+        assert.isTrue(Option.getOrThrow(snapshot).supportsWatchers);
+      }),
+    );
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
 
 it.effect("moves failed matches behind a healthy watcher without changing retry identity", () =>
   Effect.gen(function* () {
@@ -635,6 +649,202 @@ it.effect("drops stale source results after pause, edit, and delete", () =>
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );
 
+it.effect("stores manual credentials privately, rotates them, and removes them with auth", () =>
+  Effect.gen(function* () {
+    const { state, run, check, sql } = yield* setup();
+    yield* run((service) =>
+      Effect.gen(function* () {
+        for (const type of ["basic", "bearer"] as const) {
+          const original = input(`watch:manual-${type}`);
+          const authenticated = {
+            ...original,
+            watch: {
+              ...original.watch!,
+              source: {
+                ...original.watch!.source,
+                auth: type === "basic" ? { type, username: "user@example.com" } : { type },
+              },
+            },
+          };
+          const secret = " private-manual-token ";
+          const { task } = yield* service.upsert({ ...authenticated, watchSecret: secret });
+          assert.isTrue(task.watch!.source.auth!.hasSecret);
+          assert.isFalse(encodeJson(task).includes(secret));
+          assert.isFalse(encodeJson(yield* service.list()).includes(secret));
+          assert.isFalse(encodeJson(yield* sql`SELECT * FROM scheduled_tasks`).includes(secret));
+          yield* check(service, task.id);
+          assert.equal(
+            state.httpRequests.at(-1)!.authorization,
+            type === "basic"
+              ? `Basic ${Buffer.from(`user@example.com:${secret}`).toString("base64")}`
+              : `Bearer ${secret}`,
+          );
+          yield* service.upsert(authenticated);
+          assert.equal(state.secrets.size, 1);
+          yield* service.upsert({ ...authenticated, watchSecret: "replacement-token" });
+          assert.equal(state.secrets.size, 1);
+          assert.equal(
+            new TextDecoder().decode([...state.secrets.values()][0]),
+            "replacement-token",
+          );
+          yield* service.upsert(original);
+          assert.equal(state.secrets.size, 0);
+        }
+      }),
+    );
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect(
+  "preserves the baseline and queued matches when a manual credential save is replayed",
+  () =>
+    Effect.gen(function* () {
+      const { state, run, check, sql } = yield* setup();
+      yield* run((service) =>
+        Effect.gen(function* () {
+          const original = input();
+          const request = {
+            ...original,
+            commandId: "watch:manual-save" as const,
+            watch: {
+              ...original.watch!,
+              source: { ...original.watch!.source, auth: { type: "bearer" as const } },
+            },
+            watchSecret: "manual-token",
+          };
+          const { task } = yield* service.upsert(decodeInput(request));
+          yield* check(service, task.id);
+          state.failDispatch = true;
+          state.items = [{ id: "one", status: "ready" }];
+          yield* check(service, task.id);
+          const before = (yield* service.list()).tasks[0]!.watch!;
+          assert.isNotNull(before.initializedAt);
+          assert.equal(before.pendingCount, 1);
+          const [row] = yield* sql<{
+            watch_secret_name: string;
+          }>`SELECT watch_secret_name FROM scheduled_tasks WHERE task_id = ${task.id}`;
+          for (const save of [request, { ...request, commandId: undefined, title: "Renamed" }]) {
+            const saved = (yield* service.upsert(decodeInput(save))).task.watch!;
+            assert.equal(saved.initializedAt, before.initializedAt);
+            assert.equal(saved.pendingCount, 1);
+            assert.deepEqual([...state.secrets.keys()], [row!.watch_secret_name]);
+          }
+          const rotated = (yield* service.upsert({
+            ...decodeInput(request),
+            watchSecret: "different-token",
+          })).task.watch!;
+          assert.isNull(rotated.initializedAt);
+          assert.equal(rotated.pendingCount, 0);
+          assert.equal(state.secrets.size, 1);
+          assert.isFalse(state.secrets.has(row!.watch_secret_name));
+        }),
+      );
+    }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect("never retains manual credentials across origin, project, or auth identity changes", () =>
+  Effect.gen(function* () {
+    const { state, run } = yield* setup();
+    yield* run((service) =>
+      Effect.gen(function* () {
+        const original = input();
+        const source = {
+          type: "http_json" as const,
+          url: "https://example.com/items",
+          itemsPath: "",
+          keyPath: "id",
+          auth: { type: "basic" as const, username: "alice" },
+        };
+        const authenticated = { ...original, watch: { ...original.watch!, source } };
+        const missing = yield* service.upsert(authenticated).pipe(Effect.flip);
+        assert.equal(missing.message, "Enter a credential for this watcher.");
+        yield* service.upsert({ ...authenticated, watchSecret: "alice-token" });
+        yield* service.upsert({
+          ...authenticated,
+          watch: {
+            ...authenticated.watch,
+            source: { ...source, url: "https://example.com/other" },
+          },
+        });
+        for (const changed of [
+          { ...authenticated, projectId: "project:other" },
+          ...[
+            { ...source, url: "https://other.example/items" },
+            { ...source, auth: { type: "basic", username: "bob" } },
+            { ...source, auth: { type: "bearer" } },
+          ].map((changedSource) =>
+            input("watch:test", {
+              watch: { ...authenticated.watch, source: changedSource },
+            }),
+          ),
+        ]) {
+          const rejected = yield* service.upsert(decodeInput(changed)).pipe(Effect.flip);
+          assert.instanceOf(rejected, ScheduledTaskError);
+          assert.equal(state.secrets.size, 1);
+          assert.equal(new TextDecoder().decode([...state.secrets.values()][0]), "alice-token");
+        }
+      }),
+    );
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect("rejects ambiguous and unused manual secrets without consuming references", () =>
+  Effect.gen(function* () {
+    const { state, run } = yield* setup();
+    yield* run((service) =>
+      Effect.gen(function* () {
+        const ref = SecretRef.make("secret-ref:0123456789abcdef0123456789abcdef");
+        state.refs.set(ref, "agent-token");
+        const original = input();
+        const ambiguous = {
+          ...original,
+          watch: {
+            ...original.watch!,
+            source: {
+              ...original.watch!.source,
+              auth: { type: "bearer" as const, secretRef: ref },
+            },
+          },
+        };
+        for (const request of [ambiguous, original, { ...original, watch: null }]) {
+          const rejected = yield* service
+            .upsert({ ...request, watchSecret: "manual-token" })
+            .pipe(Effect.flip);
+          assert.instanceOf(rejected, ScheduledTaskError);
+          assert.isFalse(encodeJson(rejected).includes("manual-token"));
+          assert.equal(state.secrets.size, 0);
+          assert.equal(state.refs.get(ref), "agent-token");
+        }
+      }),
+    );
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect("cleans up a manual credential if its save fails", () =>
+  Effect.gen(function* () {
+    const { state, run } = yield* setup();
+    yield* run((service) =>
+      Effect.gen(function* () {
+        const original = input();
+        const rejected = yield* service
+          .upsert({
+            ...original,
+            requireExisting: true,
+            watch: {
+              ...original.watch!,
+              source: { ...original.watch!.source, auth: { type: "bearer" as const } },
+            },
+            watchSecret: "manual-token",
+          })
+          .pipe(Effect.flip);
+        assert.instanceOf(rejected, ScheduledTaskError);
+        assert.equal(state.secrets.size, 0);
+        assert.equal((yield* service.list()).tasks.length, 0);
+      }),
+    );
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
 it.effect("stores auth only in the secret store and requires a new ref for a new origin", () =>
   Effect.gen(function* () {
     const { state, run, sql } = yield* setup();
@@ -681,7 +891,7 @@ it.effect("stores auth only in the secret store and requires a new ref for a new
             },
           })
           .pipe(Effect.flip);
-        assert.equal(rejected.message, "Watcher authentication needs a secret reference.");
+        assert.equal(rejected.message, "Enter a credential for this watcher.");
         yield* service.delete({ id: task.id });
         assert.equal(state.secrets.size, 0);
       }),

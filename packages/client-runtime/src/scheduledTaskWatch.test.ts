@@ -2,12 +2,146 @@ import type { ScheduledTask, ScheduledTaskWatch } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  emptyWatchDraft,
+  parseWatchDraft,
+  watchDraft,
   watchActivityLabel,
   watchRuleLabel,
   watchSourceLabel,
   watchStatus,
   type ScheduledTaskWithWatch,
 } from "./scheduledTaskWatch.ts";
+
+describe("watch drafts", () => {
+  it("creates an interval watch payload with a write-only credential", () => {
+    expect(
+      parseWatchDraft({
+        ...emptyWatchDraft(),
+        url: "https://acme.atlassian.net",
+        jql: "project = OPS",
+        authType: "basic",
+        username: " user@example.com ",
+        secret: " private-token ",
+      }),
+    ).toEqual({
+      watch: {
+        source: {
+          type: "jira",
+          baseUrl: "https://acme.atlassian.net",
+          jql: "project = OPS",
+          auth: { type: "basic", username: "user@example.com" },
+        },
+        filters: [],
+        maxConcurrentRuns: 1,
+      },
+      watchSecret: " private-token ",
+    });
+  });
+
+  it("roundtrips both sources, every operator, and list values CSV cannot preserve", () => {
+    for (const source of [
+      { type: "jira" as const, baseUrl: "https://acme.atlassian.net", jql: "project = OPS" },
+      {
+        type: "http_json" as const,
+        url: "https://example.com/items",
+        itemsPath: "data.items",
+        keyPath: "key",
+      },
+    ]) {
+      const saved: ScheduledTaskWatch = {
+        ...watch,
+        source: { ...source, auth: { type: "bearer", hasSecret: true } },
+        maxConcurrentRuns: 4,
+        filters: [
+          { path: "fields.status.name", op: "equals", value: "To Do" },
+          { path: "status", op: "notEquals", value: "" },
+          { path: "id", op: "startsWith", value: "OPS-" },
+          { path: "assignee", op: "exists" },
+          { path: "label", op: "in", value: ["a,b", " To Do ", ""] },
+          { path: "label", op: "in", value: ["[abc", "other"] },
+          { path: "status", op: "in", value: ["Done", "Closed"] },
+        ],
+      };
+      const draft = watchDraft(saved);
+      expect(draft.secret).toBe("");
+      expect(draft.filters.at(-1)!.value).toBe("Done, Closed");
+      expect(parseWatchDraft(draft)).toEqual({
+        watch: {
+          source: { ...source, auth: { type: "bearer" } },
+          filters: saved.filters,
+          maxConcurrentRuns: 4,
+        },
+      });
+    }
+  });
+
+  it("uses item paths without a webhook prefix and preserves scalar text", () => {
+    const draft = {
+      ...emptyWatchDraft(),
+      sourceType: "http_json" as const,
+      url: "https://example.com/items",
+    };
+    expect(
+      parseWatchDraft({
+        ...draft,
+        filters: [
+          { id: "one", path: " fields.status.name ", op: "equals", value: " To Do " },
+          { id: "two", path: "status", op: "in", value: "Done, Closed" },
+        ],
+      }),
+    ).toEqual({
+      watch: {
+        source: { type: "http_json", url: draft.url, itemsPath: "", keyPath: "id" },
+        filters: [
+          { path: "fields.status.name", op: "equals", value: " To Do " },
+          { path: "status", op: "in", value: ["Done", "Closed"] },
+        ],
+        maxConcurrentRuns: 1,
+      },
+    });
+  });
+
+  it("rejects invalid fields, filters, and concurrency", () => {
+    const valid = {
+      ...emptyWatchDraft(),
+      sourceType: "http_json" as const,
+      url: "https://example.com/items",
+    };
+    for (const patch of [
+      { url: "bad" },
+      { url: "file:///tmp/feed" },
+      { url: "https://user:password@example.com" },
+      { keyPath: "" },
+      { authType: "basic" as const, username: "" },
+      { maxConcurrentRuns: "" },
+      { maxConcurrentRuns: "0" },
+      { maxConcurrentRuns: "5" },
+      { maxConcurrentRuns: "1.5" },
+      { filters: [{ id: "one", path: "", op: "exists" as const, value: "" }] },
+      { filters: [{ id: "one", path: "status", op: "in" as const, value: "[]" }] },
+      { filters: [{ id: "one", path: "status", op: "in" as const, value: "[1]" }] },
+      {
+        filters: Array.from({ length: 17 }, (_, id) => ({
+          id: String(id),
+          path: "id",
+          op: "exists" as const,
+          value: "",
+        })),
+      },
+    ]) {
+      expect(parseWatchDraft({ ...valid, ...patch })).toHaveProperty("error");
+    }
+  });
+
+  it("omits credentials when auth is removed", () => {
+    const result = parseWatchDraft({
+      ...watchDraft(watch),
+      authType: "none",
+      secret: "stale-secret",
+    });
+    expect(result).toEqual({ watch: { source: watch.source, filters: [], maxConcurrentRuns: 1 } });
+  });
+});
 
 const watch: ScheduledTaskWatch = {
   source: { type: "jira", baseUrl: "https://acme.atlassian.net", jql: "project = SECRET" },

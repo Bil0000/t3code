@@ -3,7 +3,9 @@ import * as Schema from "effect/Schema";
 
 import {
   MIN_SCHEDULED_TASK_INTERVAL_MS,
+  ScheduledTaskListResult,
   ScheduledTaskSchedule,
+  ScheduledTaskUpsertInput,
   ScheduledTaskUpsertSchedule,
   ScheduledTaskWatch,
   ScheduledTaskWatchInput,
@@ -12,6 +14,16 @@ import {
 const decodeSchedule = Schema.decodeUnknownSync(ScheduledTaskSchedule);
 const decodeUpsertSchedule = Schema.decodeUnknownSync(ScheduledTaskUpsertSchedule);
 const decodeWatch = Schema.decodeUnknownSync(ScheduledTaskWatch);
+
+it("reads legacy task lists and preserves the optional watcher support marker", () => {
+  const decode = Schema.decodeUnknownSync(ScheduledTaskListResult);
+  expect(decode({ tasks: [] })).toEqual({ tasks: [] });
+  expect(decode({ tasks: [], supportsWatchers: true })).toEqual({
+    tasks: [],
+    supportsWatchers: true,
+  });
+  expect(decode({ tasks: [], supportsWatchers: false }).supportsWatchers).toBe(false);
+});
 
 describe("ScheduledTaskSchedule", () => {
   it("keeps legacy sub-minute persisted schedules readable", () => {
@@ -39,6 +51,13 @@ describe("scheduled task watches", () => {
     filters: [{ path: "fields.status.name", op: "equals", value: "To Do" }],
     maxConcurrentRuns: 1,
   };
+
+  it("accepts a write-only manual credential without trimming it", () => {
+    const decodeSecret = Schema.decodeUnknownSync(ScheduledTaskUpsertInput.fields.watchSecret);
+    expect(decodeSecret(" private-token ")).toBe(" private-token ");
+    expect(() => decodeSecret("")).toThrow();
+    expect(() => decodeSecret(null)).toThrow();
+  });
 
   it("accepts Jira Cloud and HTTP JSON with private secret references", () => {
     expect(decode(watch)).toEqual(watch);
