@@ -301,6 +301,10 @@ function scheduledTaskSummary(task: ScheduledTask, mayRun: boolean): Orchestrato
     schedule: task.schedule,
     nextRunAt: task.nextRunAt,
     lastRunStatus: task.lastRunStatus,
+    lastRunAt: task.lastRunAt,
+    lastRunError: task.lastRunError,
+    runCount: task.runCount,
+    ...(task.watch === undefined ? {} : { watch: task.watch }),
     ...(task.webhook?.url == null || !mayRun ? {} : { webhookUrl: task.webhook.url }),
     ...(task.webhook === undefined
       ? {}
@@ -1830,6 +1834,7 @@ const make = Effect.gen(function* () {
         prompt: input.prompt,
         enabled: input.enabled ?? true,
         schedule: input.schedule,
+        ...(input.watch === undefined ? {} : { watch: input.watch }),
         projectId,
         threadId: bindToCurrentThread && parent !== undefined ? parent.thread.id : null,
         workspaceStrategy: scheduledTaskWorkspaceStrategy(bindToCurrentThread),
@@ -1913,6 +1918,7 @@ const make = Effect.gen(function* () {
           prompt: input.prompt ?? existing.prompt,
           enabled: input.enabled ?? existing.enabled,
           schedule: input.schedule ?? existing.schedule,
+          ...(input.watch === undefined ? {} : { watch: input.watch }),
           projectId: existing.projectId,
           threadId,
           workspaceStrategy,

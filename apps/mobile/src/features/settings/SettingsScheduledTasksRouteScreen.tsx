@@ -51,6 +51,13 @@ import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScroll
 import { SegmentedControl } from "../../components/ui/SegmentedControl";
 import { ThemedSwitch } from "../../components/ui/ThemedSwitch";
 import { webhookAddress } from "@t3tools/client-runtime/webhook-address";
+import {
+  isWatchTask,
+  watchActivityLabel,
+  watchRuleLabel,
+  watchSourceLabel,
+  watchStatus,
+} from "@t3tools/client-runtime/scheduled-task-watch";
 import { tryCopyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { usePreparedConnection } from "../../state/session";
 import { buildModelOptions } from "../../lib/modelOptions";
@@ -84,6 +91,7 @@ import {
   formatNextScheduledTaskRun,
   formatScheduledTaskInterval,
 } from "./scheduledTaskPresentation";
+import { relativeTime } from "../../lib/time";
 
 type ScheduledTaskRoutes = {
   SettingsScheduledTaskNew: undefined;
@@ -1325,33 +1333,67 @@ function EnvironmentTasks({
             }
           >
             <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={`Edit ${task.title}`}
+              accessibilityRole={task.watch ? undefined : "button"}
+              accessibilityLabel={task.watch ? undefined : `Edit ${task.title}`}
+              disabled={task.watch !== undefined}
               onPress={() => {
                 onEdit(task);
               }}
               className="min-w-0 flex-1 gap-1 active:opacity-70"
             >
-              <Text className="text-lg font-t3-medium text-foreground" numberOfLines={1}>
-                {task.title}
-              </Text>
-              <Text className="text-sm text-foreground-muted" numberOfLines={2}>
-                {describeSchedule(task)}
-                {!task.enabled
-                  ? " · Paused"
-                  : task.nextRunAt
-                    ? ` · ${formatNextScheduledTaskRun(task.nextRunAt, now)}`
-                    : ""}
-              </Text>
+              <View className="flex-row items-center gap-2">
+                {task.watch ? (
+                  <SymbolView
+                    name="eye"
+                    size={15}
+                    tintColorClassName="accent-foreground-muted"
+                    type="monochrome"
+                  />
+                ) : null}
+                <Text
+                  className="min-w-0 shrink text-lg font-t3-medium text-foreground"
+                  numberOfLines={1}
+                >
+                  {task.title}
+                </Text>
+              </View>
+              {isWatchTask(task) ? (
+                <>
+                  <Text className="text-sm text-foreground-muted" numberOfLines={2}>
+                    {watchSourceLabel(task.watch.source)} · {watchRuleLabel(task.watch.filters)}
+                  </Text>
+                  <Text
+                    className={
+                      watchStatus(task).tone === "error"
+                        ? "text-sm text-danger-foreground"
+                        : "text-sm text-foreground-muted"
+                    }
+                    numberOfLines={2}
+                  >
+                    {watchStatus(task).label}
+                    {task.lastRunAt ? ` · checked ${relativeTime(task.lastRunAt)} ago` : ""}
+                    {` · ${watchActivityLabel(task.watch)}`}
+                  </Text>
+                </>
+              ) : (
+                <Text className="text-sm text-foreground-muted" numberOfLines={2}>
+                  {describeSchedule(task)}
+                  {!task.enabled
+                    ? " · Paused"
+                    : task.nextRunAt
+                      ? ` · ${formatNextScheduledTaskRun(task.nextRunAt, now)}`
+                      : ""}
+                </Text>
+              )}
               {task.lastRunError ? (
                 <Text className="text-sm text-danger-foreground" numberOfLines={2}>
-                  Last run failed: {task.lastRunError}
+                  {task.watch ? "Last check failed" : "Last run failed"}: {task.lastRunError}
                 </Text>
               ) : null}
             </Pressable>
             <Menu
               actions={[
-                { id: "edit", title: "Edit" },
+                ...(task.watch ? [] : [{ id: "edit", title: "Edit" }]),
                 {
                   id: "toggle",
                   title: task.enabled ? "Pause" : "Resume",
@@ -1359,10 +1401,16 @@ function EnvironmentTasks({
                 },
                 ...(task.schedule.type === "webhook"
                   ? []
-                  : [{ id: "run", title: "Run now", attributes: { disabled: !canOperate } }]),
+                  : [
+                      {
+                        id: "run",
+                        title: task.watch ? "Check now" : "Run now",
+                        attributes: { disabled: !canOperate || (task.watch && !task.enabled) },
+                      },
+                    ]),
                 {
                   id: "delete",
-                  title: "Delete",
+                  title: task.watch ? "Stop watching" : "Delete",
                   attributes: { destructive: true, disabled: !canOperate },
                 },
               ]}
@@ -1371,10 +1419,10 @@ function EnvironmentTasks({
                 if (action === "edit") {
                   onEdit(task);
                 } else if (action === "delete") {
-                  Dialog.alert("Delete task?", task.title, [
+                  Dialog.alert(task.watch ? "Stop watching?" : "Delete task?", task.title, [
                     { text: "Cancel", style: "cancel" },
                     {
-                      text: "Delete",
+                      text: task.watch ? "Stop watching" : "Delete",
                       style: "destructive",
                       onPress: () => void act(task, "delete"),
                     },

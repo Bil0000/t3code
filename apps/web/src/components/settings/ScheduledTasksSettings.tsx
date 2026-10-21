@@ -5,11 +5,13 @@ import { AsyncResult } from "effect/reactivity";
 import {
   Clock3Icon,
   CopyIcon,
+  EyeOffIcon,
   InboxIcon,
   MoreHorizontalIcon,
   PencilIcon,
   PlayIcon,
   PlusIcon,
+  RefreshCwIcon,
   Trash2Icon,
 } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
@@ -55,7 +57,17 @@ import {
 } from "../../providerInstances";
 import { usePrimaryCloudLinkState } from "../../cloud/primaryCloudLinkState";
 import { requestConfirmDialog } from "../../confirmDialog";
+import { searchableSetting } from "./settingsSearch";
+import { RelativeTime } from "../RelativeTime";
 import { webhookAddress } from "@t3tools/client-runtime/webhook-address";
+import {
+  isWatchTask,
+  watchActivityLabel,
+  watchRuleLabel,
+  watchSourceLabel,
+  watchStatus,
+  type WatchStatusTone,
+} from "@t3tools/client-runtime/scheduled-task-watch";
 import { Link } from "@tanstack/react-router";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { useNowMinute } from "../../hooks/useNowMinute";
@@ -347,6 +359,13 @@ function deliveryOutcomeVariant(outcome: string) {
   return "outline";
 }
 
+const WATCH_STATUS_VARIANT = {
+  muted: "outline",
+  error: "error",
+  info: "info",
+  success: "success",
+} as const satisfies Record<WatchStatusTone, string>;
+
 function statusVariant(status: ScheduledTask["lastRunStatus"]) {
   if (status === "failed") return "error";
   if (status === "succeeded") return "success";
@@ -364,6 +383,7 @@ export function ScheduledTasksSettings(target: {
     task: ScheduledTask | null;
   } | null>(null);
   const openForEdit = (environmentId: EnvironmentId, task: ScheduledTask) => {
+    if (isWatchTask(task)) return;
     setEditor({ environmentId, task });
   };
   const defaultEnvironment = environment ?? connectedEnvironments[0];
@@ -373,7 +393,8 @@ export function ScheduledTasksSettings(target: {
   return (
     <SettingsPageContainer>
       <SettingsSection
-        title="Scheduled tasks"
+        id={searchableSetting("scheduled-tasks").id}
+        title={searchableSetting("scheduled-tasks").title}
         variant="plain"
         headerAction={
           <Button
@@ -691,6 +712,16 @@ function ScheduledTaskRow({
   });
   const act = async (action: "toggle" | "run" | "delete") => {
     if (busy || !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)) return;
+    if (
+      action === "delete" &&
+      isWatchTask(task) &&
+      !(
+        (await requestConfirmDialog(`Stop watching?\n${task.title} is deleted.`, {
+          variant: "destructive",
+        })) ?? window.confirm(`Stop watching? ${task.title} is deleted.`)
+      )
+    )
+      return;
     setBusy(true);
     const result =
       action === "toggle"
@@ -709,27 +740,53 @@ function ScheduledTaskRow({
       );
     }
   };
+  const watch = isWatchTask(task) ? task.watch : null;
+  const watchState = isWatchTask(task) ? watchStatus(task) : null;
   return (
     <SettingsRow
       title={task.title}
-      description={<span className="line-clamp-2">{task.prompt}</span>}
+      description={
+        watch ? (
+          <span className="line-clamp-2">
+            {watchSourceLabel(watch.source)} · {watchRuleLabel(watch.filters)}
+          </span>
+        ) : (
+          <span className="line-clamp-2">{task.prompt}</span>
+        )
+      }
       status={
         <div className="flex flex-wrap items-center gap-2">
-          <span>
-            {scheduleLabel(task.schedule)} ·{" "}
-            {!task.enabled ? (
-              "Paused"
-            ) : isWebhook ? (
-              "Listening"
-            ) : task.nextRunAt ? (
-              <>
-                Next run <ScheduledRelativeLabel value={task.nextRunAt} />
-              </>
-            ) : (
-              "Not scheduled"
-            )}
-          </span>
-          {task.lastRunStatus !== "never" ? (
+          {watchState ? (
+            <Badge variant={WATCH_STATUS_VARIANT[watchState.tone]}>{watchState.label}</Badge>
+          ) : null}
+          {watch ? (
+            <span>
+              {scheduleLabel(task.schedule).replace("Every", "Checks every")}
+              {task.lastRunAt ? (
+                <>
+                  {" · checked "}
+                  <RelativeTime timestamp={task.lastRunAt} />
+                </>
+              ) : null}
+            </span>
+          ) : (
+            <span>
+              {scheduleLabel(task.schedule)} ·{" "}
+              {!task.enabled ? (
+                "Paused"
+              ) : isWebhook ? (
+                "Listening"
+              ) : task.nextRunAt ? (
+                <>
+                  Next run <ScheduledRelativeLabel value={task.nextRunAt} />
+                </>
+              ) : (
+                "Not scheduled"
+              )}
+            </span>
+          )}
+          {watch ? <span>{watchActivityLabel(watch)}</span> : null}
+          {!watch && task.lastRunStatus !== "never" ? (
             <Badge variant={statusVariant(task.lastRunStatus)}>{task.lastRunStatus}</Badge>
           ) : null}
           {task.lastRunError ? <span className="text-destructive">{task.lastRunError}</span> : null}
@@ -757,25 +814,30 @@ function ScheduledTaskRow({
               <MoreHorizontalIcon className="size-4" />
             </MenuTrigger>
             <MenuPopup align="end">
-              <MenuItem onClick={onEdit}>
-                <PencilIcon />
-                Edit
-              </MenuItem>
+              {watch ? null : (
+                <MenuItem onClick={onEdit}>
+                  <PencilIcon />
+                  Edit
+                </MenuItem>
+              )}
               {isWebhook ? (
                 <MenuItem onClick={() => setDeliveriesOpen(true)}>
                   <InboxIcon />
                   Deliveries
                 </MenuItem>
               ) : (
-                <MenuItem onClick={() => void act("run")}>
-                  <PlayIcon />
-                  Run now
+                <MenuItem
+                  disabled={watch !== null && !task.enabled}
+                  onClick={() => void act("run")}
+                >
+                  {watch ? <RefreshCwIcon /> : <PlayIcon />}
+                  {watch ? "Check now" : "Run now"}
                 </MenuItem>
               )}
               <MenuSeparator />
               <MenuItem onClick={() => void act("delete")}>
-                <Trash2Icon />
-                Delete
+                {watch ? <EyeOffIcon /> : <Trash2Icon />}
+                {watch ? "Stop watching" : "Delete"}
               </MenuItem>
             </MenuPopup>
           </Menu>
