@@ -60,6 +60,7 @@ const setup = Effect.fn("watchTest.setup")(function* () {
     sends: [] as { commandId: string; messageId: string; text: string }[],
     secrets: new Map<string, Uint8Array>(),
     refs: new Map<string, string>(),
+    consumeFailure: undefined as SecretRequestError | undefined,
     failDispatch: false,
     failPrompt: undefined as string | undefined,
     afterDispatch: false,
@@ -67,6 +68,9 @@ const setup = Effect.fn("watchTest.setup")(function* () {
     requested: undefined as Deferred.Deferred<void> | undefined,
     httpRequests: [] as { url: string; authorization: string | undefined }[],
     destinations: [] as { threadId: string; mode: string }[],
+    blockDispatch: undefined as
+      | { requested: Deferred.Deferred<void>; release: Deferred.Deferred<void> }
+      | undefined,
     blockRead: undefined as
       | { requested: Deferred.Deferred<void>; release: Deferred.Deferred<void> }
       | undefined,
@@ -89,6 +93,11 @@ const setup = Effect.fn("watchTest.setup")(function* () {
     text: string;
   }) {
     state.sends.push(request);
+    const blocked = state.blockDispatch;
+    if (blocked !== undefined) {
+      yield* Deferred.succeed(blocked.requested, undefined);
+      yield* Deferred.await(blocked.release);
+    }
     if (
       (state.failPrompt !== undefined && request.text.startsWith(state.failPrompt)) ||
       (state.failDispatch && !state.afterDispatch)
@@ -138,6 +147,7 @@ const setup = Effect.fn("watchTest.setup")(function* () {
     Layer.mock(SecretRequests.SecretRequests)({
       consume: ({ ref }) =>
         Effect.suspend(() => {
+          if (state.consumeFailure !== undefined) return Effect.fail(state.consumeFailure);
           const value = state.refs.get(ref);
           state.refs.delete(ref);
           return value === undefined
@@ -998,6 +1008,284 @@ it.effect("discards failed uncommitted events on delete, watch removal, and sour
             0,
           );
         }
+      }),
+    );
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect("rejects unavailable secret references except the saved command replay", () =>
+  Effect.gen(function* () {
+    const { state, run, check, sql } = yield* setup();
+    const ref = SecretRef.make("secret-ref:0123456789abcdef0123456789abcdef");
+    const original = input("watch:ref-replay", { commandId: "watch:save" });
+    const request = {
+      ...original,
+      watch: {
+        ...original.watch!,
+        source: { ...original.watch!.source, auth: { type: "bearer" as const, secretRef: ref } },
+      },
+    };
+    state.refs.set(ref, "original-token");
+    yield* run((service) =>
+      Effect.gen(function* () {
+        const { task } = yield* service.upsert(request);
+        yield* check(service, task.id);
+        state.failDispatch = true;
+        state.items = [{ id: "one", status: "ready" }];
+        yield* check(service, task.id);
+      }),
+    );
+    yield* run((service) =>
+      Effect.gen(function* () {
+        const before = yield* sql`SELECT * FROM scheduled_tasks`;
+        for (const invalid of [
+          { ...request, commandId: "watch:other" },
+          { ...request, title: "Different save" },
+          {
+            ...request,
+            watch: {
+              ...request.watch,
+              source: {
+                ...request.watch.source,
+                auth: {
+                  type: "bearer" as const,
+                  secretRef: SecretRef.make("secret-ref:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+                },
+              },
+            },
+          },
+        ]) {
+          yield* service.upsert(decodeInput(invalid)).pipe(Effect.flip);
+          assert.deepEqual(yield* sql`SELECT * FROM scheduled_tasks`, before);
+          assert.equal(state.secrets.size, 1);
+        }
+        state.consumeFailure = new SecretRequestError({ reason: "read_failed" });
+        yield* service.upsert(request).pipe(Effect.flip);
+        state.consumeFailure = undefined;
+        const replay = (yield* service.upsert(request)).task;
+        assert.isNotNull(replay.watch!.initializedAt);
+        assert.equal(replay.watch!.pendingCount, 1);
+        assert.equal(state.secrets.size, 1);
+        yield* check(service, replay.id);
+        assert.equal(state.httpRequests.at(-1)!.authorization, "Bearer original-token");
+      }),
+    );
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect("releases orphaned running watcher slots after projection cleanup", () =>
+  Effect.gen(function* () {
+    const { state, run, check, tick, sql } = yield* setup();
+    yield* run((service) =>
+      Effect.gen(function* () {
+        for (let index = 0; index < 5; index += 1) {
+          state.items = [];
+          const { task } = yield* service.upsert(input(`watch:orphan-${index}`));
+          yield* check(service, task.id);
+          state.items = [{ id: "one", status: "ready" }];
+          yield* check(service, task.id);
+        }
+        assert.equal(state.sends.length, 4);
+        const messages = yield* sql`SELECT * FROM orchestration_v2_projection_messages`;
+        yield* sql`DELETE FROM orchestration_v2_projection_messages`;
+        yield* tick();
+        assert.equal(state.sends.length, 4);
+        yield* sql`INSERT INTO orchestration_v2_projection_messages ${sql.insert(messages)}`;
+        yield* sql`UPDATE orchestration_v2_projection_messages SET run_id = NULL`;
+        yield* sql`DELETE FROM orchestration_v2_projection_runs`;
+        yield* tick();
+        assert.equal(state.sends.length, 4);
+        yield* sql`DELETE FROM orchestration_v2_projection_messages`;
+        yield* tick();
+        assert.equal(state.sends.length, 5);
+        assert.equal((yield* sql`SELECT event_id FROM scheduled_task_watch_events`).length, 1);
+      }),
+    );
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect("allows CRUD during blocked launch and send and ignores stale dispatch results", () =>
+  Effect.gen(function* () {
+    const { state, run, check, tick, sql } = yield* setup();
+    yield* run((service) =>
+      Effect.gen(function* () {
+        for (const bound of [false, true]) {
+          for (const action of ["pause", "edit", "source", "delete", "deleteForThread"] as const) {
+            if (!bound && action === "deleteForThread") continue;
+            state.items = [];
+            const original = input(
+              `watch:blocked-${bound}-${action}`,
+              bound ? { threadId: "thread:bound" } : {},
+            );
+            const { task } = yield* service.upsert(original);
+            yield* check(service, task.id);
+            state.items = [{ id: "one", status: "ready" }];
+            const requested = yield* Deferred.make<void>();
+            const release = yield* Deferred.make<void>();
+            state.blockDispatch = { requested, release };
+            const checking = yield* check(service, task.id).pipe(Effect.forkChild);
+            yield* Deferred.await(requested);
+            const [claimed] = yield* sql<{
+              event_id: string;
+            }>`SELECT event_id FROM scheduled_task_watch_events WHERE task_id = ${task.id}`;
+            if (action === "pause") yield* service.setEnabled({ id: task.id, enabled: false });
+            else if (action === "edit") yield* service.upsert({ ...original, prompt: "Changed" });
+            else if (action === "source")
+              yield* service.upsert({
+                ...original,
+                watch: {
+                  ...original.watch!,
+                  source: {
+                    type: "http_json",
+                    url: "https://example.com/new",
+                    itemsPath: "",
+                    keyPath: "id",
+                  },
+                },
+              });
+            else if (action === "delete") yield* service.delete({ id: task.id });
+            else yield* service.deleteForThread(ThreadId.make("thread:bound"));
+            yield* service.upsert(input("watch:unrelated", { watch: null }));
+            const before = state.sends.length;
+            yield* Deferred.succeed(release, undefined);
+            yield* Fiber.join(checking).pipe(Effect.ignore);
+            state.blockDispatch = undefined;
+            const [stale] = yield* sql<{
+              state: string;
+            }>`SELECT state FROM scheduled_task_watch_events WHERE event_id = ${claimed!.event_id}`;
+            assert.equal(stale!.state, "dispatching");
+            const unchanged = (yield* service.list()).tasks.find((item) => item.id === task.id);
+            if (unchanged !== undefined) assert.equal(unchanged.watch!.fireCount, 0);
+            yield* tick();
+            assert.equal(state.sends.length, before);
+            const [event] = yield* sql<{
+              state: string;
+            }>`SELECT state FROM scheduled_task_watch_events WHERE event_id = ${claimed!.event_id}`;
+            assert.equal(event!.state, "running");
+            const saved = (yield* service.list()).tasks.find((item) => item.id === task.id);
+            if (action === "pause" || action === "edit" || action === "source")
+              assert.equal(saved!.watch!.fireCount, 1);
+            else assert.isUndefined(saved);
+            yield* sql`UPDATE orchestration_v2_projection_runs SET status = 'completed'`;
+            yield* tick();
+          }
+        }
+      }),
+    );
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect("rejects authenticated remote HTTP before saving or consuming credentials", () =>
+  Effect.gen(function* () {
+    const { state, run } = yield* setup();
+    yield* run((service) =>
+      Effect.gen(function* () {
+        const ref = SecretRef.make("secret-ref:0123456789abcdef0123456789abcdef");
+        state.refs.set(ref, "private-token");
+        const original = input();
+        yield* service
+          .upsert({
+            ...original,
+            watch: {
+              ...original.watch!,
+              source: {
+                type: "http_json",
+                url: "http://example.com/items",
+                itemsPath: "",
+                keyPath: "id",
+                auth: { type: "bearer", secretRef: ref },
+              },
+            },
+          })
+          .pipe(Effect.flip);
+        assert.equal(state.refs.get(ref), "private-token");
+        assert.equal(state.secrets.size, 0);
+        assert.equal((yield* service.list()).tasks.length, 0);
+      }),
+    );
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect("does not duplicate an in-flight dispatch or accept its failure after pause", () =>
+  Effect.gen(function* () {
+    const { state, run, check, tick, sql } = yield* setup();
+    yield* run((service) =>
+      Effect.gen(function* () {
+        const { task } = yield* service.upsert(input());
+        yield* check(service, task.id);
+        state.items = [{ id: "one", status: "ready" }];
+        const requested = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        state.blockDispatch = { requested, release };
+        const checking = yield* check(service, task.id).pipe(Effect.forkChild);
+        yield* Deferred.await(requested);
+        state.failDispatch = true;
+        yield* service.setEnabled({ id: task.id, enabled: false });
+        const dispatching = yield* tick().pipe(Effect.forkChild);
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(checking);
+        yield* Fiber.join(dispatching);
+        const [event] = yield* sql<{
+          state: string;
+        }>`SELECT state FROM scheduled_task_watch_events`;
+        assert.equal(event!.state, "dispatching");
+        assert.equal(state.sends.length, 1);
+        assert.equal((yield* service.list()).tasks[0]!.lastRunStatus, "succeeded");
+        state.blockDispatch = undefined;
+        state.failDispatch = false;
+        yield* service.setEnabled({ id: task.id, enabled: true });
+        yield* tick();
+        assert.equal(state.sends.length, 2);
+        assert.deepEqual(state.sends[0], state.sends[1]);
+        assert.equal((yield* service.list()).tasks[0]!.watch!.fireCount, 1);
+      }),
+    );
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect("rotates a new secret reference with identical bytes and preserves its replay", () =>
+  Effect.gen(function* () {
+    const { state, run, check } = yield* setup();
+    const original = input("watch:same-ref-bytes");
+    const firstRef = SecretRef.make("secret-ref:0123456789abcdef0123456789abcdef");
+    const nextRef = SecretRef.make("secret-ref:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    const request = (commandId: string, secretRef: SecretRef) =>
+      decodeInput({
+        ...original,
+        commandId,
+        watch: {
+          ...original.watch!,
+          source: { ...original.watch!.source, auth: { type: "bearer", secretRef } },
+        },
+      });
+    const next = request("watch:next-ref", nextRef);
+    state.refs.set(firstRef, "same-token");
+    state.refs.set(nextRef, "same-token");
+    yield* run((service) =>
+      Effect.gen(function* () {
+        const { task } = yield* service.upsert(request("watch:first-ref", firstRef));
+        yield* check(service, task.id);
+        const firstName = [...state.secrets.keys()][0]!;
+        const rotated = (yield* service.upsert(next)).task;
+        assert.equal(state.secrets.size, 1);
+        assert.isFalse(state.secrets.has(firstName));
+        assert.isFalse(state.refs.has(nextRef));
+        assert.isNull(rotated.watch!.initializedAt);
+        yield* check(service, task.id);
+        state.failDispatch = true;
+        state.items = [{ id: "one", status: "ready" }];
+        yield* check(service, task.id);
+      }),
+    );
+    yield* run((service) =>
+      Effect.gen(function* () {
+        const before = (yield* service.list()).tasks[0]!.watch!;
+        const secretNames = [...state.secrets.keys()];
+        assert.isNotNull(before.initializedAt);
+        assert.equal(before.pendingCount, 1);
+        const replayed = (yield* service.upsert(next)).task.watch!;
+        assert.deepEqual(replayed, before);
+        assert.deepEqual([...state.secrets.keys()], secretNames);
       }),
     );
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),

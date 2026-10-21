@@ -1,4 +1,8 @@
-import { ScheduledTaskError, type ScheduledTaskWatchSource } from "@t3tools/contracts";
+import {
+  ScheduledTaskError,
+  type ScheduledTaskWatchInput,
+  type ScheduledTaskWatchSource,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 import * as Schema from "effect/Schema";
@@ -29,7 +33,10 @@ export function watchValue(item: unknown, path: string): unknown {
   return value;
 }
 
-export function watchSourceUrl(source: ScheduledTaskWatchSource): URL {
+export function watchSourceUrl(
+  source: ScheduledTaskWatchSource | ScheduledTaskWatchInput["source"],
+  hasAuthorization = false,
+): URL {
   const url = new URL(source.type === "jira" ? source.baseUrl : source.url);
   if (
     !["http:", "https:"].includes(url.protocol) ||
@@ -51,13 +58,22 @@ export function watchSourceUrl(source: ScheduledTaskWatchSource): URL {
       ))
   )
     throw sourceError();
+  if (
+    (source.auth !== undefined || hasAuthorization) &&
+    url.protocol !== "https:" &&
+    !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
+  )
+    throw sourceError();
   return url;
 }
 
 export const readWatchSource = Effect.fn("ScheduledTaskService.readWatchSource")(
   function* (source: ScheduledTaskWatchSource, authorization: string | undefined) {
     const client = HttpClient.withScope(yield* HttpClient.HttpClient);
-    const base = yield* Effect.try({ try: () => watchSourceUrl(source), catch: sourceError });
+    const base = yield* Effect.try({
+      try: () => watchSourceUrl(source, authorization !== undefined),
+      catch: sourceError,
+    });
     const items: { key: string; value: unknown }[] = [];
     const keys = new Set<string>();
     const tokens = new Set<string>();

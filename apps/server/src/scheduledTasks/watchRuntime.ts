@@ -94,6 +94,7 @@ export const make = Effect.fn("ScheduledTaskService.makeWatchRuntime")(function*
   const launch = yield* ThreadLaunchService.ThreadLaunchService;
   const management = yield* ThreadManagementService.ThreadManagementService;
   const lock = yield* Semaphore.make(1);
+  const dispatchLock = yield* Semaphore.make(1);
   const checks = yield* Ref.make<ReadonlySet<string>>(new Set());
   const newId = crypto.randomUUIDv4().pipe(Effect.mapError(failure));
   const getRow = (id: ScheduledTaskId) =>
@@ -125,11 +126,12 @@ export const make = Effect.fn("ScheduledTaskService.makeWatchRuntime")(function*
     if (input.schedule.type !== "interval")
       return yield* new ScheduledTaskError({ message: "Watchers need an interval schedule." });
     const url = yield* Effect.try({
-      try: () => watchSourceUrl({ ...watch.source, auth: undefined }),
+      try: () => watchSourceUrl(watch.source),
       catch: failure,
     });
     const previous = existing?.watch;
-    const previousUrl = previous === undefined ? null : watchSourceUrl(previous.source);
+    const previousUrl =
+      previous === undefined ? null : watchSourceUrl({ ...previous.source, auth: undefined });
     const auth = watch.source.auth;
     const secretRef = auth !== undefined && "secretRef" in auth ? auth.secretRef : undefined;
     if (input.watchSecret !== undefined && secretRef !== undefined)
@@ -144,17 +146,35 @@ export const make = Effect.fn("ScheduledTaskService.makeWatchRuntime")(function*
         (previous?.source.auth?.type === "basic" &&
           previous.source.auth.username === auth.username));
     let secretName = sameIdentity ? (row?.watch_secret_name ?? null) : null;
+    const referenceSecretName =
+      secretRef !== undefined && input.commandId !== undefined
+        ? `scheduled-watch-ref-${Buffer.from(
+            yield* crypto
+              .digest(
+                "SHA-256",
+                new TextEncoder().encode(yield* encodeData(input).pipe(Effect.mapError(failure))),
+              )
+              .pipe(Effect.mapError(failure)),
+          ).toString("hex")}`
+        : null;
     let value = input.watchSecret;
     if (secretRef !== undefined) {
-      value = yield* requests
-        .consume({ ref: secretRef, projectId: input.projectId })
-        .pipe(
-          Effect.catch(() =>
-            input.commandId !== undefined && secretName !== null
-              ? Effect.succeed(undefined)
+      value = yield* requests.consume({ ref: secretRef, projectId: input.projectId }).pipe(
+        Effect.catchTags({
+          SecretRequestError: (error) =>
+            error.reason === "ref_unavailable" &&
+            referenceSecretName !== null &&
+            secretName === referenceSecretName
+              ? secrets
+                  .get(referenceSecretName)
+                  .pipe(
+                    Effect.filterOrFail(Option.isSome, failure),
+                    Effect.as(undefined),
+                    Effect.mapError(failure),
+                  )
               : Effect.fail(failure()),
-          ),
-        );
+        }),
+      );
     }
     if (value !== undefined) {
       const bytes = new TextEncoder().encode(value);
@@ -162,8 +182,12 @@ export const make = Effect.fn("ScheduledTaskService.makeWatchRuntime")(function*
         input.watchSecret !== undefined && secretName !== null
           ? yield* secrets.get(secretName).pipe(Effect.mapError(failure))
           : Option.none();
-      if (Option.isNone(stored) || !Buffer.from(stored.value).equals(bytes)) {
-        secretName = `scheduled-watch-${yield* newId}`;
+      if (
+        referenceSecretName !== null ||
+        Option.isNone(stored) ||
+        !Buffer.from(stored.value).equals(bytes)
+      ) {
+        secretName = referenceSecretName ?? `scheduled-watch-${yield* newId}`;
         yield* secrets.set(secretName, bytes).pipe(Effect.mapError(failure));
       }
     }
@@ -252,6 +276,15 @@ export const make = Effect.fn("ScheduledTaskService.makeWatchRuntime")(function*
       ) RETURNING task_id`;
     for (const entry of recovered)
       yield* sql`UPDATE scheduled_tasks SET watch_last_fired_at = ${yield* nowIso}, watch_fire_count = watch_fire_count + 1 WHERE task_id = ${entry.task_id}`;
+    const orphaned = yield* sql`DELETE FROM scheduled_task_watch_events
+      WHERE state = 'running' AND thread_id IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM orchestration_v2_projection_messages
+        WHERE message_id = 'scheduled-watch-message:' || scheduled_task_watch_events.event_id
+      ) AND NOT EXISTS (
+        SELECT 1 FROM orchestration_v2_projection_runs
+        WHERE run_id = scheduled_task_watch_events.run_id
+          AND status NOT IN ('completed', 'failed', 'interrupted', 'cancelled', 'rolled_back')
+      ) RETURNING event_id`;
     const completed =
       yield* sql`DELETE FROM scheduled_task_watch_events WHERE state <> 'pending' AND EXISTS (
       SELECT 1 FROM orchestration_v2_projection_messages m
@@ -259,12 +292,12 @@ export const make = Effect.fn("ScheduledTaskService.makeWatchRuntime")(function*
       WHERE m.message_id = 'scheduled-watch-message:' || scheduled_task_watch_events.event_id
         AND r.status IN ('completed', 'failed', 'interrupted', 'cancelled', 'rolled_back')
     ) RETURNING event_id`;
-    return discarded.length + recovered.length + completed.length > 0;
+    return discarded.length + recovered.length + orphaned.length + completed.length > 0;
   });
 
   const dispatch = Effect.fn("ScheduledTaskService.dispatchWatchEvents")(
     function* () {
-      let changed = yield* sql.withTransaction(reconcile());
+      let changed = yield* sql.withTransaction(reconcile()).pipe(lock.withPermits(1));
       const events = yield* sql<{
         event_id: string;
         task_id: ScheduledTaskId;
@@ -279,26 +312,33 @@ export const make = Effect.fn("ScheduledTaskService.makeWatchRuntime")(function*
         AND t.watch_json IS NOT NULL AND t.watch_revision = e.revision
       WHERE e.state IN ('pending', 'dispatching') AND (e.state = 'dispatching' OR
         (SELECT COUNT(*) FROM scheduled_task_watch_events active WHERE active.task_id = e.task_id AND active.state <> 'pending') < json_extract(t.watch_json, '$.maxConcurrentRuns'))
-      ORDER BY e.dispatch_order, e.created_at, e.rowid LIMIT 4`;
+      ORDER BY e.dispatch_order, e.created_at, e.rowid LIMIT 4`.pipe(lock.withPermits(1));
       for (const event of events) {
-        const task = yield* callbacks.loadTask(event.task_id);
-        if (task?.watch === undefined || !task.enabled) continue;
-        const row = yield* getRow(task.id);
-        if (row?.watch_revision !== event.revision) continue;
-        const [counts] = yield* sql<{ global_count: number; task_count: number }>`SELECT
-        COUNT(*) AS global_count, COUNT(CASE WHEN task_id = ${task.id} THEN 1 END) AS task_count
-        FROM scheduled_task_watch_events WHERE state <> 'pending'`;
-        if (
-          event.state === "pending" &&
-          ((counts?.global_count ?? 0) >= 4 ||
-            (counts?.task_count ?? 0) >= task.watch.maxConcurrentRuns)
-        )
-          continue;
-        yield* sql`UPDATE scheduled_task_watch_events SET state = 'dispatching' WHERE event_id = ${event.event_id}`;
-        changed = true;
         const commandId = CommandId.make(
           event.dispatch_command_id ?? `scheduled-watch:${event.event_id}`,
         );
+        const task = yield* Effect.gen(function* () {
+          const current = yield* callbacks.loadTask(event.task_id);
+          if (current?.watch === undefined || !current.enabled) return null;
+          const row = yield* getRow(current.id);
+          if (row?.watch_revision !== event.revision) return null;
+          const [counts] = yield* sql<{ global_count: number; task_count: number }>`SELECT
+          COUNT(*) AS global_count, COUNT(CASE WHEN task_id = ${current.id} THEN 1 END) AS task_count
+          FROM scheduled_task_watch_events WHERE state <> 'pending'`;
+          if (
+            event.state === "pending" &&
+            ((counts?.global_count ?? 0) >= 4 ||
+              (counts?.task_count ?? 0) >= current.watch.maxConcurrentRuns)
+          )
+            return null;
+          const claimed = yield* sql`UPDATE scheduled_task_watch_events
+            SET state = 'dispatching', dispatch_command_id = ${commandId}
+            WHERE event_id = ${event.event_id} AND revision = ${event.revision}
+              AND state = ${event.state} RETURNING event_id`;
+          return claimed.length === 0 ? null : current;
+        }).pipe(sql.withTransaction, lock.withPermits(1));
+        if (task === null) continue;
+        changed = true;
         const messageId = MessageId.make(`scheduled-watch-message:${event.event_id}`);
         const sent = yield* Effect.exit(
           task.threadId === null
@@ -345,59 +385,59 @@ export const make = Effect.fn("ScheduledTaskService.makeWatchRuntime")(function*
                   Effect.mapError(failure),
                 ),
         );
-        if (Exit.isSuccess(sent)) {
-          const now = yield* nowIso;
-          yield* sql.withTransaction(
-            Effect.gen(function* () {
-              yield* sql`UPDATE scheduled_task_watch_events SET state = 'running', thread_id = ${sent.value},
-            run_id = (SELECT run_id FROM orchestration_v2_projection_messages WHERE message_id = ${messageId})
-            WHERE event_id = ${event.event_id}`;
-              yield* sql`UPDATE scheduled_tasks SET watch_last_fired_at = ${now}, watch_fire_count = watch_fire_count + 1 WHERE task_id = ${task.id}`;
-            }),
-          );
-        } else {
-          if (Cause.hasInterruptsOnly(sent.cause)) return yield* Effect.failCause(sent.cause);
-          yield* sql.withTransaction(
-            Effect.gen(function* () {
-              const receipts = yield* sql<{
-                command_id: string;
-                command_type: string;
-                status: string;
-                aggregate_id: string;
-              }>`
-              SELECT command_id, command_type, status, aggregate_id FROM orchestration_command_receipts
-              WHERE command_id IN (${commandId}, ${`${commandId}:initial-message`})`;
-              const accepted = receipts.some(
-                (receipt) =>
-                  receipt.command_type === "message.dispatch" && receipt.status === "accepted",
-              );
-              const message =
-                yield* sql`SELECT 1 FROM orchestration_v2_projection_messages WHERE message_id = ${messageId}`;
-              if (message.length > 0) return;
-              const rejected =
-                !accepted && receipts.some((receipt) => receipt.status === "rejected");
-              const nextCommandId = rejected
-                ? `scheduled-watch:${event.event_id}:retry:${yield* newId}`
-                : commandId;
-              const claimed = receipts.find(
-                (receipt) =>
-                  receipt.command_id === commandId &&
-                  receipt.status === "accepted" &&
-                  (receipt.command_type === "thread.create" ||
-                    receipt.command_type === "thread.metadata.update"),
-              );
-              yield* sql`UPDATE scheduled_task_watch_events SET state = ${accepted ? "dispatching" : "pending"},
+        if (Exit.isFailure(sent) && Cause.hasInterruptsOnly(sent.cause))
+          return yield* Effect.failCause(sent.cause);
+        yield* Effect.gen(function* () {
+          const current = yield* sql`SELECT 1 FROM scheduled_task_watch_events e
+            JOIN scheduled_tasks t ON t.task_id = e.task_id
+            WHERE e.event_id = ${event.event_id} AND e.state = 'dispatching'
+              AND e.dispatch_command_id = ${commandId} AND e.revision = ${event.revision}
+              AND t.watch_revision = ${event.revision} AND t.watch_json IS NOT NULL AND t.enabled = 1`;
+          if (current.length === 0) return;
+          if (Exit.isSuccess(sent)) {
+            const now = yield* nowIso;
+            yield* sql`UPDATE scheduled_task_watch_events SET state = 'running', thread_id = ${sent.value},
+              run_id = (SELECT run_id FROM orchestration_v2_projection_messages WHERE message_id = ${messageId})
+              WHERE event_id = ${event.event_id}`;
+            yield* sql`UPDATE scheduled_tasks SET watch_last_fired_at = ${now}, watch_fire_count = watch_fire_count + 1 WHERE task_id = ${task.id}`;
+          } else {
+            const receipts = yield* sql<{
+              command_id: string;
+              command_type: string;
+              status: string;
+              aggregate_id: string;
+            }>`
+            SELECT command_id, command_type, status, aggregate_id FROM orchestration_command_receipts
+            WHERE command_id IN (${commandId}, ${`${commandId}:initial-message`})`;
+            const accepted = receipts.some(
+              (receipt) =>
+                receipt.command_type === "message.dispatch" && receipt.status === "accepted",
+            );
+            const message =
+              yield* sql`SELECT 1 FROM orchestration_v2_projection_messages WHERE message_id = ${messageId}`;
+            if (message.length > 0) return;
+            const rejected = !accepted && receipts.some((receipt) => receipt.status === "rejected");
+            const nextCommandId = rejected
+              ? `scheduled-watch:${event.event_id}:retry:${yield* newId}`
+              : commandId;
+            const claimed = receipts.find(
+              (receipt) =>
+                receipt.command_id === commandId &&
+                receipt.status === "accepted" &&
+                (receipt.command_type === "thread.create" ||
+                  receipt.command_type === "thread.metadata.update"),
+            );
+            yield* sql`UPDATE scheduled_task_watch_events SET state = ${accepted ? "dispatching" : "pending"},
               dispatch_command_id = ${nextCommandId}, thread_id = ${claimed?.aggregate_id ?? event.thread_id},
               dispatch_order = (SELECT COALESCE(MAX(dispatch_order), 0) + 1 FROM scheduled_task_watch_events)
               WHERE event_id = ${event.event_id}`;
-            }),
-          );
-          yield* sql`UPDATE scheduled_tasks SET last_run_error = 'A watcher run could not be started. It will be retried.', last_run_status = 'failed' WHERE task_id = ${task.id}`;
-        }
+            yield* sql`UPDATE scheduled_tasks SET last_run_error = 'A watcher run could not be started. It will be retried.', last_run_status = 'failed' WHERE task_id = ${task.id}`;
+          }
+        }).pipe(sql.withTransaction, lock.withPermits(1));
       }
       if (changed) yield* callbacks.notifyChanged;
     },
-    (effect) => effect.pipe(lock.withPermits(1), Effect.mapError(failure)),
+    (effect) => effect.pipe(dispatchLock.withPermits(1), Effect.mapError(failure)),
   );
 
   const check = Effect.fn("ScheduledTaskService.checkWatch")(

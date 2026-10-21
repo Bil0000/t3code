@@ -173,3 +173,40 @@ it("rejects credentials in source URLs and non-Cloud Jira URLs", () => {
   }
   assert.throws(() => watchSourceUrl({ ...jira, baseUrl: "https://jira.example.com" }));
 });
+
+it.effect("rejects remote HTTP auth before polling and permits local auth and plain HTTP", () =>
+  Effect.gen(function* () {
+    const requests: HttpClientRequest.HttpClientRequest[] = [];
+    const client = HttpClient.make((request) => {
+      requests.push(request);
+      return response(request, { data: { items: [] } });
+    });
+    for (const auth of [
+      { type: "bearer" as const, hasSecret: true },
+      { type: "basic" as const, username: "alice", hasSecret: true },
+    ]) {
+      const source = { ...http, url: "http://example.com/items", auth };
+      assert.throws(() => watchSourceUrl(source));
+      yield* readWatchSource(source, "private-token").pipe(
+        Effect.provideService(HttpClient.HttpClient, client),
+        Effect.flip,
+      );
+    }
+    yield* readWatchSource(
+      { ...http, url: "http://example.com/items" },
+      "Bearer private-token",
+    ).pipe(Effect.provideService(HttpClient.HttpClient, client), Effect.flip);
+    assert.equal(requests.length, 0);
+    for (const host of ["localhost", "127.0.0.1", "[::1]"]) {
+      yield* readWatchSource(
+        { ...http, url: `http://${host}/items`, auth: { type: "bearer", hasSecret: true } },
+        "Bearer local-token",
+      ).pipe(Effect.provideService(HttpClient.HttpClient, client));
+      assert.equal(requests.at(-1)!.headers.authorization, "Bearer local-token");
+    }
+    yield* readWatchSource({ ...http, url: "http://example.com/items" }, undefined).pipe(
+      Effect.provideService(HttpClient.HttpClient, client),
+    );
+    assert.equal(requests.length, 4);
+  }),
+);
