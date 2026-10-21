@@ -716,9 +716,9 @@ function ScheduledTaskRow({
       action === "delete" &&
       isWatchTask(task) &&
       !(
-        (await requestConfirmDialog(`Stop watching?\n${task.title} is deleted.`, {
+        (await requestConfirmDialog(`Stop watching?\n${task.title} will be deleted.`, {
           variant: "destructive",
-        })) ?? window.confirm(`Stop watching? ${task.title} is deleted.`)
+        })) ?? window.confirm(`Stop watching? ${task.title} will be deleted.`)
       )
     )
       return;

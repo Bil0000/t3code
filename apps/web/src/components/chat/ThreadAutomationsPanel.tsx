@@ -161,9 +161,9 @@ export function ThreadAutomationsPanel(props: {
     )
       return;
     const confirmed =
-      (await requestConfirmDialog(`Stop watching?\n${task.title} is deleted.`, {
+      (await requestConfirmDialog(`Stop watching?\n${task.title} will be deleted.`, {
         variant: "destructive",
-      })) ?? window.confirm(`Stop watching? ${task.title} is deleted.`);
+      })) ?? window.confirm(`Stop watching? ${task.title} will be deleted.`);
     if (!confirmed || !readEnvironmentScope(props.environmentId, AuthOrchestrationOperateScope))
       return;
     setBusyTaskId(task.id);
