@@ -28,7 +28,6 @@ import { NativeHeader, NativeScreen } from "../../native/ThemedScreenStack";
 import { SubagentRow } from "./SubagentRow";
 import { SubagentStopButton } from "./SubagentStopButton";
 import { ThreadWorkflowGroup } from "./ThreadWorkflowGroup";
-import { resolveSubagentStopTarget } from "./threadAgentsPresentation";
 import { ScreenContent } from "../../components/ui/ScreenContent";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 
@@ -175,7 +174,6 @@ function AgentRow(props: {
         environmentId={props.environmentId}
         subagent={subagent}
         elapsed={<AgentElapsed subagent={subagent} tickSeconds={props.tickSeconds} />}
-        reserveMetadataAction={resolveSubagentStopTarget(subagent) !== null}
       />
     </View>
   );
@@ -184,6 +182,7 @@ function AgentRow(props: {
     childThreadId === null ? (
       <View
         accessible
+        className="min-w-0 flex-1"
         accessibilityHint="Provider-managed agent. Its work appears in the transcript."
       >
         {row}
@@ -193,20 +192,16 @@ function AgentRow(props: {
         accessibilityRole="link"
         accessibilityHint="Opens this agent thread"
         onPress={() => props.onOpen(childThreadId)}
-        className="active:opacity-70"
+        className="min-w-0 flex-1 active:opacity-70"
       >
         {row}
       </Pressable>
     );
 
   return (
-    <View className="-mr-2.5 pr-2.5">
+    <View className="flex-row items-center">
       {content}
-      <SubagentStopButton
-        environmentId={props.environmentId}
-        subagent={subagent}
-        className="absolute right-0 top-6"
-      />
+      <SubagentStopButton environmentId={props.environmentId} subagent={subagent} />
     </View>
   );
 }

@@ -11,11 +11,15 @@ import {
   type ServerProvider,
 } from "@t3tools/contracts";
 import { deriveSubagentElapsedMs, formatDuration } from "@t3tools/shared/orchestrationTiming";
-import { Fragment, useState } from "react";
-import { Pressable, ScrollView, View } from "react-native";
+import { useState, type ReactNode } from "react";
+import { ScrollView, View } from "react-native";
 
 import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
+import { Chip } from "../../components/ui/Chip";
+import { ListRowLayout } from "../../components/ui/ListRowLayout";
+import { ListSection } from "../../components/ui/ListSection";
+import { RowPressable } from "../../components/ui/RowPressable";
 import { cn } from "../../lib/cn";
 import { useEnvironmentServerConfig, useThreadShell } from "../../state/entities";
 import { SUBAGENT_TONE_TEXT_CLASS, SubagentStatusDot } from "./SubagentStatusDot";
@@ -31,12 +35,12 @@ import {
 import { useVisibleSecondClock } from "./use-visible-second-clock";
 
 const RAIL_ICON = {
-  working: { name: "circle.inset.filled", tint: "accent-adaptive-sky-600-400" },
-  completed: { name: "checkmark.circle.fill", tint: "accent-adaptive-emerald-600-400" },
-  failed: { name: "xmark.circle.fill", tint: "accent-adaptive-rose-600-400" },
-  stopped: { name: "circle", tint: "accent-icon-subtle" },
-  queued: { name: "circle.dashed", tint: "accent-icon-subtle" },
-} as const satisfies Record<WorkflowRailTone, { name: AppSymbolName; tint: string }>;
+  working: "circle.inset.filled",
+  completed: "checkmark.circle.fill",
+  failed: "xmark.circle.fill",
+  stopped: "circle",
+  queued: "circle.dashed",
+} as const satisfies Record<WorkflowRailTone, AppSymbolName>;
 
 export function ThreadWorkflowGroup(props: {
   readonly environmentId: EnvironmentId;
@@ -52,114 +56,85 @@ export function ThreadWorkflowGroup(props: {
   const rail = workflowRail(group);
   const open = rail.find((item) => item.key === selected);
   const label = group.workflow.workflowName ?? group.workflow.title;
-  const tone = resolveSubagentRowPresentation(props.subagent).tone;
+  const statusLabel = resolveSubagentRowPresentation(props.subagent).statusLabel;
 
   return (
-    <View className="my-2 rounded-[20px] border border-border border-continuous bg-card px-3 pb-1">
-      <View className="flex-row items-center gap-1">
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`${label} workflow`}
-          accessibilityHint={open ? "Collapses the workflow" : "Opens the current phase"}
-          accessibilityState={{ expanded: open !== undefined }}
-          disabled={rail.length === 0}
-          onPress={() => setSelected(nextWorkflowSelection(rail, selected))}
-          className="min-h-11 min-w-0 flex-1 flex-row items-center gap-2.5 active:opacity-70"
-        >
-          <View>
-            <SymbolView
-              name="point.3.connected.trianglepath.dotted"
-              size={18}
-              tintColorClassName="accent-icon-muted"
-            />
-            <View className="absolute -right-0.5 -top-0.5">
-              <SubagentStatusDot tone={tone} />
-            </View>
-          </View>
-          <Text
-            numberOfLines={1}
-            className="min-w-0 shrink font-t3-medium text-base text-foreground"
+    <View className="my-2">
+      <ListSection>
+        <View className="flex-row items-center">
+          <RowPressable
+            accessibilityRole="button"
+            accessibilityLabel={`${label} workflow, ${statusLabel}`}
+            accessibilityHint={open ? "Collapses the workflow" : "Opens the current phase"}
+            accessibilityState={{ expanded: open !== undefined }}
+            disabled={rail.length === 0}
+            onPress={() => setSelected(nextWorkflowSelection(rail, selected))}
+            className="min-w-0 flex-1 active:opacity-70"
           >
-            {label}
-          </Text>
-          {rail.length > 0 ? (
-            <SymbolView
-              name={open ? "chevron.up" : "chevron.down"}
-              size={12}
-              tintColorClassName="accent-icon-subtle"
+            <WorkflowHeaderLayout
+              label={label}
+              statusLabel={statusLabel}
+              timing={group.workflow}
+              accessory={
+                rail.length > 0 ? (
+                  <SymbolView
+                    name={open ? "chevron.up" : "chevron.down"}
+                    size={12}
+                    tintColorClassName="accent-icon-subtle"
+                  />
+                ) : null
+              }
             />
-          ) : null}
-        </Pressable>
-        <WorkflowElapsed timing={group.workflow} />
-        <SubagentStopButton environmentId={props.environmentId} subagent={props.subagent} />
-      </View>
-      {rail.length > 0 ? (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          className="-mx-3"
-          contentContainerClassName="items-center px-3"
-        >
-          {rail.map((item, position) => {
-            const icon = RAIL_ICON[item.tone];
-            const isOpen = item.key === selected;
-            const count =
-              item.tone === "working" || item.tone === "failed"
-                ? `${item.completedCount}/${item.members.length}`
-                : null;
-            return (
-              <Fragment key={item.key}>
-                {position > 0 ? <View className="mx-0.5 h-px w-2 bg-border" /> : null}
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={`${item.title} phase, ${item.tone}${count ? `, ${count} completed` : ""}`}
-                  accessibilityState={{ expanded: isOpen }}
-                  onPress={() => setSelected(nextWorkflowSelection(rail, selected, item.key))}
-                  className="min-h-11 justify-center active:opacity-70"
-                >
-                  <View
-                    className={cn(
-                      "flex-row items-center gap-1.5 rounded-lg px-2 py-1",
-                      isOpen && "bg-foreground/10",
-                    )}
-                  >
-                    <SymbolView name={icon.name} size={13} tintColorClassName={icon.tint} />
-                    <Text
-                      numberOfLines={1}
-                      className={cn(
-                        "max-w-40 text-sm",
-                        item.tone === "failed"
-                          ? SUBAGENT_TONE_TEXT_CLASS.failed
-                          : item.tone === "working" || isOpen
-                            ? "text-foreground"
-                            : "text-foreground-muted",
-                      )}
-                    >
-                      {item.title}
-                    </Text>
-                    {count ? (
-                      <Text className="text-xs tabular-nums text-foreground-muted">{count}</Text>
-                    ) : null}
-                  </View>
-                </Pressable>
-              </Fragment>
-            );
-          })}
-        </ScrollView>
-      ) : null}
-      {open === undefined ? null : open.members.length === 0 ? (
-        <Text className="pb-2 pl-1 text-xs text-foreground-muted">No agents yet</Text>
-      ) : (
-        open.members.map((member) => (
-          <WorkflowMemberRow
-            key={member.id}
+          </RowPressable>
+          <SubagentStopButton
             environmentId={props.environmentId}
-            member={member}
-            provider={provider}
-            onOpen={props.onOpen}
+            subagent={props.subagent}
+            className="mr-2"
           />
-        ))
-      )}
+        </View>
+        {rail.length > 0 ? (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerClassName="gap-2 px-4 pb-3"
+          >
+            {rail.map((item) => {
+              const count =
+                item.tone === "working" || item.tone === "failed"
+                  ? `${item.completedCount}/${item.members.length}`
+                  : null;
+              return (
+                <Chip
+                  key={item.key}
+                  icon={RAIL_ICON[item.tone]}
+                  label={count ? `${count} ${item.title}` : item.title}
+                  selected={item.key === selected}
+                  accessibilityLabel={`${item.title} phase, ${item.tone}${count ? `, ${count} completed` : ""}`}
+                  onPress={() => setSelected(nextWorkflowSelection(rail, selected, item.key))}
+                />
+              );
+            })}
+          </ScrollView>
+        ) : null}
+        {open === undefined ? null : open.members.length === 0 ? (
+          <Text
+            textRole="footnote"
+            className="border-t border-border-subtle px-4 py-3 text-foreground-muted"
+          >
+            No agents yet
+          </Text>
+        ) : (
+          open.members.map((member) => (
+            <WorkflowMemberRow
+              key={member.id}
+              environmentId={props.environmentId}
+              member={member}
+              provider={provider}
+              onOpen={props.onOpen}
+            />
+          ))
+        )}
+      </ListSection>
     </View>
   );
 }
@@ -187,7 +162,7 @@ function WorkflowMemberRow(props: {
   const metadata = workflowMemberMetadata(member, props.provider);
   const labels = [metadata.model, metadata.effort].filter((value) => value !== null);
   return (
-    <Pressable
+    <RowPressable
       accessibilityRole={canOpen ? "link" : undefined}
       accessibilityLabel={[
         presentation.title,
@@ -199,16 +174,36 @@ function WorkflowMemberRow(props: {
       accessibilityHint={canOpen ? "Opens this agent's thread" : "Its thread is not available yet"}
       disabled={!canOpen}
       onPress={() => threadId !== null && props.onOpen(threadId)}
-      className="min-h-11 flex-row gap-2.5 py-2 pl-1 active:opacity-70"
+      className="min-h-11 flex-row gap-3 border-t border-border-subtle px-4 py-3 active:opacity-70"
     >
       <View className="h-5 justify-center">
-        <SubagentStatusDot tone={presentation.tone} />
+        <SubagentStatusDot tone={presentation.tone} placement="sheet" />
       </View>
-      <View className="min-w-0 flex-1 gap-0.5">
+      <View className="min-w-0 flex-1 gap-1">
         <View className="min-h-5 flex-row items-center gap-2">
-          <Text numberOfLines={1} className="min-w-0 flex-1 text-sm text-foreground">
-            {presentation.title}
-          </Text>
+          <View className="min-w-0 flex-1 flex-row items-baseline gap-1.5">
+            <Text
+              textRole="footnote"
+              numberOfLines={1}
+              className="min-w-0 shrink font-t3-medium text-foreground"
+            >
+              {presentation.title}
+            </Text>
+            <Text
+              accessibilityElementsHidden
+              importantForAccessibility="no"
+              textRole="label"
+              className="shrink-0 text-foreground-muted"
+            >
+              ·
+            </Text>
+            <Text
+              textRole="label"
+              className={cn("shrink-0 font-t3-medium", SUBAGENT_TONE_TEXT_CLASS[presentation.tone])}
+            >
+              {presentation.statusLabel}
+            </Text>
+          </View>
           <WorkflowElapsed timing={member} />
           {canOpen ? (
             <SymbolView name="chevron.right" size={12} tintColorClassName="accent-icon-subtle" />
@@ -216,7 +211,11 @@ function WorkflowMemberRow(props: {
         </View>
         {labels.length > 0 || metadata.speed !== null ? (
           <View className="min-w-0 flex-row items-center">
-            <Text numberOfLines={1} className="min-w-0 shrink text-xs text-foreground-muted">
+            <Text
+              textRole="label"
+              numberOfLines={1}
+              className="min-w-0 shrink text-foreground-muted"
+            >
               {labels.join(" · ")}
               {labels.length > 0 && metadata.speed !== null ? " · " : ""}
             </Text>
@@ -227,38 +226,63 @@ function WorkflowMemberRow(props: {
                   size={11}
                   tintColorClassName="accent-adaptive-amber-700-300"
                 />
-                <Text className="text-xs text-adaptive-amber-700-300">{metadata.speed}</Text>
+                <Text textRole="label" className="text-adaptive-amber-700-300">
+                  {metadata.speed}
+                </Text>
               </View>
             ) : metadata.speed !== null ? (
-              <Text className="shrink-0 text-xs text-foreground-muted">{metadata.speed}</Text>
+              <Text textRole="label" className="shrink-0 text-foreground-muted">
+                {metadata.speed}
+              </Text>
             ) : null}
           </View>
         ) : null}
         {detail ? (
-          <Text numberOfLines={1} className="text-xs text-foreground-muted">
+          <Text textRole="label" numberOfLines={1} className="text-foreground-muted">
             {detail}
           </Text>
         ) : null}
         {error ? (
-          <Text numberOfLines={1} className={cn("text-xs", SUBAGENT_TONE_TEXT_CLASS.failed)}>
+          <Text textRole="label" numberOfLines={1} className={SUBAGENT_TONE_TEXT_CLASS.failed}>
             {error}
           </Text>
         ) : null}
       </View>
-    </Pressable>
+    </RowPressable>
   );
 }
 
-function WorkflowElapsed({
-  timing,
-}: {
-  readonly timing: Parameters<typeof deriveSubagentElapsedMs>[0];
+function WorkflowHeaderLayout(props: {
+  readonly label: string;
+  readonly statusLabel: string;
+  readonly timing: ElapsedTiming;
+  readonly accessory: ReactNode;
 }) {
-  const nowMs = useVisibleSecondClock(isActiveSubagentStatus(timing.status));
-  const elapsedMs = deriveSubagentElapsedMs(timing, nowMs);
-  return elapsedMs === null || elapsedMs === 0 ? null : (
-    <Text className="shrink-0 text-xs tabular-nums text-foreground-muted">
-      {formatDuration(elapsedMs)}
+  const elapsed = useElapsedLabel(props.timing);
+  return (
+    <ListRowLayout
+      icon="point.3.connected.trianglepath.dotted"
+      label={props.label}
+      description={props.statusLabel}
+      detail={elapsed ?? undefined}
+      accessory={props.accessory}
+    />
+  );
+}
+
+function WorkflowElapsed(props: { readonly timing: ElapsedTiming }) {
+  const elapsed = useElapsedLabel(props.timing);
+  return elapsed === null ? null : (
+    <Text textRole="label" className="shrink-0 tabular-nums text-foreground-muted">
+      {elapsed}
     </Text>
   );
+}
+
+type ElapsedTiming = Parameters<typeof deriveSubagentElapsedMs>[0];
+
+function useElapsedLabel(timing: ElapsedTiming): string | null {
+  const nowMs = useVisibleSecondClock(isActiveSubagentStatus(timing.status));
+  const elapsedMs = deriveSubagentElapsedMs(timing, nowMs);
+  return elapsedMs === null || elapsedMs === 0 ? null : formatDuration(elapsedMs);
 }

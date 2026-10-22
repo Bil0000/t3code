@@ -1,11 +1,10 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId, OrchestrationV2Subagent } from "@t3tools/contracts";
 import { useState } from "react";
-import { Alert, Pressable, View } from "react-native";
+import { View } from "react-native";
 
-import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
-import { SymbolView } from "../../components/ui/AppSymbol";
-import { cn } from "../../lib/cn";
+import * as Dialog from "../../components/ui/Dialog";
+import { IconButton } from "../../components/ui/IconButton";
 import { orchestrationEnvironment } from "../../state/orchestration";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -32,55 +31,38 @@ export function SubagentStopButton(props: {
   const workflow = target.kind === "workflow";
   const label =
     props.subagent.workflow?.name ?? resolveSubagentRowPresentation(props.subagent).title;
-  const confirmStop = () =>
-    Alert.alert(
-      workflow ? "Stop workflow?" : "Stop agent?",
-      workflow ? `Every running agent in ${label} stops.` : `Stop ${label}?`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Stop",
-          style: "destructive",
-          onPress: async () => {
-            setStopping(true);
-            try {
-              const result =
-                target.kind === "workflow"
-                  ? await stopWorkflow({ environmentId: props.environmentId, input: target.input })
-                  : await interruptTurn({
-                      environmentId: props.environmentId,
-                      input: target.input,
-                    });
-              if (result._tag === "Failure") {
-                Alert.alert(workflow ? "Could not stop workflow" : "Could not stop agent");
-              }
-            } finally {
-              setStopping(false);
-            }
-          },
-        },
-      ],
-    );
+  const stop = async () => {
+    setStopping(true);
+    try {
+      const result =
+        target.kind === "workflow"
+          ? await stopWorkflow({ environmentId: props.environmentId, input: target.input })
+          : await interruptTurn({ environmentId: props.environmentId, input: target.input });
+      if (result._tag === "Failure") {
+        Dialog.alert(workflow ? "Could not stop workflow" : "Could not stop agent");
+      }
+    } finally {
+      setStopping(false);
+    }
+  };
 
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={`Stop ${workflow ? "workflow" : "agent"} ${label}`}
-      accessibilityState={{ disabled: stopping, busy: stopping }}
-      disabled={stopping}
-      onPress={confirmStop}
-      className={cn(
-        "size-11 items-center justify-center active:opacity-70 disabled:opacity-50",
-        props.className,
-      )}
-    >
-      <View className="size-6 items-center justify-center rounded-full bg-danger">
-        {stopping ? (
-          <AppActivityIndicator size="small" />
-        ) : (
-          <SymbolView name="stop.fill" size={9} tintColorClassName="accent-danger-foreground" />
-        )}
-      </View>
-    </Pressable>
+    <View className={props.className}>
+      <IconButton
+        icon="stop.fill"
+        variant="danger"
+        accessibilityLabel={`${stopping ? "Stopping" : "Stop"} ${workflow ? "workflow" : "agent"} ${label}`}
+        disabled={stopping}
+        onPress={() =>
+          Dialog.confirm({
+            title: workflow ? "Stop workflow?" : "Stop agent?",
+            message: workflow ? `Every running agent in ${label} stops.` : `Stop ${label}?`,
+            confirmText: "Stop",
+            destructive: true,
+            onConfirm: () => void stop(),
+          })
+        }
+      />
+    </View>
   );
 }
