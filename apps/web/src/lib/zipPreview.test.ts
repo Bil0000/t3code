@@ -6,6 +6,68 @@ import { loadZipPreview, readZipPreviewResponse } from "./zipPreview";
 
 const signal = () => new AbortController().signal;
 
+describe("ZIP archive actions", () => {
+  it("counts visible files and hidden metadata without decoding image data", async () => {
+    const zip = new JSZip()
+      .file("photos/a.png", new Uint8Array([1]), { createFolders: false })
+      .file("photos/b.jpg", new Uint8Array([2]), { createFolders: false })
+      .file("__MACOSX/._a.png", "metadata", { createFolders: false })
+      .file(".DS_Store", "metadata");
+    const preview = await loadZipPreview(await archive(zip), signal());
+    expect(preview.fileCount).toBe(2);
+    expect(preview.hiddenCount).toBe(2);
+    expect(preview.imagesOnly).toBe(true);
+  });
+
+  it("reads only the first MiB of a log that exceeds the preview limit", async () => {
+    const zip = new JSZip().file("server.log", "x".repeat(11 * 1024 * 1024));
+    const preview = await loadZipPreview(await archive(zip), signal());
+    const entry = preview.entries[0]!;
+    await expect(preview.readFile(entry, signal())).rejects.toThrow(/10 MiB/);
+    const prefix = await preview.readTextPrefix(entry, signal());
+    expect(prefix.truncated).toBe(true);
+    expect(prefix.text).toBe("x".repeat(1024 * 1024));
+  });
+
+  it("saves a file above the preview limit while still rejecting a bad CRC", async () => {
+    const zip = new JSZip().file("server.log", "x".repeat(11 * 1024 * 1024));
+    const blob = await archive(zip);
+    const preview = await loadZipPreview(blob, signal());
+    const saved = await preview.readFileForSave(preview.entries[0]!, signal());
+    expect(saved.size).toBe(11 * 1024 * 1024);
+    const corrupt = await loadZipPreview(
+      await patchCentral(blob, (view, offset) => view.setUint32(offset + 16, 1, true)),
+      signal(),
+    );
+    await expect(corrupt.readFileForSave(corrupt.entries[0]!, signal())).rejects.toThrow(/corrupt/);
+  });
+
+  it("saves image bytes without decoding an image that exceeds the pixel limit", async () => {
+    const bytes = png(12000, 9000);
+    const preview = await loadZipPreview(
+      await archive(new JSZip().file("large.png", bytes)),
+      signal(),
+    );
+    const entry = preview.entries[0]!;
+    await expect(preview.readFile(entry, signal())).rejects.toThrow(/16 million pixels/);
+    const saved = await preview.readFileForSave(entry, signal());
+    expect(new Uint8Array(await saved.arrayBuffer())).toEqual(bytes);
+  });
+
+  it("reports received ZIP bytes while reading the bounded response", async () => {
+    const progress: number[] = [];
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2]));
+        controller.enqueue(new Uint8Array([3]));
+        controller.close();
+      },
+    });
+    await readZipPreviewResponse(new Response(body), signal(), (bytes) => progress.push(bytes));
+    expect(progress).toEqual([2, 3]);
+  });
+});
+
 function png(width = 800, height = 600) {
   const bytes = new Uint8Array(24);
   bytes.set([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82]);

@@ -1,5 +1,6 @@
 import type { AssetResource, ProjectReadFileError, ScopedThreadRef } from "@t3tools/contracts";
 import { isHostPath, workspaceRelativeFilePath } from "@t3tools/shared/path";
+import { create } from "zustand";
 
 export function resolveFilePreviewPath(path: string | null, cwd: string): string | null {
   if (path === null) return null;
@@ -16,6 +17,8 @@ export function isZipPreviewFile(file: { readonly name: string; readonly mimeTyp
     file.name.toLowerCase().endsWith(".zip")
   );
 }
+
+export const useZipFileCounts = create<Record<string, number>>(() => ({}));
 
 export function filePreviewReadErrorMessage(error: ProjectReadFileError): string {
   switch (error.failure) {
