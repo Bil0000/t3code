@@ -4,18 +4,41 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { Atom } from "effect/reactivity";
 import { useEffect } from "react";
+import {
+  runAtomCommand,
+  squashAtomCommandFailure,
+  isAtomCommandInterrupted,
+} from "@t3tools/client-runtime/state/runtime";
 
 import { APP_VERSION } from "~/branding";
+import { randomUUID } from "~/lib/utils";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { useDesktopUpdateState } from "~/state/desktopUpdate";
 import { serverEnvironment } from "~/state/server";
 import { resolveVersionMismatch } from "~/versionSkew";
-import type { ServerUpdateOutcome, ServerUpdateTarget } from "../ServerUpdateAction";
+import {
+  collectServerUpdateTargets,
+  collectUpdateOptions,
+  type UpdateItemKey,
+} from "./updateEverything.logic";
+import { updateOptionsSnapshotAtom } from "./updateEverythingOptions";
+import {
+  isHostedMaintenanceReady,
+  waitForHostedMaintenance as waitForHostedMaintenanceInRegistry,
+} from "./updateEverythingMaintenance";
+import { createUpdatePlanItemResolver, retryExecutionPlan } from "./updateEverythingExecution";
+import { downloadUpdateForPlan, observeDesktopInstallFailure } from "./updateEverythingDesktop";
+import {
+  runUpdatePlan,
+  type UpdateExecutionPlan,
+  type UpdatePlanItem,
+  type UpdatePlanPorts,
+} from "./updateEverythingPlan";
+import { updatePlanStore } from "./updateEverythingPlanStore";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import {
   closeFinishedUpdateRun,
   getUpdateEverythingToastView,
-  isServerUpdateHandedOff,
   type UpdateEverythingResult,
   type UpdateEverythingRun,
   type UpdateRunMachine,
@@ -30,7 +53,7 @@ export function useUpdateEverythingRun(): UpdateEverythingRun | null {
   return useAtomValue(updateEverythingRunAtom);
 }
 
-export function setUpdateEverythingRun(
+function setUpdateEverythingRun(
   update: (run: UpdateEverythingRun | null) => UpdateEverythingRun | null,
 ): void {
   appAtomRegistry.update(updateEverythingRunAtom, update);
@@ -42,60 +65,16 @@ function updateRunMachines(update: (machine: UpdateRunMachine) => UpdateRunMachi
   );
 }
 
-export function settleUpdateRunMachine(
-  environmentId: EnvironmentId,
-  failure: string | null,
-  {
-    serverUpdated = false,
-    providerFailure,
-  }: { readonly serverUpdated?: boolean; readonly providerFailure?: string | null } = {},
-): void {
+function settleUpdateRunMachine(environmentId: EnvironmentId, failure: string | null): void {
   updateRunMachines((machine) =>
     machine.environmentId === environmentId
       ? {
           ...machine,
           result: failure === null ? "done" : "failed",
           failure,
-          ...(serverUpdated ? { server: null } : {}),
-          ...(providerFailure === undefined ? {} : { providerFailure }),
         }
       : machine,
   );
-}
-
-export function retryFailedUpdateRunServers(
-  update: (
-    target: ServerUpdateTarget,
-    options: { readonly quiet: boolean },
-  ) => Promise<ServerUpdateOutcome>,
-): void {
-  const failed = (appAtomRegistry.get(updateEverythingRunAtom)?.machines ?? []).flatMap(
-    (machine) =>
-      machine.result === "failed" && machine.server !== null
-        ? [{ target: machine.server, providerFailure: machine.providerFailure }]
-        : [],
-  );
-  const targets = failed.map(({ target }) => target);
-  const retried = new Set(targets.map((target) => target.environmentId));
-  const startedAt = Date.now();
-  updateRunMachines((machine) =>
-    retried.has(machine.environmentId)
-      ? { ...machine, result: null, failure: null, startedAt }
-      : machine,
-  );
-  for (const { target, providerFailure } of failed) {
-    void update(target, { quiet: true }).then((outcome) =>
-      settleUpdateRunMachine(
-        target.environmentId,
-        outcome.status === "updated"
-          ? providerFailure
-          : outcome.status === "failed"
-            ? outcome.message
-            : "Could not start the update",
-        { serverUpdated: outcome.status === "updated" },
-      ),
-    );
-  }
 }
 
 export function dismissSettledUpdateRunMachines(): void {
@@ -109,32 +88,9 @@ export function dismissSettledUpdateRunMachines(): void {
   );
 }
 
-export function waitForServerUpdateHandoff(
-  environmentId: EnvironmentId,
-  finished: Promise<unknown>,
-): Promise<void> {
-  return new Promise((resolve) => {
-    let done = false;
-    const finish = () => {
-      if (done) return;
-      done = true;
-      queueMicrotask(() => unsubscribe());
-      resolve();
-    };
-    const unsubscribe = appAtomRegistry.subscribe(
-      serverEnvironment.updateStateAtom(environmentId),
-      (state) => {
-        if (isServerUpdateHandedOff(state)) finish();
-      },
-      { immediate: true },
-    );
-    void finished.then(finish, finish);
-  });
-}
-
 let decideRestart: ((restart: boolean) => void) | null = null;
 
-export function waitForUpdateRestart(delayMs: number): Promise<boolean> {
+function waitForUpdateRestart(delayMs: number): Promise<boolean> {
   return new Promise((resolve) => {
     const decide = (restart: boolean) => {
       clearTimeout(timer);
@@ -151,6 +107,7 @@ export function waitForUpdateRestart(delayMs: number): Promise<boolean> {
 
 export function postponeUpdateRestart(): void {
   decideRestart?.(false);
+  if (displayedPlanId !== null) void pauseSavedUpdatePlan("later");
 }
 
 const SAVED_RESULT_KEY = "t3code:update-everything-result:v1";
@@ -233,7 +190,7 @@ function takeSavedUpdateEverythingResult(): typeof SavedResult.Type | null {
   }
 }
 
-export function showUpdateEverythingResult(result: UpdateEverythingResult): void {
+function showUpdateEverythingResult(result: UpdateEverythingResult): void {
   const view = getUpdateEverythingToastView(result, APP_VERSION);
   if (!view) return;
   toastManager.add(
@@ -262,7 +219,6 @@ function followHandedOffServers(servers: ReadonlyArray<HandedOffServer>): void {
       startedAt: server.startedAt,
       result: null,
       failure: null,
-      providerFailure: null,
     })),
   }));
   let remaining = servers.length;
@@ -309,6 +265,7 @@ function followHandedOffServers(servers: ReadonlyArray<HandedOffServer>): void {
 }
 
 let notifiedNotAppliedVersion: string | null = null;
+let ownedNotAppliedVersion: string | null = null;
 
 export function DesktopUpdateLaunchNotice() {
   const notAppliedVersion = useDesktopUpdateState()?.notAppliedVersion ?? null;
@@ -323,15 +280,430 @@ export function DesktopUpdateLaunchNotice() {
 
   useEffect(() => {
     if (notAppliedVersion === null || notifiedNotAppliedVersion === notAppliedVersion) return;
-    notifiedNotAppliedVersion = notAppliedVersion;
-    toastManager.add(
-      stackedThreadToast({
-        type: "error",
-        title: "Update did not apply",
-        description: `T3 Code is still on ${APP_VERSION}. Install ${notAppliedVersion} again from the update button.`,
-      }),
-    );
+    void updatePlanStore()
+      .then((store) => store.read())
+      .then((plan) => {
+        if (
+          plan?.items.some(
+            (item) => item.kind === "app" && item.targetVersion === notAppliedVersion,
+          )
+        )
+          return;
+        if (
+          ownedNotAppliedVersion === notAppliedVersion ||
+          notifiedNotAppliedVersion === notAppliedVersion
+        )
+          return;
+        notifiedNotAppliedVersion = notAppliedVersion;
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Update did not apply",
+            description: `T3 Code is still on ${APP_VERSION}. Install ${notAppliedVersion} again from the update button.`,
+          }),
+        );
+      })
+      .catch(() => {});
   }, [notAppliedVersion]);
 
+  return null;
+}
+
+const rendererClaimId = randomUUID();
+let desktopNotAppliedVersion: string | null = null;
+let coordinatorRunning = false;
+let coordinatorAgain = false;
+let recoveryPlanId: string | null = null;
+const executingItems = new Set<string>();
+let displayedPlanId: string | null = null;
+let storageStopped = false;
+
+function planReady(plan: UpdateExecutionPlan): boolean {
+  if (storageStopped) return false;
+  const snapshot = appAtomRegistry.get(updateOptionsSnapshotAtom);
+  if (!snapshot.ready || snapshot.primaryEnvironmentId !== plan.primaryEnvironmentId) return false;
+  if (plan.primaryEnvironmentId === null) return true;
+  return snapshot.machines.some(
+    (machine) =>
+      machine.environmentId === plan.primaryEnvironmentId &&
+      machine.connected &&
+      machine.sessionReady &&
+      machine.serverConfig?.environment.environmentId === plan.primaryEnvironmentId,
+  );
+}
+
+const planItemResolver = createUpdatePlanItemResolver(
+  () => appAtomRegistry.get(updateOptionsSnapshotAtom),
+  () => {
+    void wakeUpdatePlan();
+  },
+);
+const resolvePlanItem = planItemResolver.resolve;
+
+export function waitForHostedMaintenance(): Promise<void> {
+  return waitForHostedMaintenanceInRegistry(appAtomRegistry, updateOptionsSnapshotAtom);
+}
+
+const planPorts: UpdatePlanPorts = {
+  claimId: rendererClaimId,
+  appVersion: APP_VERSION,
+  now: Date.now,
+  ready: planReady,
+  notAppliedVersion: () => desktopNotAppliedVersion,
+  resolve: resolvePlanItem,
+  download: (item) =>
+    window.desktopBridge
+      ? downloadUpdateForPlan(window.desktopBridge, item.targetVersion)
+      : Promise.resolve(false),
+  waitForMaintenance: waitForHostedMaintenance,
+  maintenanceReady: () => isHostedMaintenanceReady(appAtomRegistry.get(updateOptionsSnapshotAtom)),
+  countdown: () => waitForUpdateRestart(5_000),
+  install: async (item) => {
+    if (!window.desktopBridge) return false;
+    try {
+      const result = await window.desktopBridge.installUpdate(item.targetVersion);
+      return (
+        result.accepted &&
+        !(result.state.status === "error" && result.state.errorContext === "install")
+      );
+    } catch {
+      return false;
+    }
+  },
+  execute: async (item) => {
+    executingItems.add(item.key);
+    try {
+      const latest = resolvePlanItem(item, false);
+      if (latest.status !== "ready") return latest;
+      if (item.kind === "server") {
+        const machine = appAtomRegistry
+          .get(updateOptionsSnapshotAtom)
+          .machines.find((machine) => machine.environmentId === item.environmentId)!;
+        const target = collectServerUpdateTargets(
+          [machine],
+          item.targetVersion,
+          item.retryRequested === true,
+        ).targets[0];
+        if (!target) return { status: "skipped", message: "T3 update is no longer available" };
+        const result = await runAtomCommand(
+          appAtomRegistry,
+          serverEnvironment.updateServer,
+          {
+            environmentId: item.environmentId,
+            input: {
+              targetVersion: item.targetVersion,
+              ...(item.continueThreads &&
+              target.threadContinuation &&
+              target.continueThreadsAfterServerUpdate
+                ? { continueRunningThreads: true }
+                : {}),
+            },
+          },
+          { reportFailure: false },
+        );
+        if (result._tag === "Success") return { status: "done" };
+        return {
+          status: isAtomCommandInterrupted(result) ? "unknown" : "failed",
+          message: String(squashAtomCommandFailure(result)),
+        };
+      }
+      if (!item.driver || !item.instanceId)
+        return { status: "skipped", message: "Provider identity is missing" };
+      const result = await runAtomCommand(
+        appAtomRegistry,
+        serverEnvironment.updateProvider,
+        {
+          environmentId: item.environmentId,
+          input: { provider: item.driver, instanceId: item.instanceId },
+        },
+        { reportFailure: false },
+      );
+      if (result._tag === "Failure")
+        return {
+          status: isAtomCommandInterrupted(result) ? "unknown" : "failed",
+          message: String(squashAtomCommandFailure(result)),
+        };
+      const provider = result.value.providers.find(
+        (provider) => provider.driver === item.driver && provider.instanceId === item.instanceId,
+      );
+      return provider?.updateState?.status === "succeeded"
+        ? { status: "done" }
+        : {
+            status: "failed",
+            message: provider?.updateState?.message ?? "Provider update did not finish",
+          };
+    } finally {
+      executingItems.delete(item.key);
+    }
+  },
+};
+
+function showPlan(plan: UpdateExecutionPlan | null): void {
+  ownedNotAppliedVersion = plan?.items.find((item) => item.kind === "app")?.targetVersion ?? null;
+  if (!plan) {
+    planItemResolver.dispose();
+    if (displayedPlanId !== null) setUpdateEverythingRun(() => null);
+    displayedPlanId = null;
+    return;
+  }
+  displayedPlanId = plan.id;
+  const groups = new Map<EnvironmentId, UpdatePlanItem[]>();
+  for (const item of plan.items) {
+    if (item.kind === "app") continue;
+    const items = groups.get(item.environmentId) ?? [];
+    items.push(item);
+    groups.set(item.environmentId, items);
+  }
+  const app = plan.items.find((item) => item.kind === "app");
+  setUpdateEverythingRun((current) => ({
+    localVersion: app && app.status !== "skipped" ? app.targetVersion : null,
+    phase:
+      plan.phase === "awaiting-local"
+        ? "installing"
+        : current?.phase === "countdown" && plan.phase === "local"
+          ? "countdown"
+          : plan.phase,
+    pausedReason: plan.pausedReason,
+    restartAt: plan.phase === "local" ? (current?.restartAt ?? null) : null,
+    machines: [...groups.entries()].map(([environmentId, items]) => {
+      const server = items.find((item) => item.kind === "server");
+      const failures = items.filter(
+        (item) =>
+          item.status === "failed" || item.status === "unknown" || item.status === "skipped",
+      );
+      return {
+        environmentId,
+        label: items[0]!.label,
+        updatesProviders: items.some((item) => item.kind === "provider"),
+        server: server
+          ? {
+              environmentId,
+              serverLabel: server.label,
+              targetVersion: server.targetVersion,
+              selfUpdate: null,
+            }
+          : null,
+        handedOffVersion: null,
+        startedAt: plan.createdAt,
+        result: items.some((item) => item.status === "pending" || item.status === "claimed")
+          ? null
+          : failures.length > 0
+            ? "failed"
+            : "done",
+        failure: failures.map((item) => item.message ?? "Update skipped").join("\n") || null,
+      };
+    }),
+  }));
+}
+
+function storageFailure(error: unknown): void {
+  storageStopped = true;
+  setUpdateEverythingRun((run) => ({
+    localVersion: run?.localVersion ?? null,
+    machines: run?.machines ?? [],
+    phase: "paused",
+    pausedReason: "storage",
+    restartAt: null,
+  }));
+  toastManager.add(
+    stackedThreadToast({
+      type: "error",
+      title: "Update plan could not be saved",
+      description:
+        error instanceof Error
+          ? error.message
+          : "Storage is unavailable. No new updates will start.",
+    }),
+  );
+}
+
+async function wakeUpdatePlan(): Promise<void> {
+  if (storageStopped) return;
+  if (coordinatorRunning) {
+    coordinatorAgain = true;
+    return;
+  }
+  coordinatorRunning = true;
+  try {
+    do {
+      coordinatorAgain = false;
+      const store = await updatePlanStore();
+      const plan = await store.read();
+      showPlan(plan);
+      await runUpdatePlan(store, { ...planPorts, recoveringClaims: plan?.id === recoveryPlanId });
+      showPlan(await store.read());
+    } while (coordinatorAgain);
+  } catch (error) {
+    storageFailure(error);
+  } finally {
+    coordinatorRunning = false;
+  }
+}
+
+export async function startUpdatePlan(
+  selection: ReadonlySet<UpdateItemKey>,
+  localVersion: string | null,
+  npmPublished: boolean,
+): Promise<{ status: "started" | "busy" | "empty" }> {
+  if (storageStopped) return { status: "empty" };
+  const snapshot = appAtomRegistry.get(updateOptionsSnapshotAtom);
+  const options = collectUpdateOptions({ ...snapshot, localVersion, npmPublished });
+  const items = [...new Set(selection)].flatMap((key) => {
+    const item = options.operations.get(key);
+    return item ? [item] : [];
+  });
+  if (items.length === 0 || !snapshot.ready) return { status: "empty" };
+  const plan: UpdateExecutionPlan = {
+    schemaVersion: 1,
+    id: randomUUID(),
+    primaryEnvironmentId: snapshot.primaryEnvironmentId,
+    sourceVersion: APP_VERSION,
+    createdAt: Date.now(),
+    phase: items.some((item) => item.kind === "app") ? "local" : "servers",
+    pausedReason: null,
+    items,
+  };
+  try {
+    if (!(await (await updatePlanStore()).create(plan))) return { status: "busy" };
+  } catch (error) {
+    storageFailure(error);
+    return { status: "empty" };
+  }
+  void wakeUpdatePlan();
+  return { status: "started" };
+}
+
+async function pauseSavedUpdatePlan(
+  reason: NonNullable<UpdateExecutionPlan["pausedReason"]>,
+): Promise<void> {
+  try {
+    await (
+      await updatePlanStore()
+    ).change((plan) =>
+      plan && plan.phase !== "complete" && plan.phase !== "paused"
+        ? { ...plan, phase: "paused", pausedReason: reason }
+        : plan,
+    );
+  } catch (error) {
+    storageFailure(error);
+  }
+}
+
+export async function retryUpdatePlan(): Promise<void> {
+  try {
+    const store = await updatePlanStore();
+    const retried = await store.change((plan) => {
+      if (
+        !plan ||
+        plan.pausedReason === "expired" ||
+        plan.pausedReason === "storage" ||
+        !planReady(plan)
+      )
+        return plan;
+      if (plan.items.some((item) => executingItems.has(item.key))) return plan;
+      return retryExecutionPlan(plan, APP_VERSION, resolvePlanItem);
+    });
+    recoveryPlanId = retried?.items.some(
+      (item) => item.status === "claimed" && item.claimId !== rendererClaimId,
+    )
+      ? retried.id
+      : null;
+    void wakeUpdatePlan();
+  } catch (error) {
+    storageFailure(error);
+  }
+}
+
+export async function continueWithoutLocalApp(): Promise<void> {
+  if (storageStopped) return;
+  try {
+    await (
+      await updatePlanStore()
+    ).change((plan) =>
+      plan?.phase === "paused" && plan.pausedReason !== "expired" && plan.pausedReason !== "storage"
+        ? {
+            ...plan,
+            phase: "servers",
+            sourceVersion: APP_VERSION,
+            pausedReason: null,
+            items: plan.items.map((item) =>
+              item.kind === "app" && item.status !== "done"
+                ? { ...item, status: "skipped", message: "App update skipped by choice" }
+                : item,
+            ),
+          }
+        : plan,
+    );
+    void wakeUpdatePlan();
+  } catch (error) {
+    storageFailure(error);
+  }
+}
+
+export async function dismissUpdatePlan(): Promise<void> {
+  try {
+    if (storageStopped) {
+      if (executingItems.size > 0) return;
+      await (await updatePlanStore()).discard();
+      storageStopped = false;
+      setUpdateEverythingRun(() => null);
+      showPlan(null);
+      return;
+    }
+    await (
+      await updatePlanStore()
+    ).change((plan) =>
+      plan &&
+      (plan.phase === "complete" || plan.phase === "paused") &&
+      !plan.items.some((item) => executingItems.has(item.key))
+        ? null
+        : plan,
+    );
+    storageStopped = false;
+    void wakeUpdatePlan();
+  } catch (error) {
+    storageFailure(error);
+  }
+}
+
+export function UpdateEverythingCoordinator() {
+  const desktop = useDesktopUpdateState();
+  useEffect(() => {
+    let disposed = false;
+    let unsubscribe = () => {};
+    const unsubscribeOptions = appAtomRegistry.subscribe(updateOptionsSnapshotAtom, () => {
+      void wakeUpdatePlan();
+    });
+    void updatePlanStore()
+      .then(async (store) => {
+        const plan = await store.read();
+        if (disposed) return;
+        recoveryPlanId = plan?.id ?? null;
+        unsubscribe = store.subscribe(() => {
+          void wakeUpdatePlan();
+        });
+        void wakeUpdatePlan();
+      })
+      .catch(storageFailure);
+    const focus = () => {
+      void wakeUpdatePlan();
+    };
+    window.addEventListener("focus", focus);
+    return () => {
+      disposed = true;
+      unsubscribe();
+      unsubscribeOptions();
+      window.removeEventListener("focus", focus);
+    };
+  }, []);
+  useEffect(() => {
+    desktopNotAppliedVersion = desktop?.notAppliedVersion ?? null;
+    if (desktop?.errorContext === "install" && desktop.message) {
+      void updatePlanStore()
+        .then((store) => store.change((plan) => observeDesktopInstallFailure(plan, desktop)))
+        .then(() => wakeUpdatePlan())
+        .catch(storageFailure);
+    } else void wakeUpdatePlan();
+  }, [desktop]);
   return null;
 }
