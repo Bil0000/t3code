@@ -5,14 +5,6 @@ import {
   parseClaudeWorkflowRunHandles,
 } from "./claudeWorkflowProgress.ts";
 
-const startFrame = {
-  type: "system",
-  subtype: "task_started",
-  task_id: "w1",
-  task_type: "local_workflow",
-  workflow_name: "probe-wf",
-};
-
 const snapshotFrame = (
   entries: ReadonlyArray<Record<string, unknown>>,
   usage?: Record<string, number>,
@@ -38,30 +30,6 @@ const agent = (overrides: Record<string, unknown>) => ({
 });
 
 describe("mergeClaudeWorkflowProgress", () => {
-  it("marks a coordinator as a workflow before any member exists", () => {
-    const workflow = mergeClaudeWorkflowProgress({
-      previous: undefined,
-      name: "probe-wf",
-      message: startFrame,
-    });
-    expect(workflow).toEqual({ name: "probe-wf", phases: [], agents: [] });
-  });
-
-  it("leaves an ordinary subagent's frames alone", () => {
-    expect(
-      mergeClaudeWorkflowProgress({
-        previous: undefined,
-        message: {
-          type: "system",
-          subtype: "task_progress",
-          task_id: "t1",
-          description: "reading files",
-          usage: { total_tokens: 500, tool_uses: 2, duration_ms: 90 },
-        },
-      }),
-    ).toBeUndefined();
-  });
-
   it("maps provider agent states and per-member metrics", () => {
     const workflow = mergeClaudeWorkflowProgress({
       previous: undefined,
@@ -77,11 +45,13 @@ describe("mergeClaudeWorkflowProgress", () => {
           toolCalls: 3,
           durationMs: 1277,
           startedAt: 1_700_000_000_000,
+          lastProgressAt: 1_700_000_004_432,
           queuedAt: 1_699_999_999_000,
           promptPreview: "Reply with exactly: A1",
           resultPreview: "A1",
         }),
-        agent({ index: 2, label: "alpha:two", state: "queued" }),
+        agent({ index: 2, label: "alpha:two", state: "queued", lastProgressAt: 1000 }),
+        agent({ index: 3, state: "progress", lastProgressAt: 2000 }),
       ]),
     });
     expect(workflow?.phases).toEqual([{ index: 1, title: "Alpha" }]);
@@ -99,10 +69,13 @@ describe("mergeClaudeWorkflowProgress", () => {
       durationMs: 1277,
       queuedAt: 1_699_999_999_000,
       startedAt: 1_700_000_000_000,
+      completedAt: 1_700_000_004_432,
       prompt: "Reply with exactly: A1",
       result: "A1",
     });
     expect(workflow?.agents[1]?.state).toBe("queued");
+    expect(workflow?.agents[1]).not.toHaveProperty("completedAt");
+    expect(workflow?.agents[2]).not.toHaveProperty("completedAt");
   });
 
   it.each(["something-new", "toString", "constructor", "__proto__"])(
@@ -146,7 +119,7 @@ describe("mergeClaudeWorkflowProgress", () => {
         transcriptDir: "/root/.claude/projects/p/s/subagents/workflows/wf_abc",
         scriptPath: "/root/.claude/projects/p/s/workflows/scripts/x.js",
       }),
-      message: startFrame,
+      message: snapshotFrame([]),
     });
     expect(workflow?.runHandles?.transcriptDir).toBe(
       "/root/.claude/projects/p/s/subagents/workflows/wf_abc",
@@ -228,10 +201,13 @@ describe("mergeClaudeWorkflowProgress", () => {
           durationMs: 50,
           queuedAt: 1000,
           startedAt: 1010,
+          lastProgressAt: 2010,
         }),
         agent({ index: 2, state: "done" }),
       ]),
     });
+    expect(first?.agents[0]?.completedAt).toBe(2010);
+    expect(first?.agents[1]).not.toHaveProperty("completedAt");
     const second = mergeClaudeWorkflowProgress({
       previous: first && {
         ...first,
@@ -322,12 +298,12 @@ describe("mergeClaudeWorkflowProgress", () => {
     const first = mergeClaudeWorkflowProgress({
       previous: undefined,
       runHandles: { runId: "wf_abc", transcriptDir: "/workflows/wf_abc" },
-      message: startFrame,
+      message: snapshotFrame([]),
     });
     const second = mergeClaudeWorkflowProgress({
       previous: first,
       runHandles: { scriptPath: "/scripts/workflow.js" },
-      message: startFrame,
+      message: snapshotFrame([]),
     });
     expect(second?.runHandles).toEqual({
       runId: "wf_abc",
