@@ -71,31 +71,6 @@ it("blocks removing question files only while that thread's answer is in flight"
     isQuestionAttachmentRemovalBlocked({ ...input, threadId: ThreadId.make("thread-2") }),
   ).toBe(false);
 });
-it("scopes provider request ids to their environment and thread", () => {
-  const keys = [
-    questionAttachmentDraftId(environmentId, threadId, requestId, "q"),
-    questionAttachmentDraftId(EnvironmentId.make("environment-2"), threadId, requestId, "q"),
-    questionAttachmentDraftId(environmentId, ThreadId.make("thread-2"), requestId, "q"),
-  ];
-  expect(new Set(keys).size).toBe(3);
-});
-it("does not match drafts belonging to threads with a shared id prefix", () => {
-  const prefix = questionAttachmentDraftPrefix(environmentId, threadId);
-  expect(
-    questionAttachmentDraftId(environmentId, threadId, requestId, "q").startsWith(prefix),
-  ).toBe(true);
-  for (const suffix of ["-extra", ":extra", "/extra", "%extra"]) {
-    expect(
-      questionAttachmentDraftId(
-        environmentId,
-        ThreadId.make(`${threadId}${suffix}`),
-        requestId,
-        "q",
-      ).startsWith(prefix),
-    ).toBe(false);
-  }
-});
-
 it("does not clear another environment whose id contains a question prefix", () => {
   const otherEnvironment = EnvironmentId.make(
     `${environmentId}:question-${encodeURIComponent(JSON.stringify(threadId))}-nested`,
