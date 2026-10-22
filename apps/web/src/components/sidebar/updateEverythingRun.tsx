@@ -623,6 +623,25 @@ async function pauseSavedUpdatePlan(
 export async function retryUpdatePlan(): Promise<void> {
   try {
     const store = await updatePlanStore();
+    const initial = await store.read();
+    if (!initial) return;
+    const isClaimOwnerAlive = claimOwner.isAlive;
+    const deadClaims = isClaimOwnerAlive
+      ? (
+          await Promise.all(
+            initial.items
+              .filter(
+                (item) =>
+                  item.kind !== "app" &&
+                  item.status === "claimed" &&
+                  item.claimId !== rendererClaimId,
+              )
+              .map(async (item) =>
+                (await isClaimOwnerAlive(item.claimId).catch(() => true)) ? null : item,
+              ),
+          )
+        ).filter((item) => item !== null)
+      : undefined;
     const retried = await store.change((plan) => {
       if (
         !plan ||
@@ -632,7 +651,12 @@ export async function retryUpdatePlan(): Promise<void> {
       )
         return plan;
       if (plan.items.some((item) => executingItems.has(item.key))) return plan;
-      return retryExecutionPlan(plan, APP_VERSION, resolvePlanItem);
+      return retryExecutionPlan(
+        plan,
+        APP_VERSION,
+        resolvePlanItem,
+        deadClaims ? { plan: initial, rendererClaimId, deadClaims } : undefined,
+      );
     });
     recoveryPlanId = retried?.items.some(
       (item) => item.status === "claimed" && item.claimId !== rendererClaimId,

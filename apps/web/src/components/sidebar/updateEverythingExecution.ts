@@ -73,11 +73,34 @@ export function retryExecutionPlan(
   plan: UpdateExecutionPlan,
   appVersion: string,
   resolve: (item: UpdatePlanItem, recovering: boolean) => ItemResolution,
+  claimRecovery?: {
+    readonly plan: UpdateExecutionPlan;
+    readonly rendererClaimId: string;
+    readonly deadClaims: readonly UpdatePlanItem[];
+  },
 ): UpdateExecutionPlan {
   if (
     (plan.phase !== "paused" && plan.phase !== "complete") ||
     plan.pausedReason === "expired" ||
     plan.pausedReason === "storage"
+  )
+    return plan;
+  if (
+    claimRecovery &&
+    (plan.id !== claimRecovery.plan.id ||
+      plan.phase !== claimRecovery.plan.phase ||
+      plan.items.some((item) => {
+        if (item.kind === "app" || item.status !== "claimed") return false;
+        const matches = (observed: UpdatePlanItem) =>
+          observed.key === item.key &&
+          observed.status === item.status &&
+          observed.claimId === item.claimId;
+        return (
+          !claimRecovery.plan.items.some(matches) ||
+          (item.claimId !== claimRecovery.rendererClaimId &&
+            !claimRecovery.deadClaims.some(matches))
+        );
+      }))
   )
     return plan;
   if (

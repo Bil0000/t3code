@@ -211,7 +211,10 @@ export async function runUpdatePlan(store: UpdatePlanStore, ports: UpdatePlanPor
       await pause("not-applied");
       return;
     }
-    if (exactUpdateVersion(ports.appVersion, initial.sourceVersion)) return;
+    if (exactUpdateVersion(ports.appVersion, initial.sourceVersion)) {
+      await pauseAbandonedClaim(app);
+      return;
+    }
     if (!exactUpdateVersion(ports.appVersion, app.targetVersion)) {
       await pause("wrong-version");
       return;
@@ -336,7 +339,13 @@ export async function runUpdatePlan(store: UpdatePlanStore, ports: UpdatePlanPor
         if (
           beforeDispatch?.id !== initial.id ||
           beforeDispatch.phase !== initial.phase ||
-          !ports.ready(beforeDispatch)
+          !ports.ready(beforeDispatch) ||
+          !beforeDispatch.items.some(
+            (current) =>
+              current.key === claimed.key &&
+              current.status === "claimed" &&
+              current.claimId === ports.claimId,
+          )
         ) {
           await releaseUndispatched(claimed);
           return;

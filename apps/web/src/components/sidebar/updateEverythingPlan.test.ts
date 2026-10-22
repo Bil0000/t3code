@@ -7,6 +7,7 @@ import {
 import { EnvironmentId, type DesktopUpdateState } from "@t3tools/contracts";
 import { downloadUpdateForPlan, observeDesktopInstallFailure } from "./updateEverythingDesktop";
 import { expect, it } from "vite-plus/test";
+import { retryExecutionPlan } from "./updateEverythingExecution";
 import {
   runUpdatePlan,
   type UpdateExecutionPlan,
@@ -82,15 +83,22 @@ function setup(items = [item("app", "app"), item("remote", "server"), item("tool
   return { store, ports, calls };
 }
 
-it.each(["app", "server", "provider"] as const)(
+it.each(["app", "awaiting-local", "server", "provider"] as const)(
   "does not pause a healthy foreign %s claim during recovery",
   async (kind) => {
-    const { store, ports, calls } = setup([item("work", kind)]);
+    const { store, ports, calls } = setup([item("work", kind === "awaiting-local" ? "app" : kind)]);
     await store.change(
       (plan) =>
         plan && {
           ...plan,
-          phase: kind === "app" ? "local" : kind === "server" ? "servers" : "providers",
+          phase:
+            kind === "awaiting-local"
+              ? "awaiting-local"
+              : kind === "app"
+                ? "local"
+                : kind === "server"
+                  ? "servers"
+                  : "providers",
           items: plan.items.map((item) => ({ ...item, status: "claimed", claimId: "live-owner" })),
         },
     );
@@ -106,16 +114,25 @@ it.each(["app", "server", "provider"] as const)(
   },
 );
 
-it.each(["app", "server", "provider"] as const)(
+it.each(["app", "awaiting-local", "server", "provider"] as const)(
   "only pauses the exact abandoned %s claim observed before checking its owner",
   async (kind) => {
-    for (const change of ["claim", "settled", "phase", "replaced", "none"] as const) {
-      const { store, ports, calls } = setup([item("work", kind)]);
+    for (const change of ["none", "claim", "settled", "phase", "replaced"] as const) {
+      const { store, ports, calls } = setup([
+        item("work", kind === "awaiting-local" ? "app" : kind),
+      ]);
       await store.change(
         (plan) =>
           plan && {
             ...plan,
-            phase: kind === "app" ? "local" : kind === "server" ? "servers" : "providers",
+            phase:
+              kind === "awaiting-local"
+                ? "awaiting-local"
+                : kind === "app"
+                  ? "local"
+                  : kind === "server"
+                    ? "servers"
+                    : "providers",
             items: plan.items.map((item) => ({
               ...item,
               status: "claimed",
@@ -155,12 +172,132 @@ it.each(["app", "server", "provider"] as const)(
   },
 );
 
+it.each(["claimed", "unknown"] as const)(
+  "retry checks %s work without blocking settled, idle own, or app retries",
+  async (status) => {
+    for (const kind of ["app", "server", "provider"] as const) {
+      for (const owner of ["live", "dead", "own"] as const) {
+        const { store, ports } = setup([item("work", kind)]);
+        const initial = (await store.change(
+          (plan) =>
+            plan && {
+              ...plan,
+              phase: "paused",
+              pausedReason: kind === "app" ? "download-failed" : "unknown",
+              items: plan.items.map((item) => ({
+                ...item,
+                status,
+                claimId: owner === "own" ? ports.claimId : "foreign-renderer",
+              })),
+            },
+        ))!;
+        const retried = retryExecutionPlan(
+          initial,
+          ports.appVersion,
+          () => ({ status: "unknown" }),
+          {
+            plan: initial,
+            rendererClaimId: ports.claimId,
+            deadClaims: owner === "dead" ? initial.items : [],
+          },
+        );
+        if (kind !== "app" && status === "claimed" && owner === "live")
+          expect(retried).toBe(initial);
+        else {
+          expect(retried.phase).toBe(kind === "app" ? "local" : "servers");
+          expect(retried.items[0]?.status).toBe("pending");
+          expect(retried.items[0]?.claimId).toBeNull();
+        }
+      }
+    }
+  },
+);
+
+it.each(["plan", "phase", "claim", "own-claim", "status", "key", "new-claim"] as const)(
+  "retry preserves changed %s state after querying a dead foreign owner",
+  async (change) => {
+    const { store, ports } = setup([item("work", "server"), item("tool", "provider")]);
+    const initial = (await store.change(
+      (plan) =>
+        plan && {
+          ...plan,
+          phase: "paused",
+          pausedReason: "unknown",
+          items: plan.items.map((item) =>
+            item.key === "work"
+              ? {
+                  ...item,
+                  status: change === "status" ? "unknown" : "claimed",
+                  claimId: "dead-owner",
+                }
+              : item,
+          ),
+        },
+    ))!;
+    const current = (await store.change(
+      (plan) =>
+        plan && {
+          ...plan,
+          id: change === "plan" ? "replacement" : plan.id,
+          phase: change === "phase" ? "complete" : plan.phase,
+          items: plan.items.map((item) =>
+            item.key === "work"
+              ? {
+                  ...item,
+                  key: change === "key" ? "replacement" : item.key,
+                  claimId:
+                    change === "claim"
+                      ? "new-owner"
+                      : change === "own-claim"
+                        ? ports.claimId
+                        : item.claimId,
+                  status: change === "status" ? "claimed" : item.status,
+                }
+              : change === "new-claim"
+                ? { ...item, status: "claimed", claimId: "dead-owner" }
+                : item,
+          ),
+        },
+    ))!;
+    expect(
+      retryExecutionPlan(current, ports.appVersion, () => ({ status: "unknown" }), {
+        plan: initial,
+        rendererClaimId: ports.claimId,
+        deadClaims: change === "status" ? [] : [initial.items[0]!],
+      }),
+    ).toBe(current);
+  },
+);
+
+it("does not dispatch an own claim reset by Retry before its admission read returns", async () => {
+  const { store, ports, calls } = setup([item("work", "server")]);
+  await runUpdatePlan(
+    {
+      ...store,
+      read: async () => {
+        const plan = await store.read();
+        if (plan?.items[0]?.status !== "claimed") return plan;
+        return store.change(
+          (current) =>
+            current && {
+              ...current,
+              items: current.items.map((item) => ({ ...item, status: "pending", claimId: null })),
+            },
+        );
+      },
+    },
+    ports,
+  );
+  expect(calls).toEqual([]);
+  expect((await store.read())?.items[0]?.status).toBe("pending");
+});
+
 it("installs only the current app before restart, then releases the frozen remaining items once", async () => {
   const { store, ports, calls } = setup();
   await runUpdatePlan(store, ports);
   expect(calls).toEqual(["download", "maintenance", "maintenance", "maintenance", "install"]);
   expect((await store.read())?.phase).toBe("awaiting-local");
-  await runUpdatePlan(store, ports);
+  await runUpdatePlan(store, { ...ports, isClaimOwnerAlive: async () => false });
   expect(calls).toHaveLength(5);
   await runUpdatePlan(store, { ...ports, claimId: "new-renderer", appVersion: "1.0.1" });
   expect(calls).toEqual([
