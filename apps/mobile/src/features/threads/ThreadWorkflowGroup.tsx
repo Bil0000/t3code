@@ -17,6 +17,7 @@ import { ScrollView, View } from "react-native";
 import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
 import { Chip } from "../../components/ui/Chip";
+import { IconButton } from "../../components/ui/IconButton";
 import { ListRowLayout } from "../../components/ui/ListRowLayout";
 import { ListSection } from "../../components/ui/ListSection";
 import { RowPressable } from "../../components/ui/RowPressable";
@@ -57,6 +58,10 @@ export function ThreadWorkflowGroup(props: {
   const open = rail.find((item) => item.key === selected);
   const label = group.workflow.workflowName ?? group.workflow.title;
   const statusLabel = resolveSubagentRowPresentation(props.subagent).statusLabel;
+  const coordinatorThreadId = props.subagent.childThreadId;
+  const coordinatorShell = useThreadShell(
+    coordinatorThreadId === null ? null : scopeThreadRef(props.environmentId, coordinatorThreadId),
+  );
 
   return (
     <View className="my-2">
@@ -86,6 +91,15 @@ export function ThreadWorkflowGroup(props: {
               }
             />
           </RowPressable>
+          {coordinatorThreadId !== null && coordinatorShell !== null ? (
+            <View className="mr-2">
+              <IconButton
+                icon="bubble.left.and.bubble.right"
+                accessibilityLabel={`Open ${label} conversation`}
+                onPress={() => props.onOpen(coordinatorThreadId)}
+              />
+            </View>
+          ) : null}
           <SubagentStopButton
             environmentId={props.environmentId}
             subagent={props.subagent}
