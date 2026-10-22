@@ -33,16 +33,13 @@ export function SubagentStopButton(props: {
     props.subagent.workflow?.name ?? resolveSubagentRowPresentation(props.subagent).title;
   const stop = async () => {
     setStopping(true);
-    try {
-      const result =
-        target.kind === "workflow"
-          ? await stopWorkflow({ environmentId: props.environmentId, input: target.input })
-          : await interruptTurn({ environmentId: props.environmentId, input: target.input });
-      if (result._tag === "Failure") {
-        Dialog.alert(workflow ? "Could not stop workflow" : "Could not stop agent");
-      }
-    } finally {
-      setStopping(false);
+    const result = await (
+      target.kind === "workflow"
+        ? stopWorkflow({ environmentId: props.environmentId, input: target.input })
+        : interruptTurn({ environmentId: props.environmentId, input: target.input })
+    ).finally(() => setStopping(false));
+    if (result._tag === "Failure") {
+      Dialog.alert(workflow ? "Could not stop workflow" : "Could not stop agent");
     }
   };
 
