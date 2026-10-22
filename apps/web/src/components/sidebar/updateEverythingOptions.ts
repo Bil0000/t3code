@@ -2,6 +2,7 @@ import { Atom } from "effect/reactivity";
 import { environmentCatalog } from "~/connection/catalog";
 import { isDesktopLocalConnectionTarget } from "~/connection/desktopLocal";
 import { isElectron } from "~/env";
+import { isLocalEnvironmentDisabled } from "~/localEnvironment";
 import { environmentPresentations } from "~/state/presentation";
 import { primaryEnvironmentIdAtom } from "~/state/primaryEnvironment";
 import { environmentSession } from "~/state/session";
@@ -35,5 +36,10 @@ export const updateOptionsSnapshotAtom = Atom.make((get) => {
       };
     },
   );
-  return { ready: catalog.isReady, primaryEnvironmentId: get(primaryEnvironmentIdAtom), machines };
+  return {
+    ready: catalog.isReady,
+    primaryEnvironmentId: get(primaryEnvironmentIdAtom),
+    localEnvironmentDisabled: isLocalEnvironmentDisabled(),
+    machines,
+  };
 }).pipe(Atom.withLabel("update-options-snapshot"));

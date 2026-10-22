@@ -203,7 +203,7 @@ import {
 } from "./Sidebar.logic";
 import { sortThreads } from "../lib/threadSort";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
-import { waitForHostedMaintenance } from "./sidebar/updateEverythingRun";
+import { waitForHostedProviderWork } from "./sidebar/updateEverythingRun";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { useIsMobile } from "~/hooks/useMediaQuery";
 import { CommandDialogTrigger } from "./ui/command";
@@ -3598,7 +3598,7 @@ export default function LegacySidebar({ routeReveal }: { routeReveal: SidebarRou
         setDesktopUpdateActionPending(false);
         return;
       }
-      void waitForHostedMaintenance()
+      void waitForHostedProviderWork()
         .then(() => bridge.installUpdate())
         .then((result) => {
           if (!shouldToastDesktopUpdateActionResult(result)) return;

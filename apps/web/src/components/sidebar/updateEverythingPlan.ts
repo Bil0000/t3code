@@ -62,6 +62,7 @@ export type ItemResolution =
 export interface UpdatePlanPorts {
   readonly claimId: string;
   readonly recoveringClaims?: boolean;
+  readonly isClaimOwnerAlive?: (claimId: string | null) => Promise<boolean>;
   readonly appVersion: string;
   readonly now: () => number;
   readonly ready: (plan: UpdateExecutionPlan) => boolean;
@@ -91,6 +92,25 @@ export async function runUpdatePlan(store: UpdatePlanStore, ports: UpdatePlanPor
       phase: "paused",
       pausedReason: reason,
     }));
+  const pauseAbandonedClaim = async (item: UpdatePlanItem) => {
+    if (
+      ports.isClaimOwnerAlive
+        ? await ports.isClaimOwnerAlive(item.claimId)
+        : !ports.recoveringClaims
+    )
+      return;
+    await change((plan) =>
+      plan.phase === initial.phase &&
+      plan.items.some(
+        (current) =>
+          current.key === item.key &&
+          current.status === "claimed" &&
+          current.claimId === item.claimId,
+      )
+        ? { ...plan, phase: "paused", pausedReason: "unknown" }
+        : plan,
+    );
+  };
   if (
     ports.now() < initial.createdAt ||
     ports.now() - initial.createdAt >= UPDATE_PLAN_MAX_AGE_MS
@@ -205,7 +225,7 @@ export async function runUpdatePlan(store: UpdatePlanStore, ports: UpdatePlanPor
   if (initial.phase === "local") {
     if (!app) return;
     if (app.status === "claimed") {
-      if (app.claimId !== ports.claimId && ports.recoveringClaims) await pause("unknown");
+      if (app.claimId !== ports.claimId) await pauseAbandonedClaim(app);
       return;
     }
     const claimed = await claim(app);
@@ -285,7 +305,7 @@ export async function runUpdatePlan(store: UpdatePlanStore, ports: UpdatePlanPor
           if (item.claimId !== ports.claimId) {
             const resolution = ports.resolve(item, true);
             if (resolution.status === "unknown" || resolution.status === "ready") {
-              if (ports.recoveringClaims) await pause("unknown");
+              await pauseAbandonedClaim(item);
             } else await settle(item, resolution);
           }
           return;

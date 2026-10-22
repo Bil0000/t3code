@@ -41,7 +41,7 @@ import {
   clearSavedUpdateEverythingResult,
   saveUpdateEverythingResult,
   useUpdateEverythingRun,
-  waitForHostedMaintenance,
+  waitForHostedProviderWork,
 } from "./updateEverythingRun";
 import { useUpdateEverything } from "./useUpdateEverything";
 
@@ -157,7 +157,7 @@ async function downloadLocalUpdate(bridge: DesktopBridge): Promise<boolean> {
 
 async function installLocalUpdate(bridge: DesktopBridge): Promise<boolean> {
   try {
-    await waitForHostedMaintenance();
+    await waitForHostedProviderWork();
     const result = await bridge.installUpdate();
     if (!result.accepted) {
       showDesktopUpdateDownloadedToast(bridge, result.state);

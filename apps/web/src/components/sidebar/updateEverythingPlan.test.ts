@@ -82,6 +82,79 @@ function setup(items = [item("app", "app"), item("remote", "server"), item("tool
   return { store, ports, calls };
 }
 
+it.each(["app", "server", "provider"] as const)(
+  "does not pause a healthy foreign %s claim during recovery",
+  async (kind) => {
+    const { store, ports, calls } = setup([item("work", kind)]);
+    await store.change(
+      (plan) =>
+        plan && {
+          ...plan,
+          phase: kind === "app" ? "local" : kind === "server" ? "servers" : "providers",
+          items: plan.items.map((item) => ({ ...item, status: "claimed", claimId: "live-owner" })),
+        },
+    );
+    const initial = await store.read();
+    await runUpdatePlan(store, {
+      ...ports,
+      recoveringClaims: true,
+      isClaimOwnerAlive: async () => true,
+      resolve: () => ({ status: "unknown" }),
+    });
+    expect(await store.read()).toEqual(initial);
+    expect(calls).toEqual([]);
+  },
+);
+
+it.each(["app", "server", "provider"] as const)(
+  "only pauses the exact abandoned %s claim observed before checking its owner",
+  async (kind) => {
+    for (const change of ["claim", "settled", "phase", "replaced", "none"] as const) {
+      const { store, ports, calls } = setup([item("work", kind)]);
+      await store.change(
+        (plan) =>
+          plan && {
+            ...plan,
+            phase: kind === "app" ? "local" : kind === "server" ? "servers" : "providers",
+            items: plan.items.map((item) => ({
+              ...item,
+              status: "claimed",
+              claimId: "dead-owner",
+            })),
+          },
+      );
+      let afterQuery: UpdateExecutionPlan | null = null;
+      await runUpdatePlan(store, {
+        ...ports,
+        recoveringClaims: true,
+        resolve: () => ({ status: "unknown" }),
+        isClaimOwnerAlive: async () => {
+          afterQuery = await store.change(
+            (plan) =>
+              plan && {
+                ...plan,
+                id: change === "replaced" ? "replacement" : plan.id,
+                phase: change === "phase" ? "complete" : plan.phase,
+                items: plan.items.map((item) => ({
+                  ...item,
+                  claimId: change === "claim" ? "new-owner" : item.claimId,
+                  status: change === "settled" ? "done" : item.status,
+                })),
+              },
+          );
+          return false;
+        },
+      });
+      if (change === "none") expect((await store.read())?.phase).toBe("paused");
+      else if (change === "settled") {
+        expect((await store.read())?.phase).not.toBe("paused");
+        expect((await store.read())?.items[0]?.status).toBe("done");
+      } else expect(await store.read()).toEqual(afterQuery);
+      expect(calls).toEqual([]);
+    }
+  },
+);
+
 it("installs only the current app before restart, then releases the frozen remaining items once", async () => {
   const { store, ports, calls } = setup();
   await runUpdatePlan(store, ports);
@@ -634,6 +707,8 @@ it.each(["finish", "pause", "readiness", "claim"] as const)(
     const registry = AtomRegistry.make();
     const state = (status: "queued" | "running" | "succeeded"): HostedMaintenanceSnapshot => ({
       ready: true,
+      primaryEnvironmentId: EnvironmentId.make("primary"),
+      localEnvironmentDisabled: false,
       machines: [false, true].map((wsl) => ({
         hostedByThisApp: true,
         connected: true,
@@ -716,6 +791,8 @@ it.each(["queued", "running"] as const)(
     const registry = AtomRegistry.make();
     const state = (status: "queued" | "running" | "succeeded"): HostedMaintenanceSnapshot => ({
       ready: true,
+      primaryEnvironmentId: EnvironmentId.make("primary"),
+      localEnvironmentDisabled: false,
       machines: [
         {
           hostedByThisApp: true,

@@ -13,6 +13,62 @@ import {
   type UpdateExecutionPlan,
 } from "./updateEverythingPlan";
 
+export function createUpdatePlanClaimOwner(
+  claimId: string,
+  wake: () => void,
+  locks: LockManager | undefined,
+) {
+  const name = (id: string) => `t3code-update-plan-owner:${id}`;
+  let release!: () => void;
+  const lifetime = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let acquired!: () => void;
+  let failed!: (reason: unknown) => void;
+  const ready = new Promise<void>((resolve, reject) => {
+    acquired = resolve;
+    failed = reject;
+  });
+  const stopped = new AbortController();
+  const waiting = new Set<string>();
+  const holding = locks?.request(name(claimId), () => {
+    acquired();
+    return lifetime;
+  });
+  if (holding) void holding.catch(failed);
+  else acquired();
+  return {
+    ready,
+    isAlive: locks
+      ? async (id: string | null) => {
+          if (id === null) return false;
+          const state = await locks.query();
+          if (!state.held?.some((lock) => lock.name === name(id))) return false;
+          if (!waiting.has(id)) {
+            waiting.add(id);
+            void locks
+              .request(name(id), { signal: stopped.signal }, () => {})
+              .then(
+                () => {
+                  waiting.delete(id);
+                  wake();
+                },
+                () => {
+                  waiting.delete(id);
+                },
+              );
+          }
+          return true;
+        }
+      : undefined,
+    async [Symbol.asyncDispose]() {
+      stopped.abort();
+      release();
+      await holding;
+    },
+  };
+}
+
 export function retryExecutionPlan(
   plan: UpdateExecutionPlan,
   appVersion: string,

@@ -25,14 +25,20 @@ import { updateOptionsSnapshotAtom } from "./updateEverythingOptions";
 import {
   isHostedMaintenanceReady,
   waitForHostedMaintenance as waitForHostedMaintenanceInRegistry,
+  waitForHostedProviderWork as waitForHostedProviderWorkInRegistry,
 } from "./updateEverythingMaintenance";
-import { createUpdatePlanItemResolver, retryExecutionPlan } from "./updateEverythingExecution";
+import {
+  createUpdatePlanClaimOwner,
+  createUpdatePlanItemResolver,
+  retryExecutionPlan,
+} from "./updateEverythingExecution";
 import { downloadUpdateForPlan, observeDesktopInstallFailure } from "./updateEverythingDesktop";
 import {
   runUpdatePlan,
   type UpdateExecutionPlan,
   type UpdatePlanItem,
   type UpdatePlanPorts,
+  type UpdatePlanStore,
 } from "./updateEverythingPlan";
 import { updatePlanStore } from "./updateEverythingPlanStore";
 import { stackedThreadToast, toastManager } from "../ui/toast";
@@ -310,6 +316,13 @@ export function DesktopUpdateLaunchNotice() {
 }
 
 const rendererClaimId = randomUUID();
+const claimOwner = createUpdatePlanClaimOwner(
+  rendererClaimId,
+  () => {
+    void wakeUpdatePlan();
+  },
+  globalThis.navigator?.locks,
+);
 let desktopNotAppliedVersion: string | null = null;
 let coordinatorRunning = false;
 let coordinatorAgain = false;
@@ -317,6 +330,7 @@ let recoveryPlanId: string | null = null;
 const executingItems = new Set<string>();
 let displayedPlanId: string | null = null;
 let storageStopped = false;
+let displayGeneration = 0;
 
 function planReady(plan: UpdateExecutionPlan): boolean {
   if (storageStopped) return false;
@@ -340,12 +354,17 @@ const planItemResolver = createUpdatePlanItemResolver(
 );
 const resolvePlanItem = planItemResolver.resolve;
 
-export function waitForHostedMaintenance(): Promise<void> {
+function waitForHostedMaintenance(): Promise<void> {
   return waitForHostedMaintenanceInRegistry(appAtomRegistry, updateOptionsSnapshotAtom);
+}
+
+export function waitForHostedProviderWork(): Promise<void> {
+  return waitForHostedProviderWorkInRegistry(appAtomRegistry, updateOptionsSnapshotAtom);
 }
 
 const planPorts: UpdatePlanPorts = {
   claimId: rendererClaimId,
+  ...(claimOwner.isAlive ? { isClaimOwnerAlive: claimOwner.isAlive } : {}),
   appVersion: APP_VERSION,
   now: Date.now,
   ready: planReady,
@@ -517,6 +536,13 @@ function storageFailure(error: unknown): void {
   );
 }
 
+async function readPlanForDisplay(store: UpdatePlanStore): Promise<UpdateExecutionPlan | null> {
+  const generation = ++displayGeneration;
+  const plan = await store.read();
+  if (generation === displayGeneration && !storageStopped) showPlan(plan);
+  return plan;
+}
+
 async function wakeUpdatePlan(): Promise<void> {
   if (storageStopped) return;
   if (coordinatorRunning) {
@@ -525,13 +551,13 @@ async function wakeUpdatePlan(): Promise<void> {
   }
   coordinatorRunning = true;
   try {
+    await claimOwner.ready;
     do {
       coordinatorAgain = false;
       const store = await updatePlanStore();
-      const plan = await store.read();
-      showPlan(plan);
+      const plan = await readPlanForDisplay(store);
       await runUpdatePlan(store, { ...planPorts, recoveringClaims: plan?.id === recoveryPlanId });
-      showPlan(await store.read());
+      await readPlanForDisplay(store);
     } while (coordinatorAgain);
   } catch (error) {
     storageFailure(error);
@@ -552,7 +578,12 @@ export async function startUpdatePlan(
     const item = options.operations.get(key);
     return item ? [item] : [];
   });
-  if (items.length === 0 || !snapshot.ready) return { status: "empty" };
+  if (items.length === 0 || !snapshot.ready) {
+    toastManager.add(
+      stackedThreadToast({ type: "info", title: "No selected updates can start right now." }),
+    );
+    return { status: "empty" };
+  }
   const plan: UpdateExecutionPlan = {
     schemaVersion: 1,
     id: randomUUID(),
@@ -680,7 +711,12 @@ export function UpdateEverythingCoordinator() {
         if (disposed) return;
         recoveryPlanId = plan?.id ?? null;
         unsubscribe = store.subscribe(() => {
-          void wakeUpdatePlan();
+          void readPlanForDisplay(store)
+            .then(() => {
+              if (disposed || storageStopped) return;
+              void wakeUpdatePlan();
+            })
+            .catch(storageFailure);
         });
         void wakeUpdatePlan();
       })
