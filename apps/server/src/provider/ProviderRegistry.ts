@@ -676,7 +676,6 @@ export const layer = Layer.effect(
       provider: ProviderDriverKind,
       selectedInstanceId: ProviderInstanceId,
     ) {
-      yield* manifestService.forceRefresh;
       const instances = (yield* instanceRegistry.listInstances).filter(
         (instance) =>
           instance.driverKind === provider &&
@@ -706,16 +705,24 @@ export const layer = Layer.effect(
       });
       // Accounts can share an installation, but discovery must use each
       // instance's own executable, environment, and credentials.
-      yield* Effect.forEach(
-        instances,
-        (instance) =>
-          Effect.gen(function* () {
-            yield* instance.invalidateCaches ?? Effect.void;
-            const maintenance = yield* instance.snapshot.resolveMaintenance({ fresh: true });
-            if (maintenance.packageName) {
-              yield* latestVersions.invalidate(maintenance.packageName);
-            }
-          }).pipe(Effect.catchCause((cause) => recoverInstanceFailure(instance.instanceId, cause))),
+      yield* Effect.all(
+        [
+          manifestService.forceRefresh,
+          Effect.forEach(
+            instances,
+            (instance) =>
+              Effect.gen(function* () {
+                yield* instance.invalidateCaches ?? Effect.void;
+                const maintenance = yield* instance.snapshot.resolveMaintenance({ fresh: true });
+                if (maintenance.packageName) {
+                  yield* latestVersions.invalidate(maintenance.packageName);
+                }
+              }).pipe(
+                Effect.catchCause((cause) => recoverInstanceFailure(instance.instanceId, cause)),
+              ),
+            { concurrency: "unbounded", discard: true },
+          ),
+        ],
         { concurrency: "unbounded", discard: true },
       );
       yield* Effect.forEach(

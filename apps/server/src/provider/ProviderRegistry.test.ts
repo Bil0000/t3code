@@ -319,6 +319,118 @@ const layerTestNodeServices = Layer.mergeAll(
 it.layer(
   Layer.mergeAll(layerTestNodeServices, ServerSettingsModule.layerTest(), layerTestHttpClient),
 )("ProviderRegistry", (it) => {
+  it.effect.each(["manifest", "ownership"] as const)(
+    "starts post-update checks together and waits for both when $0 finishes first",
+    (first) =>
+      Effect.gen(function* () {
+        const driver = ProviderDriverKind.make("codex");
+        const instanceId = ProviderInstanceId.make("codex");
+        const provider: ServerProvider = {
+          instanceId,
+          driver,
+          enabled: true,
+          installed: true,
+          version: "1.0.0",
+          status: "ready",
+          auth: { status: "authenticated" },
+          checkedAt: "2026-10-23T00:00:00.000Z",
+          models: [],
+          slashCommands: [],
+          skills: [],
+        };
+        const releaseManifest = yield* Deferred.make<void>();
+        const releaseOwnership = yield* Deferred.make<void>();
+        const manifestFinished = yield* Deferred.make<void>();
+        const ownershipFinished = yield* Deferred.make<void>();
+        let manifestStarted = false;
+        let ownershipStarted = false;
+        const healthChecks: Array<readonly [boolean, boolean]> = [];
+        const instance: ProviderInstance = {
+          instanceId,
+          driverKind: driver,
+          continuationIdentity: { driverKind: driver, continuationKey: "codex:instance:codex" },
+          displayName: undefined,
+          enabled: true,
+          snapshot: {
+            resolveMaintenance: () =>
+              Effect.gen(function* () {
+                ownershipStarted = true;
+                yield* Deferred.await(releaseOwnership);
+                yield* Deferred.succeed(ownershipFinished, undefined);
+                return makeManualOnlyProviderMaintenanceCapabilities({
+                  provider: driver,
+                  packageName: null,
+                });
+              }),
+            getSnapshot: Effect.succeed(provider),
+            refresh: Effect.gen(function* () {
+              healthChecks.push([
+                yield* Deferred.isDone(manifestFinished),
+                yield* Deferred.isDone(ownershipFinished),
+              ]);
+              return provider;
+            }),
+            streamChanges: Stream.empty,
+            applyUsageLimits: () => Effect.void,
+          },
+          orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
+          textGeneration: {} as ProviderInstance["textGeneration"],
+        };
+        const manifest = ModelManifest.BUNDLED_MODEL_MANIFEST;
+        yield* Effect.gen(function* () {
+          const registry = yield* ProviderRegistry.ProviderRegistry;
+          const running = yield* registry
+            .refreshAfterUpdate(driver, instanceId)
+            .pipe(Effect.forkChild({ startImmediately: true }));
+          assert.strictEqual(manifestStarted, true);
+          assert.strictEqual(ownershipStarted, true);
+          assert.deepStrictEqual(healthChecks, []);
+          yield* Deferred.succeed(
+            first === "manifest" ? releaseManifest : releaseOwnership,
+            undefined,
+          );
+          yield* Deferred.await(first === "manifest" ? manifestFinished : ownershipFinished);
+          assert.deepStrictEqual(healthChecks, []);
+          yield* Deferred.succeed(
+            first === "manifest" ? releaseOwnership : releaseManifest,
+            undefined,
+          );
+          assert.strictEqual((yield* Fiber.join(running))[0]?.instanceId, instanceId);
+          assert.deepStrictEqual(healthChecks, [[true, true]]);
+        }).pipe(
+          Effect.provide(
+            ProviderRegistry.layer.pipe(
+              Layer.provide(
+                Layer.succeed(ProviderInstanceRegistry.ProviderInstanceRegistry, {
+                  getInstance: () => Effect.succeed(instance),
+                  listInstances: Effect.succeed([instance]),
+                  listUnavailable: Effect.succeed([]),
+                  streamChanges: Stream.empty,
+                  subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), PubSub.subscribe),
+                }),
+              ),
+              Layer.provide(
+                Layer.succeed(ModelManifest.ModelManifest, {
+                  current: Effect.succeed(manifest),
+                  refresh: Effect.succeed(manifest),
+                  refreshInBackground: Effect.void,
+                  forceRefresh: Effect.gen(function* () {
+                    manifestStarted = true;
+                    yield* Deferred.await(releaseManifest);
+                    yield* Deferred.succeed(manifestFinished, undefined);
+                    return manifest;
+                  }),
+                }),
+              ),
+              Layer.provide(
+                ServerConfig.layerTest(process.cwd(), { prefix: "t3-post-update-parallel-" }),
+              ),
+            ),
+          ),
+        );
+      }),
+  );
+
   describe("checkCodexProviderStatus", () => {
     it.effect("uses the app-server account and model list for provider status", () =>
       Effect.gen(function* () {
