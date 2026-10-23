@@ -453,9 +453,10 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
             }
 
             yield* setRunningMessage("Verifying the installed version");
-            const verifiedProviders = (yield* providerRegistry
-              .refreshAfterUpdate(provider, instanceId)
-              .pipe(Effect.provideService(HttpClient.HttpClient, httpClient))).filter(
+            const verifiedProviders = (yield* providerRegistry.refreshAfterUpdate(
+              provider,
+              instanceId,
+            )).filter(
               (candidate) => candidate.driver === provider && candidate.instanceId === instanceId,
             );
             // A missing version alone is not held against it, since Cursor's `about` probe can

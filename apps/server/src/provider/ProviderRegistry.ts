@@ -71,7 +71,7 @@ export class ProviderRegistry extends Context.Service<
     readonly refreshAfterUpdate: (
       provider: ProviderDriverKind,
       selectedInstanceId: ProviderInstanceId,
-    ) => Effect.Effect<ReadonlyArray<ServerProvider>, never, HttpClient.HttpClient>;
+    ) => Effect.Effect<ReadonlyArray<ServerProvider>>;
 
     readonly refreshWorkspaceSnapshot: (input: {
       readonly instanceId: ProviderInstanceId;
@@ -346,6 +346,7 @@ export const layer = Layer.effect(
     const instanceRegistry = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
     const manifestService = yield* ModelManifest.ModelManifest;
     const latestVersions = yield* ProviderLatestVersions.ProviderLatestVersions;
+    const httpClient = yield* HttpClient.HttpClient;
     const serviceScope = yield* Effect.scope;
     const config = yield* ServerConfig.ServerConfig;
     const fileSystem = yield* FileSystem.FileSystem;
@@ -755,6 +756,7 @@ export const layer = Layer.effect(
               refreshed,
               maintenance,
             ).pipe(
+              Effect.provideService(HttpClient.HttpClient, httpClient),
               Effect.provideService(ProviderLatestVersions.ProviderLatestVersions, latestVersions),
               Effect.catchCause((cause) =>
                 Cause.hasInterruptsOnly(cause)
