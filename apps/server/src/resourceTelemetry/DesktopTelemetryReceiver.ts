@@ -552,7 +552,15 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
         }
 
         if (message.type === "desktopUpdateRestartPolicy") {
-          return applyUpdateRestartPolicy(message).pipe(Effect.flatMap(sendControlMessage));
+          return recordContact.pipe(
+            Effect.andThen(applyUpdateRestartPolicy(message)),
+            Effect.flatMap(sendControlMessage),
+            Effect.catch((error) =>
+              Effect.logWarning("Failed to acknowledge desktop update restart policy", {
+                error: error.message,
+              }),
+            ),
+          );
         }
 
         if (message.type === "desktopUpdateStatus") {
