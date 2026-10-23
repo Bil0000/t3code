@@ -4,9 +4,113 @@ import { RunId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
 import { make, UpdateRestartPolicyError } from "./updateRestartPolicy.ts";
 
 it.layer(NodeServices.layer)("update restart policy", (it) => {
+  it.effect.each([
+    { name: "malformed JSON", contents: "{" },
+    { name: "invalid schema", contents: '{"entries":[],"latestRequestId":42}' },
+  ])("explains how to recover from $name without replacing the policy", ({ contents }) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped();
+      const file = path.join(directory, "policy.json");
+      yield* fs.writeFileString(file, contents);
+      const error = yield* make(file).pipe(Effect.flip);
+      assert.include(error.message, file);
+      assert.include(error.message, "Restore a known valid policy file");
+      assert.include(error.message, "repair its permissions");
+      assert.include(error.message, "before restarting");
+      assert.equal(yield* fs.readFileString(file), contents);
+    }),
+  );
+
+  it.effect("explains how to recover when the policy path is a directory", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped();
+      const file = path.join(directory, "policy.json");
+      yield* fs.makeDirectory(file);
+      const error = yield* make(file).pipe(Effect.flip);
+      assert.include(error.message, file);
+      assert.include(error.message, "Restore a known valid policy file");
+      assert.include(error.message, "before restarting");
+      assert.equal((yield* fs.stat(file)).type, "Directory");
+    }),
+  );
+
+  it.effect("explains unreadable policy recovery without changing the saved veto", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped();
+      const file = path.join(directory, "policy.json");
+      const policy = yield* make(file);
+      yield* policy.set("update", false);
+      const contents = yield* fs.readFileString(file);
+      const error = yield* make(file).pipe(
+        Effect.provideService(FileSystem.FileSystem, {
+          ...fs,
+          readFileString: () =>
+            Effect.fail(
+              PlatformError.systemError({
+                _tag: "PermissionDenied",
+                module: "FileSystem",
+                method: "readFileString",
+                pathOrDescriptor: file,
+              }),
+            ),
+        }),
+        Effect.flip,
+      );
+      assert.include(error.message, file);
+      assert.include(error.message, "repair its permissions");
+      assert.include(error.message, "before restarting");
+      assert.equal(yield* fs.readFileString(file), contents);
+      const restored = yield* make(file);
+      const run = RunId.make("interrupted");
+      yield* restored.capture([run], "startup");
+      assert.isTrue(yield* restored.isVetoed(run));
+    }),
+  );
+
+  it.effect("starts with no veto when the policy file does not exist", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped();
+      const file = path.join(directory, "policy.json");
+      const policy = yield* make(file);
+      const run = RunId.make("interrupted");
+      yield* policy.capture([run], "startup");
+      assert.isFalse(yield* policy.isVetoed(run));
+      assert.isFalse(yield* fs.exists(file));
+      yield* policy.set("update", false);
+      yield* policy.capture([run], "shutdown");
+      assert.isTrue(yield* policy.isVetoed(run));
+    }),
+  );
+
+  it.effect("does not label a runtime write failure as a policy load failure", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped();
+      const parent = path.join(directory, "blocked");
+      const file = path.join(parent, "policy.json");
+      const policy = yield* make(file);
+      yield* fs.writeFileString(parent, "keep");
+      const error = yield* policy.set("update", false).pipe(Effect.flip);
+      assert.notInclude(error.message, "load");
+      assert.notInclude(error.message, "Restore");
+      assert.equal(yield* fs.readFileString(parent), "keep");
+      assert.isFalse(yield* policy.isVetoed(RunId.make("interrupted")));
+    }),
+  );
+
   it.effect("vetoes only interrupted run IDs across restarts and ignores command replay", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

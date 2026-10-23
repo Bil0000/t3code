@@ -28,8 +28,14 @@ const encode = Schema.encodeEffect(Schema.fromJsonString(State));
 
 export class UpdateRestartPolicyError extends Schema.TaggedError<UpdateRestartPolicyError>()(
   "UpdateRestartPolicyError",
-  { cause: Schema.Defect() },
-) {}
+  { cause: Schema.Defect(), filePath: Schema.optionalKey(Schema.String) },
+) {
+  override get message(): string {
+    return this.filePath === undefined
+      ? "Update restart policy operation failed."
+      : `Could not load update restart policy file '${this.filePath}'. Restore a known valid policy file or repair its permissions before restarting the server.`;
+  }
+}
 
 export class UpdateRestartPolicy extends Context.Reference<{
   readonly set: (
@@ -167,7 +173,8 @@ export const make = Effect.fn("UpdateRestartPolicy.make")(
       isVetoed: (runId) => Ref.get(state).pipe(Effect.map((current) => current.vetoed.has(runId))),
     });
   },
-  Effect.mapError((cause) => new UpdateRestartPolicyError({ cause })),
+  (effect, filePath) =>
+    effect.pipe(Effect.mapError((cause) => new UpdateRestartPolicyError({ cause, filePath }))),
 );
 
 export const layer = Layer.effect(
