@@ -20,6 +20,7 @@ import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as Semaphore from "effect/Semaphore";
+import { HttpClient } from "effect/http";
 
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
 import * as ModelManifest from "./ModelManifest.ts";
@@ -39,6 +40,8 @@ import type {
   ProviderWorkspaceSnapshot,
 } from "@t3tools/provider-core/server/driver";
 import {
+  enrichProviderSnapshotWithVersionAdvisory,
+  invalidateLatestProviderVersion,
   makeManualOnlyProviderMaintenanceCapabilities,
   type ProviderMaintenanceCapabilities,
 } from "@t3tools/provider-core/server/maintenanceResolver";
@@ -68,7 +71,7 @@ export class ProviderRegistry extends Context.Service<
     readonly refreshAfterUpdate: (
       provider: ProviderDriverKind,
       selectedInstanceId: ProviderInstanceId,
-    ) => Effect.Effect<ReadonlyArray<ServerProvider>>;
+    ) => Effect.Effect<ReadonlyArray<ServerProvider>, never, HttpClient.HttpClient>;
 
     readonly refreshWorkspaceSnapshot: (input: {
       readonly instanceId: ProviderInstanceId;
@@ -714,9 +717,12 @@ export const layer = Layer.effect(
               Effect.gen(function* () {
                 yield* instance.invalidateCaches ?? Effect.void;
                 const maintenance = yield* instance.snapshot.resolveMaintenance({ fresh: true });
-                if (maintenance.packageName) {
-                  yield* latestVersions.invalidate(maintenance.packageName);
-                }
+                yield* invalidateLatestProviderVersion(maintenance).pipe(
+                  Effect.provideService(
+                    ProviderLatestVersions.ProviderLatestVersions,
+                    latestVersions,
+                  ),
+                );
               }).pipe(
                 Effect.catchCause((cause) => recoverInstanceFailure(instance.instanceId, cause)),
               ),
@@ -733,14 +739,39 @@ export const layer = Layer.effect(
           ),
         { concurrency: "unbounded", discard: true },
       );
-      const refreshedInstanceIds = new Set(
-        instances
-          .filter((instance) => !failedInstances.has(instance.instanceId))
-          .map((instance) => instance.instanceId),
+      const refreshedProviders = yield* Effect.forEach(
+        instances.filter((instance) => !failedInstances.has(instance.instanceId)),
+        (instance) =>
+          Effect.gen(function* () {
+            if ((yield* instanceRegistry.getInstance(instance.instanceId)) !== instance) return;
+            const refreshed = (yield* Ref.get(providersRef)).find(
+              (candidate) => candidate.instanceId === instance.instanceId,
+            );
+            if (!refreshed) return;
+            if (instance.instanceId !== selectedInstanceId) return refreshed;
+            const maintenance = yield* instance.snapshot.resolveMaintenance();
+            if ((yield* instanceRegistry.getInstance(instance.instanceId)) !== instance) return;
+            const verified = yield* enrichProviderSnapshotWithVersionAdvisory(
+              refreshed,
+              maintenance,
+            ).pipe(
+              Effect.provideService(ProviderLatestVersions.ProviderLatestVersions, latestVersions),
+              Effect.catchCause((cause) =>
+                Cause.hasInterruptsOnly(cause)
+                  ? Effect.interrupt
+                  : Effect.logWarning("Provider post-update version verification failed", {
+                      provider,
+                      cause: Cause.pretty(cause),
+                    }).pipe(Effect.as(refreshed)),
+              ),
+            );
+            return (yield* instanceRegistry.getInstance(instance.instanceId)) === instance
+              ? verified
+              : undefined;
+          }),
+        { concurrency: "unbounded" },
       );
-      return (yield* Ref.get(providersRef)).filter((candidate) =>
-        refreshedInstanceIds.has(candidate.instanceId),
-      );
+      return refreshedProviders.filter((candidate) => candidate !== undefined);
     });
 
     const getProviderMaintenanceCapabilitiesForInstance = Effect.fn(
