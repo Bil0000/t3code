@@ -1,5 +1,6 @@
 import { FileTree, useFileTree, useFileTreeSearch } from "@pierre/trees/react";
 import { formatAttachmentSize } from "@t3tools/client-runtime/state/attachments";
+import { filePreviewKind } from "@t3tools/shared/filePreview";
 import {
   ArrowLeftIcon,
   DownloadIcon,
@@ -124,7 +125,11 @@ function ZipEntryFailure(props: {
   readonly onShowPrefix: () => void;
   readonly onSave: () => void;
 }) {
-  const textLike = !props.entry.mimeType?.startsWith("image/");
+  const kind = filePreviewKind({
+    name: props.entry.name,
+    mimeType: props.entry.mimeType ?? "application/octet-stream",
+  });
+  const textLike = kind === "text" || kind === "markdown" || kind === "html";
   if (props.reason === "file-limit")
     return (
       <ZipState

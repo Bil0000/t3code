@@ -328,6 +328,25 @@ describe("ZIP file browsing", () => {
     await vi.waitFor(() => expect(screen.container.textContent).toMatch(/truncat|first 1/));
   });
 
+  it.each([
+    ["report.pdf", "application/pdf"],
+    ["movie.mp4", "video/mp4"],
+    ["audio.mp3", "audio/mpeg"],
+    ["nested.zip", "application/zip"],
+    ["program.bin", null],
+  ] as const)("offers saving without a text prefix for oversized %s", async (name, mimeType) => {
+    setup([{ ...entry(name), mimeType, sizeBytes: 11 * 1024 * 1024 }]);
+    readFile.mockRejectedValueOnce(new ZipPreviewError("Preview limit", "file-limit"));
+    await using screen = await open();
+    await select(screen, name);
+    await expect
+      .element(screen.getByRole("button", { name: "Save file", exact: true }))
+      .toBeVisible();
+    await expect
+      .element(screen.getByRole("button", { name: "Show first 1 MB" }))
+      .not.toBeInTheDocument();
+  });
+
   it("saves an image above the pixel limit without decoding it", async () => {
     setup();
     const bytes = new Uint8Array(24);
