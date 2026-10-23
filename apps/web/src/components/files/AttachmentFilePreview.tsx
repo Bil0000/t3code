@@ -279,7 +279,16 @@ export function AttachmentFilePreview(props: {
   );
 
   if (isZip && !failure && url)
-    return <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">{body}</div>;
+    return (
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
+        {props.header ? (
+          <div className={FILE_SURFACE_SUBHEADER_CLASS} data-surface-subheader>
+            {props.header}
+          </div>
+        ) : null}
+        {body}
+      </div>
+    );
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
       <div className={cn(FILE_SURFACE_SUBHEADER_CLASS)} data-surface-subheader>

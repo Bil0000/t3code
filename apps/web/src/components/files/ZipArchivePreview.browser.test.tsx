@@ -212,6 +212,36 @@ describe("ZIP file browsing", () => {
     await vi.waitFor(() => expect(screen.container.querySelector("pre")?.textContent).toBe(name));
   });
 
+  it("returns from a nested ZIP to the outer files on a phone", async () => {
+    setup();
+    const nested = await new JSZip()
+      .file("inside.txt", "Nested file")
+      .generateAsync({ type: "uint8array" });
+    const file = await realArchive(
+      new JSZip().file("nested.zip", nested).file("outer.txt", "Outer file"),
+    );
+    await using screen = await open({ file }, { width: 390 });
+    const outerFilter = screen.getByRole("searchbox", { name: "Search ZIP files" }).element();
+    await select(screen, "nested.zip");
+    await vi.waitFor(() =>
+      expect(
+        screen.container
+          .querySelectorAll("file-tree-container")[1]
+          ?.shadowRoot?.querySelector<HTMLElement>('[data-item-path="inside.txt"]')
+          ?.checkVisibility(),
+      ).toBe(true),
+    );
+    expect(outerFilter.checkVisibility()).toBe(false);
+    const back = screen.getByRole("button", { name: "Back to ZIP files" });
+    await expect.element(back).toBeVisible();
+    await userEvent.click(back);
+    await vi.waitFor(() => expect(outerFilter.checkVisibility()).toBe(true));
+    await select(screen, "outer.txt");
+    await vi.waitFor(() =>
+      expect(screen.container.querySelector("pre")?.textContent).toBe("Outer file"),
+    );
+  });
+
   it("adds only the selected file from a real ZIP to the chat", async () => {
     setup();
     const target = composerTarget();
