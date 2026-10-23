@@ -116,57 +116,79 @@ it.layer(NodeServices.layer)("ensurePinnedRuntimeInstalled", (it) => {
     }),
   );
 
-  it.effect.each(["checksums", "archive"] as const)(
-    "cancels the other download when the %s request fails",
-    (failedAsset) =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-pinned-download-failed-" });
-        const bodyStarted = yield* Deferred.make<void>();
-        let cancelled = false;
-        const client = HttpClient.make((request) => {
-          const asset = request.url.endsWith("/SHA256SUMS") ? "checksums" : "archive";
-          if (asset === failedAsset) {
-            return Deferred.await(bodyStarted).pipe(
-              Effect.as(HttpClientResponse.fromWeb(request, new Response(null, { status: 503 }))),
-            );
-          }
-          return Effect.succeed(
-            HttpClientResponse.fromWeb(
-              request,
-              new Response(
-                new ReadableStream({
-                  start(controller) {
-                    controller.enqueue(archiveBytes.slice(0, 1));
-                  },
-                  pull() {
-                    Deferred.doneUnsafe(bodyStarted, Effect.void);
-                  },
-                  cancel() {
-                    cancelled = true;
-                  },
-                }),
+  it.effect.each([
+    {
+      name: "the checksums request fails",
+      failedAsset: "checksums",
+      status: 503,
+      step: "downloading the t3 release checksums",
+    },
+    {
+      name: "the archive request fails",
+      failedAsset: "archive",
+      status: 503,
+      step: "downloading the t3 release archive",
+    },
+    {
+      name: "the checksum entry is missing",
+      failedAsset: "checksums",
+      status: 200,
+      step: `finding ${archiveName} in the t3 release checksums`,
+    },
+  ])("cancels the other download when $name", ({ failedAsset, status, step }) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-pinned-download-failed-" });
+      const bodyStarted = yield* Deferred.make<void>();
+      let cancelled = false;
+      const client = HttpClient.make((request) => {
+        const asset = request.url.endsWith("/SHA256SUMS") ? "checksums" : "archive";
+        if (asset === failedAsset) {
+          return Deferred.await(bodyStarted).pipe(
+            Effect.as(
+              HttpClientResponse.fromWeb(
+                request,
+                new Response(status === 200 ? "" : null, { status }),
               ),
             ),
           );
-        });
-        const error = yield* ensurePinnedRuntimeInstalled({
-          baseDir,
-          version,
-          fs: { ...fs, writeFile: () => Effect.die("must not write an incomplete archive") },
-          path,
-          platform: "linux",
-          arch: "x64",
-          httpClient: client,
-          runner: { run: () => Effect.die("must not extract an incomplete archive") },
-          validate: () => Effect.die("must not validate an incomplete archive"),
-        }).pipe(Effect.flip);
-        assert.instanceOf(error, PinnedRuntimeInstallError);
-        assert.equal(error.step, `downloading the t3 release ${failedAsset}`);
-        assert.isTrue(cancelled);
-        assert.deepEqual(yield* fs.readDirectory(path.join(baseDir, "runtime", "versions")), []);
-      }),
+        }
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(
+            request,
+            new Response(
+              new ReadableStream({
+                start(controller) {
+                  controller.enqueue(archiveBytes.slice(0, 1));
+                },
+                pull() {
+                  Deferred.doneUnsafe(bodyStarted, Effect.void);
+                },
+                cancel() {
+                  cancelled = true;
+                },
+              }),
+            ),
+          ),
+        );
+      });
+      const error = yield* ensurePinnedRuntimeInstalled({
+        baseDir,
+        version,
+        fs: { ...fs, writeFile: () => Effect.die("must not write an incomplete archive") },
+        path,
+        platform: "linux",
+        arch: "x64",
+        httpClient: client,
+        runner: { run: () => Effect.die("must not extract an incomplete archive") },
+        validate: () => Effect.die("must not validate an incomplete archive"),
+      }).pipe(Effect.flip);
+      assert.instanceOf(error, PinnedRuntimeInstallError);
+      assert.equal(error.step, step);
+      assert.isTrue(cancelled);
+      assert.deepEqual(yield* fs.readDirectory(path.join(baseDir, "runtime", "versions")), []);
+    }),
   );
 
   it.effect("installs the verified release archive as the runtime executable", () =>
@@ -257,18 +279,7 @@ it.layer(NodeServices.layer)("ensurePinnedRuntimeInstalled", (it) => {
     }),
   );
 
-  it.effect.each([
-    {
-      name: "does not match",
-      checksums: `${"0".repeat(64)}  ${archiveName}\n`,
-      step: "verifying the t3 release archive checksum",
-    },
-    {
-      name: "is missing",
-      checksums: "",
-      step: `finding ${archiveName} in the t3 release checksums`,
-    },
-  ])("refuses to write or extract an archive whose checksum $name", ({ checksums, step }) =>
+  it.effect("refuses to write or extract an archive whose checksum does not match", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -281,12 +292,12 @@ it.layer(NodeServices.layer)("ensurePinnedRuntimeInstalled", (it) => {
         path,
         platform: "linux",
         arch: "x64",
-        httpClient: releaseHttpClient(checksums),
+        httpClient: releaseHttpClient(`${"0".repeat(64)}  ${archiveName}\n`),
         runner: extractingRunner(fs, path, commands),
         validate: () => Effect.die("must not validate an unverified archive"),
       }).pipe(Effect.flip);
       assert.instanceOf(error, PinnedRuntimeInstallError);
-      assert.equal(error.step, step);
+      assert.equal(error.step, "verifying the t3 release archive checksum");
       assert.deepEqual(commands, []);
       assert.deepEqual(yield* fs.readDirectory(path.join(baseDir, "runtime", "versions")), []);
     }),
