@@ -11,7 +11,7 @@ import { fetch } from "expo/fetch";
 import { File } from "expo-file-system";
 import { useNavigation, usePreventRemove } from "@react-navigation/native";
 import { useEffect, useRef, useState } from "react";
-import { Platform, Pressable, ScrollView, TextInput, View } from "react-native";
+import { Keyboard, Platform, Pressable, ScrollView, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { PierreEntryIcon } from "../../components/PierreEntryIcon";
@@ -469,7 +469,14 @@ export function ZipArchiveView(props: {
         onRemove={props.onRemove}
       />
       {state.status === "ready" ? (
-        <ZipArchiveList archive={state.archive} headerInset={headerInset} onOpen={setSelected} />
+        <ZipArchiveList
+          archive={state.archive}
+          headerInset={headerInset}
+          onOpen={(entry) => {
+            Keyboard.dismiss();
+            setSelected(entry);
+          }}
+        />
       ) : (
         <View className="flex-1" style={{ paddingTop: headerInset }}>
           {state.status === "loading" ? (
