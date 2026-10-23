@@ -1,9 +1,19 @@
 import { RegistryContext } from "@effect/atom-react";
-import { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId, type DesktopUpdateState } from "@t3tools/contracts";
+import { runAtomCommand } from "@t3tools/client-runtime/state/runtime";
+import { AsyncResult, type Atom } from "effect/reactivity";
+import { updateOptionsSnapshotAtom } from "./updateEverythingOptions";
+import { updateItemKey, type UpdateOptionMachine } from "./updateEverything.logic";
 import { expect, it, vi } from "vite-plus/test";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
+import { APP_VERSION } from "~/branding";
+import { useDesktopUpdateState } from "~/state/desktopUpdate";
 import { act, render } from "../../../test/render";
-import { runUpdatePlan, type UpdateExecutionPlan } from "./updateEverythingPlan";
+import {
+  runUpdatePlan,
+  type UpdateExecutionPlan,
+  type UpdatePlanPorts,
+} from "./updateEverythingPlan";
 import { updatePlanStore } from "./updateEverythingPlanStore";
 import {
   startUpdatePlan,
@@ -12,6 +22,9 @@ import {
 } from "./updateEverythingRun";
 
 const toast = vi.hoisted(() => vi.fn());
+vi.mock(import("~/state/desktopUpdate"), () => ({
+  useDesktopUpdateState: vi.fn<() => DesktopUpdateState | null>(() => null),
+}));
 vi.mock(import("../ui/toast"), async (original) => {
   const actual = await original();
   return { ...actual, toastManager: { ...actual.toastManager, add: toast } };
@@ -22,17 +35,26 @@ vi.mock(import("./updateEverythingPlan"), async (original) => ({
   runUpdatePlan: vi.fn(),
 }));
 
-vi.mock(import("./updateEverythingOptions"), async () => {
+vi.mock(import("@t3tools/client-runtime/state/runtime"), async (original) => ({
+  ...(await original()),
+  runAtomCommand: vi.fn(),
+}));
+
+const { optionsSnapshotAtom } = await vi.hoisted(async () => {
   const { Atom } = await import("effect/reactivity");
   return {
-    updateOptionsSnapshotAtom: Atom.make({
+    optionsSnapshotAtom: Atom.make<Atom.Type<typeof updateOptionsSnapshotAtom>>({
       ready: true,
       primaryEnvironmentId: null,
       localEnvironmentDisabled: true,
+      canDisableLocalAutoResume: false,
       machines: [],
     }),
   };
 });
+vi.mock(import("./updateEverythingOptions"), () => ({
+  updateOptionsSnapshotAtom: optionsSnapshotAtom,
+}));
 
 vi.mock(import("./updateEverythingPlanStore"), async (original) => {
   const module = await original();
@@ -51,6 +73,157 @@ function Progress() {
     </output>
   );
 }
+
+it.each(["connection", "desktop"] as const)(
+  "does not read update storage for idle %s updates",
+  async (source) => {
+    const store = await updatePlanStore();
+    await store.discard();
+    const originalRead = store.read;
+    using read = vi.spyOn(store, "read").mockResolvedValue(null);
+    const runner = vi.mocked(runUpdatePlan).mockReset().mockResolvedValue(undefined);
+    vi.mocked(useDesktopUpdateState).mockReset();
+    await using screen = await render(
+      <RegistryContext.Provider value={appAtomRegistry}>
+        <UpdateEverythingCoordinator />
+      </RegistryContext.Provider>,
+    );
+    await vi.waitFor(() => expect(runner).toHaveBeenCalled());
+    read.mockImplementation(originalRead).mockClear();
+    using get = vi.spyOn(IDBObjectStore.prototype, "get");
+    if (source === "connection") {
+      await act(() => {
+        appAtomRegistry.update(optionsSnapshotAtom, (snapshot) => ({ ...snapshot }));
+      });
+    } else {
+      vi.mocked(useDesktopUpdateState).mockReturnValue({
+        enabled: true,
+        status: "downloading",
+        channel: "latest",
+        currentVersion: "1.0.0",
+        hostArch: "x64",
+        appArch: "x64",
+        runningUnderArm64Translation: false,
+        availableVersion: "1.0.1",
+        downloadedVersion: null,
+        releaseNotes: [],
+        omittedReleaseCount: 0,
+        downloadPercent: 50,
+        checkedAt: null,
+        message: null,
+        errorContext: null,
+        canRetry: false,
+      });
+      await screen.rerender(
+        <RegistryContext.Provider value={appAtomRegistry}>
+          <UpdateEverythingCoordinator />
+        </RegistryContext.Provider>,
+      );
+    }
+    expect(read).not.toHaveBeenCalled();
+    expect(get).not.toHaveBeenCalled();
+    await act(() => window.dispatchEvent(new Event("focus")));
+    await vi.waitFor(() => expect(get).toHaveBeenCalled());
+    vi.mocked(useDesktopUpdateState).mockReset();
+  },
+);
+
+it("keeps readiness wakes received before a plan is published", async () => {
+  const store = await updatePlanStore();
+  await store.discard();
+  using _read = vi.spyOn(store, "read").mockResolvedValue(null);
+  const runner = vi.mocked(runUpdatePlan).mockReset().mockResolvedValue(undefined);
+  vi.mocked(useDesktopUpdateState).mockReset();
+  await using _screen = await render(
+    <RegistryContext.Provider value={appAtomRegistry}>
+      <UpdateEverythingCoordinator />
+    </RegistryContext.Provider>,
+  );
+  await vi.waitFor(() => expect(runner).toHaveBeenCalled());
+  let entered!: () => void;
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  let finish!: () => void;
+  const finished = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  runner.mockClear().mockImplementationOnce(async () => {
+    entered();
+    await finished;
+  });
+  window.dispatchEvent(new Event("focus"));
+  await started;
+  try {
+    await act(() => {
+      appAtomRegistry.update(optionsSnapshotAtom, (snapshot) => ({ ...snapshot }));
+    });
+  } finally {
+    finish();
+  }
+  await vi.waitFor(() => expect(runner).toHaveBeenCalledTimes(2));
+});
+
+it("loads newly saved plans and resumes them when connections become ready", async () => {
+  const store = await updatePlanStore();
+  await store.discard();
+  const snapshot = appAtomRegistry.get(updateOptionsSnapshotAtom);
+  const actual =
+    await vi.importActual<typeof import("./updateEverythingPlan")>("./updateEverythingPlan");
+  const runner = vi
+    .mocked(runUpdatePlan)
+    .mockReset()
+    .mockImplementation((store, ports) =>
+      actual.runUpdatePlan(store, { ...ports, now: () => 1_000 }),
+    );
+  vi.mocked(useDesktopUpdateState).mockReset();
+  try {
+    await using screen = await render(
+      <RegistryContext.Provider value={appAtomRegistry}>
+        <UpdateEverythingCoordinator />
+        <Progress />
+      </RegistryContext.Provider>,
+    );
+    await vi.waitFor(() => expect(runner).toHaveBeenCalled());
+    await act(() => {
+      appAtomRegistry.update(optionsSnapshotAtom, (current) => ({ ...current, ready: false }));
+    });
+    await store.create({
+      schemaVersion: 1,
+      id: "readiness",
+      primaryEnvironmentId: null,
+      sourceVersion: APP_VERSION,
+      createdAt: 1_000,
+      phase: "servers",
+      pausedReason: null,
+      items: [
+        {
+          key: "server:remote",
+          kind: "server",
+          environmentId: EnvironmentId.make("remote"),
+          label: "remote",
+          fromVersion: "1.0.0",
+          targetVersion: "1.0.1",
+          driver: null,
+          instanceId: null,
+          continueThreads: false,
+          status: "done",
+          claimId: null,
+          message: null,
+        },
+      ],
+    });
+    await expect.element(screen.getByRole("status")).toHaveTextContent("remote: done");
+    expect((await store.read())?.phase).toBe("servers");
+    await act(() => {
+      appAtomRegistry.update(optionsSnapshotAtom, (current) => ({ ...current, ready: true }));
+    });
+    await vi.waitFor(async () => expect((await store.read())?.phase).toBe("complete"));
+  } finally {
+    appAtomRegistry.update(optionsSnapshotAtom, () => snapshot);
+    await store.discard();
+  }
+});
 
 it("publishes committed device results while another update is still running", async () => {
   const store = await updatePlanStore();
@@ -149,4 +322,101 @@ it("tells the user when none of the chosen updates can start", async () => {
     expect.objectContaining({ type: "info", title: "No selected updates can start right now." }),
   );
   expect(await (await updatePlanStore()).read()).toBeNull();
+});
+
+it("persists the fourth OFF argument and sends it to native and server updates", async () => {
+  const store = await updatePlanStore();
+  await store.discard();
+  const snapshot = appAtomRegistry.get(updateOptionsSnapshotAtom);
+  const original = { ...snapshot };
+  const bridge = Object.getOwnPropertyDescriptor(window, "desktopBridge");
+  const installUpdate = vi.fn(async () => ({ accepted: true, state: { status: "downloaded" } }));
+  const machine = (id: string, hostedByThisApp: boolean): UpdateOptionMachine => ({
+    environmentId: EnvironmentId.make(id),
+    label: id,
+    hostedByThisApp,
+    connected: true,
+    enabled: true,
+    canMaintain: true,
+    canManageProviders: true,
+    connectionPhase: "connected",
+    sessionInitialized: true,
+    sessionReady: true,
+    providers: [],
+    updateState: { status: "idle" },
+    serverConfig: {
+      environment: {
+        environmentId: EnvironmentId.make(id),
+        label: id,
+        platform: { os: "linux", arch: "x64" },
+        serverVersion: "0.0.1",
+        capabilities: {
+          repositoryIdentity: true,
+          serverSelfUpdate: "boot-service",
+          threadRestartContinuation: true,
+          threadRestartContinuationControl: true,
+        },
+      },
+      settings: { continueThreadsAfterServerUpdate: false },
+    },
+  });
+  const local = machine("local", true);
+  const remote = machine("remote", false);
+  Object.assign(snapshot, {
+    primaryEnvironmentId: local.environmentId,
+    canDisableLocalAutoResume: true,
+    machines: [local, remote],
+  });
+  Object.defineProperty(window, "desktopBridge", {
+    configurable: true,
+    value: { supportsUpdateThreadContinuationControl: true, installUpdate },
+  });
+  let capture!: (ports: UpdatePlanPorts) => void;
+  const ready = new Promise<UpdatePlanPorts>((resolve) => {
+    capture = resolve;
+  });
+  vi.mocked(runUpdatePlan)
+    .mockReset()
+    .mockImplementation(async (_store, ports) => {
+      capture(ports);
+    });
+  vi.mocked(runAtomCommand).mockReset().mockResolvedValue(AsyncResult.success(undefined));
+  try {
+    expect(
+      await startUpdatePlan(
+        new Set([
+          updateItemKey("app", local.environmentId),
+          updateItemKey("server", remote.environmentId),
+        ]),
+        "9.9.9",
+        true,
+        false,
+      ),
+    ).toEqual({ status: "started" });
+    const ports = await ready;
+    const saved = (await store.read())!;
+    expect(saved.items.map((item) => item.autoResume)).toEqual([false, false]);
+    expect(await ports.install(saved.items.find((item) => item.kind === "app")!)).toBe(true);
+    expect(installUpdate).toHaveBeenCalledWith("9.9.9", false);
+    expect(await ports.execute(saved.items.find((item) => item.kind === "server")!)).toEqual({
+      status: "done",
+    });
+    expect(runAtomCommand).toHaveBeenCalledWith(
+      appAtomRegistry,
+      expect.anything(),
+      {
+        environmentId: remote.environmentId,
+        input: { targetVersion: "9.9.9", continueRunningThreads: false },
+      },
+      { reportFailure: false },
+    );
+  } finally {
+    Object.assign(snapshot, original);
+    Object.defineProperty(
+      window,
+      "desktopBridge",
+      bridge ?? { configurable: true, value: undefined },
+    );
+    await store.discard();
+  }
 });

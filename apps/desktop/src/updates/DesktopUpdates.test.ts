@@ -498,6 +498,212 @@ describe("DesktopUpdates", () => {
     }),
   );
 
+  it.effect.each([true, undefined])("preserves update restart preferences for %s", (choice) => {
+    const harness = makeHarness();
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+        harness.emit("update-downloaded", { version: "1.2.4" });
+        yield* flushCallbacks;
+        assert.isTrue((yield* updates.installPrepared("1.2.4", choice)).accepted);
+        assert.deepEqual(harness.restartPolicies, []);
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
+  it.effect("requires every backend to acknowledge OFF before any backend stops", () =>
+    Effect.gen(function* () {
+      const preparing = yield* Deferred.make<void>();
+      const accepted = yield* Deferred.make<boolean>();
+      const stopped: string[] = [];
+      const instances = [
+        DesktopBackendPool.PRIMARY_INSTANCE_ID,
+        DesktopBackendPool.BackendInstanceId("wsl:Ubuntu"),
+      ].map((id, index) => ({
+        id,
+        label: Effect.succeed(id),
+        start: Effect.void,
+        stop: () =>
+          Effect.sync(() => {
+            stopped.push(id);
+          }),
+        currentConfig: Effect.succeedNone,
+        snapshot: Effect.succeed({
+          desiredRunning: true,
+          ready: index === 0,
+          activePid: Option.some(123 + index),
+          restartAttempt: 0,
+          restartScheduled: false,
+        }),
+        waitForReady: () => Effect.succeed(true),
+      }));
+      const harness = makeHarness({
+        backendInstances: instances,
+        requestUpdateRestartPolicy: () =>
+          Deferred.succeed(preparing, undefined).pipe(Effect.andThen(Deferred.await(accepted))),
+      });
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const updates = yield* DesktopUpdates.DesktopUpdates;
+          yield* updates.configure;
+          harness.emit("update-downloaded", { version: "1.2.4" });
+          yield* flushCallbacks;
+          const installing = yield* updates.installPrepared("1.2.4", false).pipe(Effect.forkScoped);
+          yield* Deferred.await(preparing);
+          assert.deepEqual(stopped, []);
+          assert.equal(harness.quitAndInstalls(), 0);
+          assert.sameMembers(
+            [...harness.restartPolicies[0]!.sourceIds],
+            instances.map((instance) => instance.id),
+          );
+          yield* Deferred.succeed(accepted, true);
+          assert.isTrue((yield* Fiber.join(installing)).accepted);
+          assert.sameMembers(
+            stopped,
+            instances.map((instance) => instance.id),
+          );
+          assert.deepEqual(harness.clearedRestartPolicies, [
+            harness.restartPolicies[0]!.policy.requestId,
+          ]);
+        }),
+      ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+    }),
+  );
+
+  it.effect("disarms untouched backends when OFF preparation is refused", () => {
+    const harness = makeHarness({
+      requestUpdateRestartPolicy: (_sourceIds, policy) =>
+        Effect.succeed(policy.continueRunningThreads),
+    });
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        const desktopState = yield* DesktopState.DesktopState;
+        yield* updates.configure;
+        harness.emit("update-downloaded", { version: "1.2.4" });
+        yield* flushCallbacks;
+        const result = yield* updates.installPrepared("1.2.4", false);
+        assert.isTrue(result.failed);
+        assert.equal(harness.quitAndInstalls(), 0);
+        assert.deepEqual(
+          harness.restartPolicies.map(({ policy }) => policy.continueRunningThreads),
+          [false, true],
+        );
+        assert.equal(
+          harness.restartPolicies[0]!.policy.requestId,
+          harness.restartPolicies[1]!.policy.requestId,
+        );
+        assert.isFalse(yield* Ref.get(desktopState.quitting));
+        assert.deepEqual(harness.installSteps, []);
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
+  it.effect(
+    "skips policy for an already stopped backend and refuses a stale selected version",
+    () => {
+      const harness = makeHarness({ backendDesiredRunning: false });
+      return Effect.scoped(
+        Effect.gen(function* () {
+          const updates = yield* DesktopUpdates.DesktopUpdates;
+          yield* updates.configure;
+          harness.emit("update-downloaded", { version: "1.2.4" });
+          yield* flushCallbacks;
+          assert.isFalse((yield* updates.installPrepared("1.2.3", false)).accepted);
+          assert.isTrue((yield* updates.installPrepared("1.2.4", false)).accepted);
+          assert.deepEqual(harness.restartPolicies, []);
+        }),
+      ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+    },
+  );
+
+  it.effect.each(["changed", "missing", "membership"] as const)(
+    "refuses OFF when backend state changes: %s",
+    (state) => {
+      let pid = state === "missing" ? Option.none<number>() : Option.some(123);
+      let stops = 0;
+      let prepared = false;
+      const instance: DesktopBackendPool.DesktopBackendInstance = {
+        id: DesktopBackendPool.PRIMARY_INSTANCE_ID,
+        label: Effect.succeed("Windows"),
+        start: Effect.void,
+        stop: () =>
+          Effect.sync(() => {
+            stops += 1;
+          }),
+        currentConfig: Effect.succeedNone,
+        snapshot: Effect.sync(() => ({
+          desiredRunning: true,
+          ready: true,
+          activePid: pid,
+          restartAttempt: 0,
+          restartScheduled: false,
+        })),
+        waitForReady: () => Effect.succeed(true),
+      };
+      const harness = makeHarness({
+        backendInstances: [instance],
+        backendList: Effect.sync(() =>
+          state === "membership" && prepared
+            ? [instance, { ...instance, id: DesktopBackendPool.BackendInstanceId("wsl:Ubuntu") }]
+            : [instance],
+        ),
+        requestUpdateRestartPolicy: () =>
+          Effect.sync(() => {
+            prepared = true;
+            if (state === "changed") pid = Option.some(456);
+            return true;
+          }),
+      });
+      return Effect.scoped(
+        Effect.gen(function* () {
+          const updates = yield* DesktopUpdates.DesktopUpdates;
+          yield* updates.configure;
+          harness.emit("update-downloaded", { version: "1.2.4" });
+          yield* flushCallbacks;
+          assert.isTrue((yield* updates.installPrepared("1.2.4", false)).failed);
+          assert.equal(stops, 0);
+          assert.equal(harness.quitAndInstalls(), 0);
+          assert.deepEqual(
+            harness.restartPolicies.map(({ policy }) => policy.continueRunningThreads),
+            state === "missing" ? [] : [false, true],
+          );
+        }),
+      ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+    },
+  );
+
+  it.effect("keeps OFF for stopped backends when the native installer throws", () => {
+    const harness = makeHarness({
+      quitAndInstall: Effect.fail(
+        new ElectronUpdater.ElectronUpdaterQuitAndInstallError({
+          channel: "latest",
+          isSilent: true,
+          isForceRunAfter: true,
+          cause: new Error("installer refused"),
+        }),
+      ),
+    });
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+        harness.emit("update-downloaded", { version: "1.2.4" });
+        yield* flushCallbacks;
+        assert.isTrue((yield* updates.installPrepared("1.2.4", false)).failed);
+        assert.deepEqual(
+          harness.restartPolicies.map(({ policy }) => policy.continueRunningThreads),
+          [false],
+        );
+        assert.deepEqual(harness.clearedRestartPolicies, [
+          harness.restartPolicies[0]!.policy.requestId,
+        ]);
+        assert.deepEqual(harness.installSteps, ["quitAndInstall", "startBackend"]);
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
   it.effect("keeps windows and restarts backends when quitAndInstall fails", () => {
     const harness = makeHarness({
       quitAndInstall: Effect.fail(

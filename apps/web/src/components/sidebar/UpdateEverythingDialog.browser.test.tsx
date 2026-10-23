@@ -85,10 +85,12 @@ function setup(running: Record<string, number> = {}) {
   return { dialog, onConfirm, [Symbol.dispose]: () => registry.dispose() };
 }
 
+const expand = (device: string) =>
+  userEvent.click(page.getByRole("button", { name: `${device} updates` }));
 const confirmed = (onConfirm: ReturnType<typeof vi.fn>) =>
   [...(onConfirm.mock.calls[0]![0] as ReadonlySet<string>)].toSorted();
 
-const checkbox = (name: string) => page.getByRole("checkbox", { name, exact: true });
+const checkbox = (name: string | RegExp) => page.getByRole("checkbox", { name, exact: true });
 const update = () => page.getByRole("button", { name: "Update", exact: true });
 const press = (locator: Locator) => act(() => (locator.element() as HTMLElement).click());
 
@@ -96,6 +98,7 @@ it("confirms only the items left selected, skipping T3 while keeping its tools",
   using test = setup();
   await using _screen = await render(test.dialog(devices()));
 
+  await expand("MacBook");
   await userEvent.click(page.getByRole("region", { name: "MacBook" }).getByText("T3 Code"));
   await expect.element(page.getByText("Devices update first, then their tools.")).toBeVisible();
   await press(update());
@@ -108,6 +111,7 @@ it("shows a device as mixed and toggles all of its items from the header", async
   await using _screen = await render(test.dialog(devices()));
   const studio = page.getByRole("region", { name: "Studio" });
 
+  await expand("Studio");
   await userEvent.click(studio.getByText("Codex"));
   await expect.element(checkbox("Studio1 of 2")).toHaveAttribute("aria-checked", "mixed");
   await expect.element(checkbox("All3 of 4")).toHaveAttribute("aria-checked", "mixed");
@@ -134,8 +138,10 @@ it("keeps cleared choices and leaves new items unchecked when the catalog change
   using test = setup();
   await using screen = await render(test.dialog(devices()));
 
+  await expand("MacBook");
   await userEvent.click(page.getByRole("region", { name: "MacBook" }).getByText("Claude"));
   await screen.rerender(test.dialog(devices([item("opencode", { label: "OpenCode" })])));
+  await expand("Studio");
 
   await expect.element(page.getByRole("checkbox", { name: /OpenCode/ })).not.toBeChecked();
   await press(update());
@@ -154,6 +160,7 @@ it("shows why an item is unavailable and drops a selected item that became unava
     ),
   };
   await screen.rerender(test.dialog(next));
+  await expand("Studio");
 
   const codex = page.getByRole("checkbox", { name: /Codex/ });
   await expect.element(codex).toBeDisabled();
@@ -167,8 +174,56 @@ it("warns about interrupted threads only for selected restarts", async () => {
   await using _screen = await render(test.dialog(devices()));
 
   await expect.element(page.getByText("3 running threads will be interrupted.")).toBeVisible();
+  await expand("MacBook");
+  await expand("Studio");
   await userEvent.click(page.getByRole("region", { name: "MacBook" }).getByText("T3 Code"));
   await expect.element(page.getByText("1 running thread will be interrupted.")).toBeVisible();
   await userEvent.click(page.getByRole("region", { name: "Studio" }).getByText("T3 Code"));
   await expect.element(page.getByRole("note")).not.toBeInTheDocument();
+});
+
+it("toggles a collapsed device from its checkbox without expanding it", async () => {
+  using test = setup();
+  await using _screen = await render(test.dialog(devices()));
+
+  await userEvent.click(checkbox("Studio2 of 2"));
+  await expect.element(checkbox("Studio0 of 2")).not.toBeChecked();
+  await expect.element(page.getByRole("checkbox", { name: /Codex/ })).not.toBeInTheDocument();
+
+  await expand("Studio");
+  await expect.element(page.getByRole("checkbox", { name: /Codex/ })).not.toBeChecked();
+  await press(update());
+  expect(confirmed(test.onConfirm)).toEqual(["app", "claude"]);
+});
+
+it("offers resume control without running threads and skips T3 updates that cannot honor off", async () => {
+  using test = setup();
+  const list = devices();
+  list[0] = { ...list[0]!, items: [{ ...app, canDisableAutoResume: true }, list[0]!.items[1]!] };
+  await using _screen = await render(test.dialog(list));
+  const resume = checkbox(/^Resume interrupted threads/);
+  const studioT3 = page
+    .getByRole("region", { name: "Studio" })
+    .getByRole("checkbox", { name: /T3 Code/ });
+
+  await expand("Studio");
+  await expect.element(resume).toBeChecked();
+  await expect.element(page.getByRole("note")).not.toBeInTheDocument();
+
+  await press(resume);
+  await expect.element(studioT3).toBeDisabled();
+  await expect
+    .element(studioT3)
+    .toHaveAccessibleDescription("Cannot turn off thread resume on this version");
+  await expect
+    .element(resume)
+    .toHaveAccessibleDescription("Skips 1 T3 Code update that can't turn this off.");
+
+  await press(resume);
+  await expect.element(studioT3).toBeChecked();
+
+  await press(resume);
+  await press(update());
+  expect(confirmed(test.onConfirm)).toEqual(["app", "claude", "codex"]);
+  expect(test.onConfirm.mock.calls[0]![1]).toBe(false);
 });

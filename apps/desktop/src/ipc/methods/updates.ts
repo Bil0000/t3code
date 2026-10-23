@@ -43,13 +43,22 @@ export const downloadUpdate = DesktopIpc.makeIpcMethod({
 
 export const installUpdate = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.UPDATE_INSTALL_CHANNEL,
-  payload: Schema.UndefinedOr(Schema.String),
+  payload: Schema.Union([
+    Schema.UndefinedOr(Schema.String),
+    Schema.Struct({
+      expectedVersion: Schema.optional(Schema.String),
+      continueRunningThreads: Schema.optional(Schema.Boolean),
+    }),
+  ]),
   result: DesktopUpdateActionResultSchema,
-  handler: Effect.fn("desktop.ipc.updates.install")(function* (expectedVersion) {
+  handler: Effect.fn("desktop.ipc.updates.install")(function* (input) {
+    const expectedVersion = typeof input === "object" ? input.expectedVersion : input;
+    const continueRunningThreads =
+      typeof input === "object" ? input.continueRunningThreads : undefined;
     const updates = yield* DesktopUpdates.DesktopUpdates;
-    return yield* expectedVersion === undefined
+    return yield* expectedVersion === undefined && continueRunningThreads === undefined
       ? updates.install
-      : updates.installPrepared(expectedVersion);
+      : updates.installPrepared(expectedVersion, continueRunningThreads);
   }),
 });
 

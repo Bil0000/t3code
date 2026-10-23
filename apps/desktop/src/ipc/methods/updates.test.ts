@@ -14,6 +14,21 @@ describe("update install IPC", () => {
     { expectedVersion: "1.2.4", accepted: false },
     { expectedVersion: "1.2.5", accepted: true },
     { expectedVersion: undefined, accepted: true },
+    {
+      expectedVersion: { expectedVersion: "1.2.4", continueRunningThreads: true },
+      accepted: false,
+    },
+    { expectedVersion: { expectedVersion: "1.2.5", continueRunningThreads: true }, accepted: true },
+    { expectedVersion: { continueRunningThreads: true }, accepted: true },
+    {
+      expectedVersion: { expectedVersion: "1.2.5", continueRunningThreads: false },
+      accepted: true,
+    },
+    {
+      expectedVersion: { expectedVersion: "1.2.4", continueRunningThreads: false },
+      accepted: false,
+    },
+    { expectedVersion: { continueRunningThreads: false }, accepted: true },
   ])("guards the selected version $expectedVersion", ({ expectedVersion, accepted }) => {
     const harness = makeHarness();
     return Effect.scoped(
@@ -28,6 +43,14 @@ describe("update install IPC", () => {
           .pipe(Effect.flatMap(Schema.decodeUnknownEffect(DesktopUpdateActionResultSchema)));
         assert.equal(result.accepted, accepted);
         assert.equal(harness.quitAndInstalls(), accepted ? 1 : 0);
+        assert.equal(
+          harness.restartPolicies.length,
+          typeof expectedVersion === "object" &&
+            expectedVersion.continueRunningThreads === false &&
+            accepted
+            ? 1
+            : 0,
+        );
       }),
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });

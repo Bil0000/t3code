@@ -35,6 +35,7 @@ export interface UpdatePickerItem {
   readonly note: string | null;
   readonly disabledReason: string | null;
   readonly restarts: readonly RestartingMachine[];
+  readonly canDisableAutoResume?: boolean;
 }
 
 export interface UpdatePickerDevice {
@@ -429,8 +430,11 @@ export function collectUpdateOptions(input: {
   readonly machines: readonly UpdateOptionMachine[];
   readonly localVersion: string | null;
   readonly npmPublished: boolean;
+  readonly autoResume?: boolean | undefined;
+  readonly canDisableLocalAutoResume?: boolean;
 }) {
   const { machines, primaryEnvironmentId, localVersion, npmPublished } = input;
+  const autoResume = input.autoResume !== false;
   const targetVersion = localVersion ?? APP_VERSION;
   const serverTargets = collectServerUpdateTargets(machines, targetVersion);
   const targets = new Map(serverTargets.targets.map((target) => [target.environmentId, target]));
@@ -458,6 +462,7 @@ export function collectUpdateOptions(input: {
     driver: null,
     instanceId: null,
     continueThreads: false,
+    autoResume,
     status: "pending",
     claimId: null,
     message: null,
@@ -465,6 +470,12 @@ export function collectUpdateOptions(input: {
   const primary = hosted.find((machine) => machine.environmentId === primaryEnvironmentId);
   if (localVersion && primary) {
     const key = updateItemKey("app", primary.environmentId);
+    const canDisableAutoResume =
+      input.canDisableLocalAutoResume === true &&
+      hosted.every(
+        (machine) =>
+          machine.serverConfig?.environment.capabilities.threadRestartContinuationControl === true,
+      );
     add(
       currentItems,
       {
@@ -480,9 +491,12 @@ export function collectUpdateOptions(input: {
           primary.connected &&
           primary.sessionReady &&
           primary.serverConfig?.environment.environmentId === primary.environmentId
-            ? null
+            ? !autoResume && !canDisableAutoResume
+              ? "This app cannot disable thread resume for an update"
+              : null
             : "Local connection is not ready",
         restarts: collectRestartingMachines(machines, [], true),
+        canDisableAutoResume,
       },
       { ...operation(key, "app", primary, localVersion), fromVersion: APP_VERSION },
     );
@@ -505,6 +519,10 @@ export function collectUpdateOptions(input: {
       const disabledReason =
         unavailableReason ??
         skip ??
+        (!autoResume &&
+        machine.serverConfig?.environment.capabilities.threadRestartContinuationControl !== true
+          ? "This version cannot disable thread resume for an update"
+          : null) ??
         (target?.selfUpdate !== "desktop-managed" && !npmPublished ? "Not on npm yet" : null);
       add(
         items,
@@ -516,6 +534,9 @@ export function collectUpdateOptions(input: {
           fromVersion: machine.serverConfig?.environment.serverVersion ?? null,
           toVersion: target?.selfUpdate === "desktop-managed" ? null : targetVersion,
           note: target?.selfUpdate === "desktop-managed" ? "Uses that device's update feed" : null,
+          canDisableAutoResume:
+            machine.serverConfig?.environment.capabilities.threadRestartContinuationControl ===
+            true,
           disabledReason,
           restarts: collectRestartingMachines(
             machines,

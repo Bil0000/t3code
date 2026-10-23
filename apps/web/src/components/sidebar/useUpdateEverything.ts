@@ -18,7 +18,7 @@ export function useUpdateEverything(localUpdateVersion: string | null) {
     hasUpdates: count > 0,
     summary: "Choose " + count + " update" + (count === 1 ? "" : "s"),
     devices,
-    run: (selection: ReadonlySet<UpdateItemKey>) =>
-      startUpdatePlan(selection, localUpdateVersion, npmPublished),
+    run: (selection: ReadonlySet<UpdateItemKey>, autoResume = true) =>
+      startUpdatePlan(selection, localUpdateVersion, npmPublished, autoResume),
   };
 }

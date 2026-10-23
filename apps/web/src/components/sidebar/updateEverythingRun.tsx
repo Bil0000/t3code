@@ -379,8 +379,13 @@ const planPorts: UpdatePlanPorts = {
   countdown: () => waitForUpdateRestart(5_000),
   install: async (item) => {
     if (!window.desktopBridge) return false;
+    if (
+      item.autoResume === false &&
+      window.desktopBridge.supportsUpdateThreadContinuationControl !== true
+    )
+      return false;
     try {
-      const result = await window.desktopBridge.installUpdate(item.targetVersion);
+      const result = await window.desktopBridge.installUpdate(item.targetVersion, item.autoResume);
       return (
         result.accepted &&
         !(result.state.status === "error" && result.state.errorContext === "install")
@@ -404,6 +409,14 @@ const planPorts: UpdatePlanPorts = {
           item.retryRequested === true,
         ).targets[0];
         if (!target) return { status: "skipped", message: "T3 update is no longer available" };
+        if (
+          item.autoResume === false &&
+          machine.serverConfig?.environment.capabilities.threadRestartContinuationControl !== true
+        )
+          return {
+            status: "skipped",
+            message: "This version cannot disable thread resume for an update",
+          };
         const result = await runAtomCommand(
           appAtomRegistry,
           serverEnvironment.updateServer,
@@ -411,11 +424,13 @@ const planPorts: UpdatePlanPorts = {
             environmentId: item.environmentId,
             input: {
               targetVersion: item.targetVersion,
-              ...(item.continueThreads &&
-              target.threadContinuation &&
-              target.continueThreadsAfterServerUpdate
-                ? { continueRunningThreads: true }
-                : {}),
+              ...(item.autoResume === false
+                ? { continueRunningThreads: false }
+                : item.continueThreads &&
+                    target.threadContinuation &&
+                    target.continueThreadsAfterServerUpdate
+                  ? { continueRunningThreads: true }
+                  : {}),
             },
           },
           { reportFailure: false },
@@ -570,10 +585,11 @@ export async function startUpdatePlan(
   selection: ReadonlySet<UpdateItemKey>,
   localVersion: string | null,
   npmPublished: boolean,
+  autoResume = true,
 ): Promise<{ status: "started" | "busy" | "empty" }> {
   if (storageStopped) return { status: "empty" };
   const snapshot = appAtomRegistry.get(updateOptionsSnapshotAtom);
-  const options = collectUpdateOptions({ ...snapshot, localVersion, npmPublished });
+  const options = collectUpdateOptions({ ...snapshot, localVersion, npmPublished, autoResume });
   const items = [...new Set(selection)].flatMap((key) => {
     const item = options.operations.get(key);
     return item ? [item] : [];
@@ -727,7 +743,7 @@ export function UpdateEverythingCoordinator() {
     let disposed = false;
     let unsubscribe = () => {};
     const unsubscribeOptions = appAtomRegistry.subscribe(updateOptionsSnapshotAtom, () => {
-      void wakeUpdatePlan();
+      if (displayedPlanId !== null || coordinatorRunning) void wakeUpdatePlan();
     });
     void updatePlanStore()
       .then(async (store) => {
@@ -763,7 +779,7 @@ export function UpdateEverythingCoordinator() {
         .then((store) => store.change((plan) => observeDesktopInstallFailure(plan, desktop)))
         .then(() => wakeUpdatePlan())
         .catch(storageFailure);
-    } else void wakeUpdatePlan();
+    } else if (displayedPlanId !== null || coordinatorRunning) void wakeUpdatePlan();
   }, [desktop]);
   return null;
 }

@@ -633,3 +633,55 @@ it("bounds an unresolved provider check and preserves definite skips", () => {
     ]).status,
   ).toBe("skipped");
 });
+
+it("keeps ON as the default and records explicit OFF apart from legacy continueThreads", () => {
+  const local = optionMachine("local", { hostedByThisApp: true });
+  const remote = optionMachine("remote");
+  const machines = [local, remote].map((target) => ({
+    ...target,
+    serverConfig: {
+      ...target.serverConfig!,
+      environment: {
+        ...target.serverConfig!.environment,
+        capabilities: {
+          ...target.serverConfig!.environment.capabilities,
+          threadRestartContinuationControl: true,
+        },
+      },
+    },
+  }));
+  const options = {
+    canDisableLocalAutoResume: true,
+    primaryEnvironmentId: local.environmentId,
+    machines,
+    localVersion: "0.0.2",
+    npmPublished: true,
+  };
+  for (const autoResume of [undefined, true, false]) {
+    const result = collectUpdateOptions({ ...options, autoResume });
+    expect(result.operations.size).toBe(2);
+    for (const operation of result.operations.values()) {
+      expect(operation.autoResume).toBe(autoResume ?? true);
+      expect(operation.continueThreads).toBe(false);
+    }
+  }
+});
+
+it("keeps legacy updates available on ON and refuses OFF without host proof", () => {
+  const local = optionMachine("local", { hostedByThisApp: true });
+  const remote = optionMachine("remote");
+  const options = {
+    primaryEnvironmentId: local.environmentId,
+    machines: [local, remote],
+    localVersion: "0.0.2",
+    npmPublished: true,
+  };
+  expect(collectUpdateOptions(options).operations.size).toBe(2);
+  const off = collectUpdateOptions({ ...options, autoResume: false });
+  expect(off.operations.size).toBe(0);
+  expect(
+    off.devices
+      .flatMap((device) => device.items)
+      .every((item) => item.canDisableAutoResume === false),
+  ).toBe(true);
+});

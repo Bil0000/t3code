@@ -8,7 +8,7 @@ notice.
 ## Update everything at once
 
 The update button at the bottom of the sidebar lets you choose updates for each
-connected device. Select the T3 Code app and provider tools separately. You can
+connected device. Expand a device to select its T3 Code app and provider tools separately. You can
 leave T3 Code unchanged on a device and still update its providers.
 
 If you select the desktop app you are using, it updates and restarts first.
@@ -34,9 +34,11 @@ If the selected desktop app restarts on its old version, the remaining updates
 pause. T3 Code does not install that version again on its own. Retry the app
 update, or choose to continue without it.
 
-The confirmation counts only the running threads that your selected restarts
-will interrupt, and how many can resume afterwards. See **Continue threads after
-restarts** below.
+The picker counts the running threads that your selected restarts will interrupt.
+**Resume interrupted threads** is on by default and follows device and project
+continuation settings. Turn it off to keep affected threads stopped for this
+update without changing those settings. This requires support from every affected
+host. Desktop app updates with running WSL backends cannot use resume OFF.
 
 ## Before you update
 

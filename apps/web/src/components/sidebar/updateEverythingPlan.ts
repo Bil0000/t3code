@@ -16,6 +16,7 @@ const Item = Schema.Struct({
   driver: Schema.NullOr(ProviderDriverKind),
   instanceId: Schema.NullOr(ProviderInstanceId),
   continueThreads: Schema.Boolean,
+  autoResume: Schema.optionalKey(Schema.Boolean),
   status: Schema.Literals(["pending", "claimed", "done", "failed", "skipped", "unknown"]),
   claimId: Schema.NullOr(Schema.String),
   message: Schema.NullOr(Schema.String),

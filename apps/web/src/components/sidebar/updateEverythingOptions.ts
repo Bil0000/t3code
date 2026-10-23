@@ -40,6 +40,8 @@ export const updateOptionsSnapshotAtom = Atom.make((get) => {
     ready: catalog.isReady,
     primaryEnvironmentId: get(primaryEnvironmentIdAtom),
     localEnvironmentDisabled: isLocalEnvironmentDisabled(),
+    canDisableLocalAutoResume:
+      window.desktopBridge?.supportsUpdateThreadContinuationControl === true,
     machines,
   };
 }).pipe(Atom.withLabel("update-options-snapshot"));

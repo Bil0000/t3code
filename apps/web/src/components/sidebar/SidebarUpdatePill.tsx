@@ -335,10 +335,10 @@ function SidebarUpdateControl() {
       .finally(() => setIsActionPending(false));
   };
 
-  const runEverything = async (selection: ReadonlySet<string>) => {
+  const runEverything = async (selection: ReadonlySet<string>, autoResume: boolean) => {
     setIsConfirmingEverything(false);
     setIsActionPending(true);
-    const result = await settlePromise(() => everything.run(selection));
+    const result = await settlePromise(() => everything.run(selection, autoResume));
     setIsActionPending(false);
     if (result._tag === "Success") {
       if (result.value.status === "busy") {
@@ -386,7 +386,7 @@ function SidebarUpdateControl() {
       open={isConfirmingEverything}
       onOpenChange={setIsConfirmingEverything}
       devices={everything.devices}
-      onConfirm={(selection) => void runEverything(selection)}
+      onConfirm={(selection, autoResume) => void runEverything(selection, autoResume)}
     />
   );
 
