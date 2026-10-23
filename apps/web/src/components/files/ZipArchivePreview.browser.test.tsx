@@ -640,6 +640,34 @@ describe("ZIP file browsing", () => {
     );
   });
 
+  it("offers saving a small unsupported SVG without decoding it or losing the tree", async () => {
+    setup();
+    const file = await realArchive(
+      new JSZip()
+        .file("icon.svg", '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"/>')
+        .file("app.ts", "export const answer = 42;"),
+    );
+    await using screen = await open({ file });
+    using createUrl = vi.spyOn(URL, "createObjectURL");
+    await select(screen, "icon.svg");
+    const failure = screen.getByRole("alert");
+    await expect.element(failure).toBeVisible();
+    expect(failure.element().textContent).toContain(
+      "Cannot safely preview this image. Download the ZIP to open it.",
+    );
+    await expect
+      .element(screen.getByRole("button", { name: "Save file", exact: true }))
+      .toBeVisible();
+    expect(screen.container.textContent).not.toContain("Too large");
+    expect(screen.container.querySelector("img")).toBeNull();
+    expect(createUrl).not.toHaveBeenCalled();
+    await back(screen);
+    await select(screen, "app.ts");
+    await vi.waitFor(() =>
+      expect(screen.container.querySelector("pre")?.textContent).toBe("export const answer = 42;"),
+    );
+  });
+
   it.each([
     ["File preview supports files up to 10 MiB.", "file-limit", "Too big to preview in full"],
     [
@@ -649,7 +677,7 @@ describe("ZIP file browsing", () => {
     ],
     [
       "Cannot safely preview this image. Download the ZIP to open it.",
-      "corrupt-entry",
+      "unsupported",
       "Cannot safely preview this image. Download the ZIP to open it.",
     ],
   ] as const)(

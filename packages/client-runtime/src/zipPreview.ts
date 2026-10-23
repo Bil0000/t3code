@@ -316,7 +316,7 @@ function readFile(
           fail(
             new ZipPreviewError(
               "Cannot safely preview this image. Download the ZIP to open it.",
-              "image-limit",
+              "unsupported",
             ),
           );
           return;

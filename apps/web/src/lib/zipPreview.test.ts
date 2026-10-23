@@ -327,9 +327,10 @@ describe("loadZipPreview", () => {
     const preview = await loadZipPreview(await archive(new JSZip().file(name, bytes)), signal());
     const blob = vi.spyOn(globalThis, "Blob");
     try {
-      await expect(preview.readFile(preview.entries[0]!, signal())).rejects.toThrow(
-        /16 million pixels.*8,192.*Download the ZIP/i,
-      );
+      await expect(preview.readFile(preview.entries[0]!, signal())).rejects.toMatchObject({
+        reason: "image-limit",
+        message: expect.stringMatching(/16 million pixels.*8,192.*Download the ZIP/i),
+      });
       expect(blob).not.toHaveBeenCalled();
     } finally {
       blob.mockRestore();
@@ -376,6 +377,7 @@ describe("loadZipPreview", () => {
   });
 
   it.each([
+    ["photo.svg", '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>'],
     ["photo.svg", '<svg xmlns="http://www.w3.org/2000/svg" width="10000" height="10000"/>'],
     ["photo.avif", "unsupported header"],
     ["photo.bmp", "BM"],
@@ -387,9 +389,10 @@ describe("loadZipPreview", () => {
     ["photo.png", '<svg xmlns="http://www.w3.org/2000/svg"/>'],
   ])("blocks unreadable dimensions without decoding: %s", async (name, bytes) => {
     const preview = await loadZipPreview(await archive(new JSZip().file(name, bytes)), signal());
-    await expect(preview.readFile(preview.entries[0]!, signal())).rejects.toThrow(
-      /Cannot safely preview this image.*Download the ZIP/i,
-    );
+    await expect(preview.readFile(preview.entries[0]!, signal())).rejects.toMatchObject({
+      reason: "unsupported",
+      message: expect.stringMatching(/Cannot safely preview this image.*Download the ZIP/i),
+    });
   });
 
   it.each([
@@ -592,10 +595,14 @@ describe("loadZipPreview", () => {
       expect((await preview.readFile(empty, signal())).size).toBe(0);
       const createBlob = vi.spyOn(globalThis, "Blob");
       try {
-        await expect(preview.readFile(broken, signal())).rejects.toThrow(/file data is corrupt/i);
-        await expect(preview.readFile(brokenEmpty, signal())).rejects.toThrow(
-          /file data is corrupt/i,
-        );
+        await expect(preview.readFile(broken, signal())).rejects.toMatchObject({
+          reason: "corrupt-entry",
+          message: expect.stringMatching(/file data is corrupt/i),
+        });
+        await expect(preview.readFile(brokenEmpty, signal())).rejects.toMatchObject({
+          reason: "corrupt-entry",
+          message: expect.stringMatching(/file data is corrupt/i),
+        });
         expect(createBlob).not.toHaveBeenCalled();
       } finally {
         createBlob.mockRestore();
