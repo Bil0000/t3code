@@ -460,7 +460,7 @@ export function ZipArchiveView(props: {
         name={props.name}
         subtitle={
           archive
-            ? `${archive.fileCount} ${archive.fileCount === 1 ? "file" : "files"} · ${formatAttachmentSize(props.sizeBytes)}`
+            ? `${archive.fileCount} ${archive.fileCount === 1 ? "file" : "files"}${props.sizeBytes > 0 ? ` · ${formatAttachmentSize(props.sizeBytes)}` : ""}`
             : props.subtitle
         }
         tintColor={props.tintColor}
