@@ -448,7 +448,11 @@ const planPorts: UpdatePlanPorts = {
         serverEnvironment.updateProvider,
         {
           environmentId: item.environmentId,
-          input: { provider: item.driver, instanceId: item.instanceId },
+          input: {
+            provider: item.driver,
+            instanceId: item.instanceId,
+            ...(item.targetVersion === "latest" ? {} : { targetVersion: item.targetVersion }),
+          },
         },
         { reportFailure: false },
       );

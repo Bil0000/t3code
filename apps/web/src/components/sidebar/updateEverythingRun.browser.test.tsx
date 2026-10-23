@@ -1,5 +1,11 @@
 import { RegistryContext } from "@effect/atom-react";
-import { EnvironmentId, type DesktopUpdateState } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  type DesktopUpdateState,
+  type ServerProvider,
+} from "@t3tools/contracts";
 import { runAtomCommand } from "@t3tools/client-runtime/state/runtime";
 import { AsyncResult, type Atom } from "effect/reactivity";
 import { updateOptionsSnapshotAtom } from "./updateEverythingOptions";
@@ -335,6 +341,124 @@ it("tells the user when none of the chosen updates can start", async () => {
   );
   expect(await (await updatePlanStore()).read()).toBeNull();
 });
+
+it.each(["can-pin", "latest", "legacy-server", "legacy-plan"] as const)(
+  "dispatches the saved provider target for %s updates",
+  async (mode) => {
+    const store = await updatePlanStore();
+    await store.discard();
+    const snapshot = appAtomRegistry.get(updateOptionsSnapshotAtom);
+    const original = { ...snapshot };
+    const provider: ServerProvider = {
+      driver: ProviderDriverKind.make("claudeAgent"),
+      instanceId: ProviderInstanceId.make("selected"),
+      enabled: true,
+      installed: true,
+      version: "1.0.0",
+      status: "ready",
+      auth: { status: "authenticated" },
+      checkedAt: "2026-10-23T00:00:00.000Z",
+      models: [],
+      slashCommands: [],
+      skills: [],
+      versionAdvisory: {
+        status: "behind_latest",
+        currentVersion: "1.0.0",
+        latestVersion: "1.1.0",
+        canUpdate: true,
+        ...(mode === "legacy-server" ? {} : { canInstallVersion: mode === "can-pin" }),
+        updateCommand: "claude update",
+        checkedAt: "2026-10-23T00:00:00.000Z",
+        message: null,
+      },
+    };
+    const machine: UpdateOptionMachine = {
+      environmentId: EnvironmentId.make("remote"),
+      label: "remote",
+      hostedByThisApp: false,
+      connected: true,
+      enabled: true,
+      canMaintain: false,
+      canManageProviders: true,
+      connectionPhase: "connected",
+      sessionInitialized: true,
+      sessionReady: true,
+      providers: [provider],
+      updateState: { status: "idle" },
+      serverConfig: {
+        environment: {
+          environmentId: EnvironmentId.make("remote"),
+          label: "remote",
+          platform: { os: "linux", arch: "x64" },
+          serverVersion: APP_VERSION,
+          capabilities: { repositoryIdentity: true },
+        },
+        settings: { continueThreadsAfterServerUpdate: false },
+      },
+    };
+    Object.assign(snapshot, { primaryEnvironmentId: null, machines: [machine] });
+    let capture!: (ports: UpdatePlanPorts) => void;
+    const ready = new Promise<UpdatePlanPorts>((resolve) => {
+      capture = resolve;
+    });
+    vi.mocked(runUpdatePlan)
+      .mockReset()
+      .mockImplementation(async (_store, ports) => {
+        capture(ports);
+      });
+    vi.mocked(runAtomCommand)
+      .mockReset()
+      .mockResolvedValue(
+        AsyncResult.success({
+          providers: [{ ...provider, version: "1.1.0", updateState: { status: "succeeded" } }],
+        }),
+      );
+    try {
+      expect(
+        await startUpdatePlan(
+          new Set([
+            updateItemKey("provider", machine.environmentId, provider.driver, provider.instanceId),
+          ]),
+          null,
+          false,
+        ),
+      ).toEqual({ status: "started" });
+      const ports = await ready;
+      if (mode === "legacy-plan")
+        await store.change(
+          (plan) =>
+            plan && {
+              ...plan,
+              items: plan.items.map((item) => ({ ...item, targetVersion: "1.1.0" })),
+            },
+        );
+      const item = (await store.read())!.items[0]!;
+      const pinned = mode === "legacy-plan";
+      expect(item.targetVersion).toBe(pinned ? "1.1.0" : "latest");
+      expect(await ports.execute(item)).toEqual({ status: "done" });
+      expect(runAtomCommand).toHaveBeenCalledWith(
+        appAtomRegistry,
+        expect.anything(),
+        {
+          environmentId: machine.environmentId,
+          input: {
+            provider: provider.driver,
+            instanceId: provider.instanceId,
+            ...(pinned ? { targetVersion: "1.1.0" } : {}),
+          },
+        },
+        { reportFailure: false },
+      );
+      vi.mocked(runAtomCommand).mockClear();
+      Object.assign(provider.versionAdvisory!, { latestVersion: "1.2.0" });
+      expect((await ports.execute(item)).status).toBe(pinned ? "skipped" : "done");
+      expect(runAtomCommand).toHaveBeenCalledTimes(pinned ? 0 : 1);
+    } finally {
+      Object.assign(snapshot, original);
+      await store.discard();
+    }
+  },
+);
 
 it("persists the fourth OFF argument and sends it to native and server updates", async () => {
   const store = await updatePlanStore();

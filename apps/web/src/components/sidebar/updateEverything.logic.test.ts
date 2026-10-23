@@ -140,6 +140,101 @@ function provider(driver: string, instance: string): ServerProvider {
   };
 }
 
+it.each([true, false, undefined])(
+  "saves honest provider intent with canInstallVersion=%s",
+  (canInstallVersion) => {
+    const selected = provider("claudeAgent", "selected");
+    const remote = optionMachine("remote", {
+      providers: [
+        {
+          ...selected,
+          versionAdvisory: {
+            ...selected.versionAdvisory!,
+            ...(canInstallVersion === undefined ? {} : { canInstallVersion }),
+          },
+        },
+      ],
+    });
+    const { devices, operations } = collectUpdateOptions({
+      primaryEnvironmentId: null,
+      machines: [remote],
+      localVersion: null,
+      npmPublished: true,
+    });
+    const row = devices.flatMap((device) => device.items).find((item) => item.kind === "provider")!;
+    expect(row.disabledReason).toBeNull();
+    expect(operations.get(row.key)?.targetVersion).toBe("latest");
+    expect(row.toVersion).toBeNull();
+    expect(row.note).toBe("Installer chooses the latest version");
+  },
+);
+
+it.each(["latest", "1.1.0"])(
+  "keeps saved %s intent when the available version changes",
+  (targetVersion) => {
+    const selected = provider("claudeAgent", "selected");
+    const remote = optionMachine("remote", { providers: [selected] });
+    const item = [
+      ...collectUpdateOptions({
+        primaryEnvironmentId: null,
+        machines: [remote],
+        localVersion: null,
+        npmPublished: true,
+      }).operations.values(),
+    ].find((item) => item.kind === "provider")!;
+    const changed = {
+      ...selected,
+      versionAdvisory: {
+        ...selected.versionAdvisory!,
+        latestVersion: "1.2.0",
+        canInstallVersion: false,
+      },
+    };
+    const resolve = (provider: ServerProvider, recovering = false) =>
+      resolveUpdatePlanItem(
+        { ready: true, machines: [{ ...remote, providers: [provider] }] },
+        { ...item, targetVersion },
+        recovering,
+      );
+    expect.soft(resolve(changed).status).toBe(targetVersion === "latest" ? "ready" : "skipped");
+    expect(resolve({ ...changed, version: "1.2.0" }).status).toBe("skipped");
+    expect(resolve({ ...changed, version: "1.2.0" }, true).status).toBe("unknown");
+    const current: ServerProvider = {
+      ...changed,
+      version: "1.2.0",
+      versionAdvisory: { ...changed.versionAdvisory, status: "current", currentVersion: "1.2.0" },
+    };
+    expect(resolve(current, true).status).toBe(targetVersion === "latest" ? "done" : "unknown");
+    expect(
+      resolve(
+        {
+          ...current,
+          version: "1.3.0",
+          versionAdvisory: { ...current.versionAdvisory!, currentVersion: "1.3.0" },
+        },
+        true,
+      ).status,
+    ).toBe(targetVersion === "latest" ? "done" : "unknown");
+    expect(resolve({ ...current, version: "1.3.0" }, true).status).toBe("unknown");
+    expect(resolve({ ...current, enabled: false }, true).status).toBe("unknown");
+    expect(
+      resolve(
+        {
+          ...current,
+          updateState: {
+            status: "running",
+            startedAt: null,
+            finishedAt: null,
+            message: null,
+            output: null,
+          },
+        },
+        true,
+      ).status,
+    ).toBe("wait");
+  },
+);
+
 it("groups primary and local WSL under one app item and keeps exact provider identities", () => {
   const primary = optionMachine("primary", {
     hostedByThisApp: true,

@@ -302,7 +302,14 @@ export function resolveUpdatePlanItem(
       message: "Provider instance removed or disabled",
     };
   if (isProviderUpdateActive(provider)) return { status: "wait" };
-  if (provider.version && exactUpdateVersion(provider.version, item.targetVersion))
+  if (
+    provider.version &&
+    (item.targetVersion === "latest"
+      ? provider.versionAdvisory?.status === "current" &&
+        provider.versionAdvisory.currentVersion !== null &&
+        exactUpdateVersion(provider.version, provider.versionAdvisory.currentVersion)
+      : exactUpdateVersion(provider.version, item.targetVersion))
+  )
     return { status: "done" };
   if (provider.version && provider.version !== item.fromVersion)
     return {
@@ -326,7 +333,10 @@ export function resolveUpdatePlanItem(
   );
   if (!candidate || !canOneClickUpdateProviderCandidate(candidate, machine.providers))
     return { status: "skipped", message: "Provider can no longer update safely" };
-  if (candidate.versionAdvisory.latestVersion !== item.targetVersion)
+  if (
+    item.targetVersion !== "latest" &&
+    candidate.versionAdvisory.latestVersion !== item.targetVersion
+  )
     return {
       status: "skipped",
       message: "Available provider version changed. Review a new selection.",
