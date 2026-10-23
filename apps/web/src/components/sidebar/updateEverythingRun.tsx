@@ -489,45 +489,48 @@ function showPlan(plan: UpdateExecutionPlan | null): void {
     groups.set(item.environmentId, items);
   }
   const app = plan.items.find((item) => item.kind === "app");
-  setUpdateEverythingRun((current) => ({
-    localVersion: app && app.status !== "skipped" ? app.targetVersion : null,
-    phase:
-      plan.phase === "awaiting-local"
-        ? "installing"
-        : current?.phase === "countdown" && plan.phase === "local"
-          ? "countdown"
-          : plan.phase,
-    pausedReason: plan.pausedReason,
-    restartAt: plan.phase === "local" ? (current?.restartAt ?? null) : null,
-    machines: [...groups.entries()].map(([environmentId, items]) => {
-      const server = items.find((item) => item.kind === "server");
-      const failures = items.filter(
-        (item) =>
-          item.status === "failed" || item.status === "unknown" || item.status === "skipped",
-      );
-      return {
-        environmentId,
-        label: items[0]!.label,
-        updatesProviders: items.some((item) => item.kind === "provider"),
-        server: server
-          ? {
-              environmentId,
-              serverLabel: server.label,
-              targetVersion: server.targetVersion,
-              selfUpdate: null,
-            }
-          : null,
-        handedOffVersion: null,
-        startedAt: plan.createdAt,
-        result: items.some((item) => item.status === "pending" || item.status === "claimed")
-          ? null
-          : failures.length > 0
-            ? "failed"
-            : "done",
-        failure: failures.map((item) => item.message ?? "Update skipped").join("\n") || null,
-      };
-    }),
-  }));
+  setUpdateEverythingRun((current) => {
+    const countingDown =
+      current?.phase === "countdown" &&
+      plan.phase === "local" &&
+      current.restartAt !== null &&
+      current.restartAt > Date.now();
+    return {
+      localVersion: app && app.status !== "skipped" ? app.targetVersion : null,
+      phase:
+        plan.phase === "awaiting-local" ? "installing" : countingDown ? "countdown" : plan.phase,
+      pausedReason: plan.pausedReason,
+      restartAt: countingDown ? current.restartAt : null,
+      machines: [...groups.entries()].map(([environmentId, items]) => {
+        const server = items.find((item) => item.kind === "server");
+        const failures = items.filter(
+          (item) =>
+            item.status === "failed" || item.status === "unknown" || item.status === "skipped",
+        );
+        return {
+          environmentId,
+          label: items[0]!.label,
+          updatesProviders: items.some((item) => item.kind === "provider"),
+          server: server
+            ? {
+                environmentId,
+                serverLabel: server.label,
+                targetVersion: server.targetVersion,
+                selfUpdate: null,
+              }
+            : null,
+          handedOffVersion: null,
+          startedAt: plan.createdAt,
+          result: items.some((item) => item.status === "pending" || item.status === "claimed")
+            ? null
+            : failures.length > 0
+              ? "failed"
+              : "done",
+          failure: failures.map((item) => item.message ?? "Update skipped").join("\n") || null,
+        };
+      }),
+    };
+  });
 }
 
 function storageFailure(error: unknown): void {

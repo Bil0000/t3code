@@ -3,7 +3,11 @@ import { EnvironmentId, type DesktopUpdateState } from "@t3tools/contracts";
 import { runAtomCommand } from "@t3tools/client-runtime/state/runtime";
 import { AsyncResult, type Atom } from "effect/reactivity";
 import { updateOptionsSnapshotAtom } from "./updateEverythingOptions";
-import { updateItemKey, type UpdateOptionMachine } from "./updateEverything.logic";
+import {
+  describeUpdateCapsule,
+  updateItemKey,
+  type UpdateOptionMachine,
+} from "./updateEverything.logic";
 import { expect, it, vi } from "vite-plus/test";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { APP_VERSION } from "~/branding";
@@ -16,6 +20,7 @@ import {
 } from "./updateEverythingPlan";
 import { updatePlanStore } from "./updateEverythingPlanStore";
 import {
+  postponeUpdateRestart,
   startUpdatePlan,
   UpdateEverythingCoordinator,
   useUpdateEverythingRun,
@@ -71,6 +76,13 @@ function Progress() {
         .map((machine) => `${machine.label}: ${machine.result ?? "pending"}`)
         .join(", ")}
     </output>
+  );
+}
+
+function RestartProgress({ now }: { now: number }) {
+  const run = useUpdateEverythingRun();
+  return (
+    <output>{run && `${describeUpdateCapsule(run, [], null, now).label}: ${run.restartAt}`}</output>
   );
 }
 
@@ -420,3 +432,108 @@ it("persists the fourth OFF argument and sends it to native and server updates",
     await store.discard();
   }
 });
+
+it.each([6_000, 6_001])(
+  "clears the expired countdown at %s when readiness loss releases the local claim",
+  async (expiredAt) => {
+    const store = await updatePlanStore();
+    await store.discard();
+    const snapshot = appAtomRegistry.get(updateOptionsSnapshotAtom);
+    const actual =
+      await vi.importActual<typeof import("./updateEverythingPlan")>("./updateEverythingPlan");
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let finish!: (restart: boolean) => void;
+    const finished = new Promise<boolean>((resolve) => {
+      finish = resolve;
+    });
+    const install = vi.fn(async () => true);
+    vi.mocked(runUpdatePlan)
+      .mockReset()
+      .mockImplementation((store, ports) =>
+        actual.runUpdatePlan(store, {
+          ...ports,
+          now: () => 1_000,
+          download: async () => true,
+          waitForMaintenance: async () => {},
+          countdown: () => {
+            void ports.countdown();
+            entered();
+            return finished;
+          },
+          install,
+        }),
+      );
+    vi.mocked(useDesktopUpdateState).mockReset();
+    using now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    try {
+      await using screen = await render(
+        <RegistryContext.Provider value={appAtomRegistry}>
+          <UpdateEverythingCoordinator />
+          <RestartProgress now={1_000} />
+        </RegistryContext.Provider>,
+      );
+      await store.create({
+        schemaVersion: 1,
+        id: "countdown",
+        primaryEnvironmentId: snapshot.primaryEnvironmentId,
+        sourceVersion: APP_VERSION,
+        createdAt: 1_000,
+        phase: "local",
+        pausedReason: null,
+        items: [
+          {
+            key: "app:local",
+            kind: "app",
+            environmentId: EnvironmentId.make("local"),
+            label: "local",
+            fromVersion: APP_VERSION,
+            targetVersion: "9.9.9",
+            driver: null,
+            instanceId: null,
+            continueThreads: false,
+            status: "pending",
+            claimId: null,
+            message: null,
+          },
+        ],
+      });
+      await started;
+      await expect.element(screen.getByRole("status")).toHaveTextContent("Restart in 5s: 6000");
+      await act(async () => {
+        await store.change((plan) => plan && { ...plan });
+        await store.read();
+      });
+      await expect.element(screen.getByRole("status")).toHaveTextContent("Restart in 5s: 6000");
+      await act(() => {
+        now.mockReturnValue(expiredAt);
+        appAtomRegistry.update(optionsSnapshotAtom, (current) => ({ ...current, ready: false }));
+        finish(true);
+      });
+      await screen.rerender(
+        <RegistryContext.Provider value={appAtomRegistry}>
+          <UpdateEverythingCoordinator />
+          <RestartProgress now={expiredAt} />
+        </RegistryContext.Provider>,
+      );
+      await vi.waitFor(async () => {
+        const plan = await store.read();
+        expect(plan?.phase).toBe("local");
+        expect(plan?.items[0]).toMatchObject({ status: "pending", claimId: null });
+      });
+      await expect
+        .element(screen.getByRole("status"))
+        .toHaveTextContent("Preparing this device: null");
+      expect(install).not.toHaveBeenCalled();
+      await store.change((plan) => plan && { ...plan, phase: "awaiting-local" });
+      await expect.element(screen.getByRole("status")).toHaveTextContent("Restarting…: null");
+    } finally {
+      finish(true);
+      postponeUpdateRestart();
+      appAtomRegistry.update(optionsSnapshotAtom, () => snapshot);
+      await store.discard();
+    }
+  },
+);
