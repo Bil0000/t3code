@@ -67,6 +67,108 @@ const extractingRunner = (fs: FileSystem.FileSystem, path: Path.Path, commands: 
   });
 
 it.layer(NodeServices.layer)("ensurePinnedRuntimeInstalled", (it) => {
+  it.effect("downloads the archive while release checksums are pending", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-pinned-overlap-" });
+      const checksumsRequested = yield* Deferred.make<void>();
+      const archiveRequested = yield* Deferred.make<void>();
+      const releaseChecksums = yield* Deferred.make<void>();
+      const checksums = yield* validChecksums;
+      const commands: string[] = [];
+      const client = HttpClient.make((request) =>
+        Effect.gen(function* () {
+          const isChecksums = request.url.endsWith("/SHA256SUMS");
+          yield* Deferred.succeed(isChecksums ? checksumsRequested : archiveRequested, undefined);
+          if (isChecksums) yield* Deferred.await(releaseChecksums);
+          return HttpClientResponse.fromWeb(
+            request,
+            new Response(isChecksums ? checksums : archiveBytes),
+          );
+        }),
+      );
+      const install = yield* ensurePinnedRuntimeInstalled({
+        baseDir,
+        version,
+        fs,
+        path,
+        platform: "linux",
+        arch: "x64",
+        httpClient: client,
+        runner: extractingRunner(fs, path, commands),
+        validate: () => Effect.void,
+      }).pipe(Effect.forkScoped);
+      yield* Deferred.await(checksumsRequested);
+      yield* TestClock.adjust(Duration.zero);
+      assert.isTrue(yield* Deferred.isDone(archiveRequested));
+      assert.deepEqual(commands, []);
+      const [staging] = yield* fs.readDirectory(path.join(baseDir, "runtime", "versions"));
+      assert.isDefined(staging);
+      assert.deepEqual(
+        yield* fs.readDirectory(path.join(baseDir, "runtime", "versions", staging)),
+        [],
+      );
+      yield* Deferred.succeed(releaseChecksums, undefined);
+      const installed = yield* Fiber.join(install);
+      assert.equal(yield* fs.readFileString(installed.sentinelPath), `${version}\n`);
+      assert.deepEqual(commands, ["tar"]);
+    }),
+  );
+
+  it.effect.each(["checksums", "archive"] as const)(
+    "cancels the other download when the %s request fails",
+    (failedAsset) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-pinned-download-failed-" });
+        const bodyStarted = yield* Deferred.make<void>();
+        let cancelled = false;
+        const client = HttpClient.make((request) => {
+          const asset = request.url.endsWith("/SHA256SUMS") ? "checksums" : "archive";
+          if (asset === failedAsset) {
+            return Deferred.await(bodyStarted).pipe(
+              Effect.as(HttpClientResponse.fromWeb(request, new Response(null, { status: 503 }))),
+            );
+          }
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              new Response(
+                new ReadableStream({
+                  start(controller) {
+                    controller.enqueue(archiveBytes.slice(0, 1));
+                  },
+                  pull() {
+                    Deferred.doneUnsafe(bodyStarted, Effect.void);
+                  },
+                  cancel() {
+                    cancelled = true;
+                  },
+                }),
+              ),
+            ),
+          );
+        });
+        const error = yield* ensurePinnedRuntimeInstalled({
+          baseDir,
+          version,
+          fs: { ...fs, writeFile: () => Effect.die("must not write an incomplete archive") },
+          path,
+          platform: "linux",
+          arch: "x64",
+          httpClient: client,
+          runner: { run: () => Effect.die("must not extract an incomplete archive") },
+          validate: () => Effect.die("must not validate an incomplete archive"),
+        }).pipe(Effect.flip);
+        assert.instanceOf(error, PinnedRuntimeInstallError);
+        assert.equal(error.step, `downloading the t3 release ${failedAsset}`);
+        assert.isTrue(cancelled);
+        assert.deepEqual(yield* fs.readDirectory(path.join(baseDir, "runtime", "versions")), []);
+      }),
+  );
+
   it.effect("installs the verified release archive as the runtime executable", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -155,7 +257,18 @@ it.layer(NodeServices.layer)("ensurePinnedRuntimeInstalled", (it) => {
     }),
   );
 
-  it.effect("refuses an archive whose checksum does not match the release", () =>
+  it.effect.each([
+    {
+      name: "does not match",
+      checksums: `${"0".repeat(64)}  ${archiveName}\n`,
+      step: "verifying the t3 release archive checksum",
+    },
+    {
+      name: "is missing",
+      checksums: "",
+      step: `finding ${archiveName} in the t3 release checksums`,
+    },
+  ])("refuses to write or extract an archive whose checksum $name", ({ checksums, step }) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -164,16 +277,16 @@ it.layer(NodeServices.layer)("ensurePinnedRuntimeInstalled", (it) => {
       const error = yield* ensurePinnedRuntimeInstalled({
         baseDir,
         version,
-        fs,
+        fs: { ...fs, writeFile: () => Effect.die("must not write an unverified archive") },
         path,
         platform: "linux",
         arch: "x64",
-        httpClient: releaseHttpClient(`${"0".repeat(64)}  ${archiveName}\n`),
+        httpClient: releaseHttpClient(checksums),
         runner: extractingRunner(fs, path, commands),
         validate: () => Effect.die("must not validate an unverified archive"),
       }).pipe(Effect.flip);
       assert.instanceOf(error, PinnedRuntimeInstallError);
-      assert.equal(error.step, "verifying the t3 release archive checksum");
+      assert.equal(error.step, step);
       assert.deepEqual(commands, []);
       assert.deepEqual(yield* fs.readDirectory(path.join(baseDir, "runtime", "versions")), []);
     }),

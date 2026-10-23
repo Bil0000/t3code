@@ -187,27 +187,29 @@ const installFromArchive = Effect.fn("cloud.pinned_runtime.install_archive")(fun
   const fileName = cliArchiveFileName(input.version, platformKey);
 
   input.onProgress?.({ stage: "download", received: 0, total: undefined });
-  const checksums = parseChecksums(
-    new TextDecoder().decode(
-      yield* fetchReleaseAsset(
+  const [checksumBytes, archive] = yield* Effect.all(
+    [
+      fetchReleaseAsset(
         httpClient,
         `${baseUrl}/${CLI_RELEASE_CHECKSUMS_FILE}`,
         "downloading the t3 release checksums",
       ),
-    ),
+      fetchReleaseAsset(
+        httpClient,
+        `${baseUrl}/${fileName}`,
+        "downloading the t3 release archive",
+        input.onProgress,
+      ),
+    ],
+    { concurrency: "unbounded" },
   );
+  const checksums = parseChecksums(new TextDecoder().decode(checksumBytes));
   const expected = checksums.get(fileName);
   if (expected === undefined) {
     return yield* new PinnedRuntimeInstallError({
       step: `finding ${fileName} in the t3 release checksums`,
     });
   }
-  const archive = yield* fetchReleaseAsset(
-    httpClient,
-    `${baseUrl}/${fileName}`,
-    "downloading the t3 release archive",
-    input.onProgress,
-  );
   input.onProgress?.({ stage: "verify" });
   const digest = yield* Effect.tryPromise({
     try: () => crypto.subtle.digest("SHA-256", archive),
