@@ -447,10 +447,14 @@ export function ZipArchiveView(props: {
   readonly onRemove: (() => void) | null;
 }) {
   const { state, retry, cancel } = useZipArchive(props);
-  const [selected, setSelected] = useState<ZipPreviewEntry | null>(null);
+  const [selection, setSelection] = useState<{
+    readonly entries: ZipArchive["entries"];
+    readonly entry: ZipPreviewEntry;
+  } | null>(null);
   const archive = state.status === "ready" ? state.archive : null;
-  const entryOpen = selected !== null && archive !== null;
-  usePreventRemove(entryOpen, () => setSelected(null));
+  const selected = selection && selection.entries === archive?.entries ? selection.entry : null;
+  const entryOpen = selected !== null;
+  usePreventRemove(entryOpen, () => setSelection(null));
   const insets = useSafeAreaInsets();
   const columnMetrics = useNativeColumnLayoutMetrics();
   const headerInset = Platform.OS === "ios" ? (columnMetrics?.safeArea.top ?? insets.top) : 0;
@@ -474,7 +478,7 @@ export function ZipArchiveView(props: {
           headerInset={headerInset}
           onOpen={(entry) => {
             Keyboard.dismiss();
-            setSelected(entry);
+            setSelection({ entries: state.archive.entries, entry });
           }}
         />
       ) : (
@@ -508,7 +512,7 @@ export function ZipArchiveView(props: {
             draftKey={props.draftKey}
             questionPrefix={props.questionPrefix}
             maxAttachmentBytes={props.maxAttachmentBytes}
-            onBack={() => setSelected(null)}
+            onBack={() => setSelection(null)}
           />
         </View>
       ) : null}
