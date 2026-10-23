@@ -664,7 +664,10 @@ export const make = Effect.gen(function* () {
       const policy = yield* Ref.get(installRestartPolicyRef);
       if (Option.isNone(policy)) return true;
       const { requestId, instances, stopped } = policy.value;
-      const untouched = instances.filter((instance) => !stopped.has(instance));
+      const currentInstances = yield* pool.list;
+      const untouched = instances.filter(
+        (instance) => !stopped.has(instance) && currentInstances.includes(instance),
+      );
       if (disarmUntouched && untouched.length > 0) {
         const accepted = yield* telemetry.requestUpdateRestartPolicy(
           untouched.map((instance) => instance.id),

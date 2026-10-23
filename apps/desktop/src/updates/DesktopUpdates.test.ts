@@ -681,6 +681,107 @@ describe("DesktopUpdates", () => {
       }),
   );
 
+  it.effect.each(["removed", "replaced", "remaining"] as const)(
+    "reconciles a refused rollback with current backend instances: %s",
+    (state) => {
+      const stopped: string[] = [];
+      let acceptRollback = false;
+      const original: DesktopBackendPool.DesktopBackendInstance = {
+        id: DesktopBackendPool.BackendInstanceId("wsl:Ubuntu"),
+        label: Effect.succeed("WSL (Ubuntu)"),
+        start: Effect.void,
+        stop: () =>
+          Effect.sync(() => {
+            stopped.push("original");
+          }),
+        currentConfig: Effect.succeedNone,
+        snapshot: Effect.succeed({
+          desiredRunning: true,
+          ready: true,
+          activePid: Option.some(123),
+          restartAttempt: 0,
+          restartScheduled: false,
+        }),
+        waitForReady: () => Effect.succeed(true),
+      };
+      const primary = {
+        ...original,
+        id: DesktopBackendPool.PRIMARY_INSTANCE_ID,
+        stop: () =>
+          Effect.sync(() => {
+            stopped.push("primary");
+          }),
+        snapshot: Effect.succeed({
+          desiredRunning: state === "remaining",
+          ready: state === "remaining",
+          activePid: state === "remaining" ? Option.some(456) : Option.none<number>(),
+          restartAttempt: 0,
+          restartScheduled: false,
+        }),
+      };
+      const replacement = {
+        ...original,
+        stop: () =>
+          Effect.sync(() => {
+            stopped.push("replacement");
+          }),
+      };
+      let currentInstances = [primary, original];
+      const harness = makeHarness({
+        backendInstances: currentInstances,
+        backendList: Effect.sync(() => currentInstances),
+        requestUpdateRestartPolicy: () => Effect.sync(() => acceptRollback),
+      });
+
+      return Effect.scoped(
+        Effect.gen(function* () {
+          const updates = yield* DesktopUpdates.DesktopUpdates;
+          const desktopState = yield* DesktopState.DesktopState;
+          yield* updates.configure;
+          harness.emit("update-downloaded", { version: "1.2.4" });
+          yield* flushCallbacks;
+
+          assert.isTrue((yield* updates.installPrepared("1.2.4", false)).failed);
+          const requestId = harness.restartPolicies[0]!.policy.requestId;
+          assert.equal(harness.restartPolicies.length, 2);
+          assert.deepEqual(harness.clearedRestartPolicies, []);
+          assert.deepEqual(stopped, []);
+
+          currentInstances = state === "replaced" ? [primary, replacement] : [primary];
+          const result = yield* updates.installPrepared("1.2.4", true);
+          if (state === "remaining") {
+            assert.isTrue(result.failed);
+            assert.equal(
+              result.state.message,
+              "Could not clear the previous desktop update restart policy. Try again.",
+            );
+            assert.isFalse(yield* Ref.get(desktopState.quitting));
+            assert.deepEqual(stopped, []);
+            assert.equal(harness.quitAndInstalls(), 0);
+            assert.deepEqual(harness.clearedRestartPolicies, []);
+            assert.deepEqual(harness.restartPolicies[2]!.sourceIds, [primary.id]);
+            acceptRollback = true;
+            assert.isFalse((yield* updates.installPrepared("1.2.4", true)).failed);
+            assert.deepEqual(harness.restartPolicies[3]!.sourceIds, [primary.id]);
+          } else {
+            assert.isTrue(result.accepted);
+            assert.isFalse(result.failed);
+            assert.equal(harness.restartPolicies.length, 2);
+          }
+          assert.equal(harness.quitAndInstalls(), 1);
+          assert.deepEqual(
+            stopped,
+            state === "replaced" ? ["primary", "replacement"] : ["primary"],
+          );
+          assert.deepEqual(harness.clearedRestartPolicies, [requestId]);
+          assert.isTrue(
+            harness.restartPolicies.every(({ policy }) => policy.requestId === requestId),
+          );
+        }),
+      ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+    },
+  );
+
   it.effect(
     "skips policy for an already stopped backend and refuses a stale selected version",
     () => {
