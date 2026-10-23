@@ -160,6 +160,11 @@ export class DesktopUpdateUnexpectedActionError extends Schema.TaggedError<Deskt
   }
 }
 
+class DesktopUpdatePreparationError extends Schema.TaggedError<DesktopUpdatePreparationError>()(
+  "DesktopUpdatePreparationError",
+  { message: Schema.String },
+) {}
+
 export type DesktopUpdateConfigureError = never;
 
 export const DesktopUpdateSetChannelError = Schema.Union([
@@ -656,8 +661,8 @@ export const make = Effect.gen(function* () {
 
   const releaseInstallRestartPolicy = Effect.fn("desktop.updates.releaseInstallRestartPolicy")(
     function* (disarmUntouched: boolean) {
-      const policy = yield* Ref.getAndSet(installRestartPolicyRef, Option.none());
-      if (Option.isNone(policy)) return;
+      const policy = yield* Ref.get(installRestartPolicyRef);
+      if (Option.isNone(policy)) return true;
       const { requestId, instances, stopped } = policy.value;
       const untouched = instances.filter((instance) => !stopped.has(instance));
       if (disarmUntouched && untouched.length > 0) {
@@ -670,12 +675,16 @@ export const make = Effect.gen(function* () {
             continueRunningThreads: true,
           },
         );
-        if (!accepted)
+        if (!accepted) {
           yield* logUpdaterError(
             "Desktop update could not clear the restart policy on every untouched backend.",
           );
+          return false;
+        }
       }
       yield* telemetry.clearUpdateRestartPolicy(requestId);
+      yield* Ref.set(installRestartPolicyRef, Option.none());
+      return true;
     },
   );
 
@@ -777,6 +786,16 @@ export const make = Effect.gen(function* () {
         yield* Ref.set(installRunningBackendsRef, []);
 
         return yield* Effect.gen(function* () {
+          if (!(yield* releaseInstallRestartPolicy(true))) {
+            yield* updateState((current) =>
+              reduceDesktopUpdateStateOnInstallFailure(
+                current,
+                "Could not clear the previous desktop update restart policy. Try again.",
+              ),
+            );
+            yield* resetInstallAction;
+            return { accepted: true, completed: false, failed: true };
+          }
           yield* writeUpdateRestartMarker;
           const { downloadedVersion } = yield* Ref.get(updateStateRef);
           if (downloadedVersion !== null) yield* writeInstallRecord(downloadedVersion);
@@ -798,11 +817,10 @@ export const make = Effect.gen(function* () {
               ({ snapshot }) => snapshot.desiredRunning || Option.isSome(snapshot.activePid),
             );
             if (affected.some(({ snapshot }) => Option.isNone(snapshot.activePid))) {
-              return yield* Effect.die(
-                new Error(
+              return yield* new DesktopUpdatePreparationError({
+                message:
                   "Wait for every desktop backend to start before disabling thread continuation.",
-                ),
-              );
+              });
             }
             if (affected.length > 0) {
               const requestId = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
@@ -824,20 +842,19 @@ export const make = Effect.gen(function* () {
                 },
               );
               if (!accepted)
-                return yield* Effect.die(
-                  new Error(
+                return yield* new DesktopUpdatePreparationError({
+                  message:
                     "Every running backend must accept the desktop update restart policy before installing.",
-                  ),
-                );
+                });
             }
             const currentInstances = yield* pool.list;
             if (
               currentInstances.length !== instances.length ||
               currentInstances.some((instance) => !instances.includes(instance))
             ) {
-              return yield* Effect.die(
-                new Error("Desktop backends changed while preparing the update. Try again."),
-              );
+              return yield* new DesktopUpdatePreparationError({
+                message: "Desktop backends changed while preparing the update. Try again.",
+              });
             }
             for (const { instance, snapshot: before } of backendSnapshots) {
               const after = yield* instance.snapshot;
@@ -846,9 +863,9 @@ export const make = Effect.gen(function* () {
                   Option.getOrUndefined(after.activePid) ||
                 before.desiredRunning !== after.desiredRunning
               ) {
-                return yield* Effect.die(
-                  new Error("A desktop backend restarted while preparing the update. Try again."),
-                );
+                return yield* new DesktopUpdatePreparationError({
+                  message: "A desktop backend restarted while preparing the update. Try again.",
+                });
               }
             }
           }
@@ -876,6 +893,13 @@ export const make = Effect.gen(function* () {
           return { accepted: true, completed: false, failed: false };
         }).pipe(
           Effect.catchTags({
+            DesktopUpdatePreparationError: Effect.fn("desktop.updates.handlePreparationFailure")(
+              function* (error) {
+                yield* recoverFailedInstall(error.message);
+                yield* logUpdaterError(error.message, { errorTag: error._tag });
+                return { accepted: true, completed: false, failed: true };
+              },
+            ),
             ElectronUpdaterQuitAndInstallError: Effect.fn("desktop.updates.handleInstallFailure")(
               function* (error) {
                 yield* recoverFailedInstall(error.message);
