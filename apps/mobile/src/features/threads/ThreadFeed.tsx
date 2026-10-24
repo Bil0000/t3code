@@ -573,7 +573,6 @@ function isFileAttachment(attachment: ChatAttachment): attachment is ChatFileAtt
 function MessageAttachmentFile(props: {
   readonly environmentId: EnvironmentId;
   readonly attachment: ChatFileAttachment;
-  readonly onPressPreview: (source: FilePreviewSource) => void;
   readonly onPressVideo: (attachment: ChatFileAttachment, sourceIdentifier: string) => void;
 }) {
   const sourceIdentifier = useId();
@@ -702,27 +701,14 @@ function MessageAttachmentFile(props: {
           className="min-w-0 flex-row items-center gap-3 rounded-xl border border-border bg-card p-3 active:bg-subtle"
           onLongPress={() => shareFile(sourceIdentifier)}
           onPress={() =>
-            isPdf
-              ? props.onPressPreview({
-                  kind: "pdf",
-                  name: attachment.name,
-                  environmentId: props.environmentId,
-                  resource: {
-                    _tag: "attachment",
-                    attachmentId: attachment.id,
-                    fileName: attachment.name,
-                    mimeType: "application/pdf",
-                  },
-                  sourceIdentifier,
-                })
-              : navigation.navigate("ThreadAttachment", {
-                  environmentId: String(props.environmentId),
-                  ...(selectedThread ? { threadId: String(selectedThread.id) } : {}),
-                  attachmentId: attachment.id,
-                  name: attachment.name,
-                  mimeType: attachment.mimeType,
-                  sizeBytes: String(attachment.sizeBytes),
-                })
+            navigation.navigate("ThreadAttachment", {
+              environmentId: String(props.environmentId),
+              ...(selectedThread ? { threadId: String(selectedThread.id) } : {}),
+              attachmentId: attachment.id,
+              name: attachment.name,
+              mimeType: attachment.mimeType,
+              sizeBytes: String(attachment.sizeBytes),
+            })
           }
         >
           <View className="h-12 w-10 shrink-0 items-center justify-center rounded-lg bg-subtle">
@@ -1549,7 +1535,6 @@ function renderFeedEntry(
                           key={attachment.id}
                           environmentId={props.environmentId}
                           attachment={attachment}
-                          onPressPreview={props.onPressPreview}
                           onPressVideo={props.onPressVideo}
                         />
                       ) : (
@@ -1695,7 +1680,6 @@ function renderFeedEntry(
               key={attachment.id}
               environmentId={props.environmentId}
               attachment={attachment}
-              onPressPreview={props.onPressPreview}
               onPressVideo={props.onPressVideo}
             />
           ) : (
