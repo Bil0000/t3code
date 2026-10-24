@@ -31,6 +31,7 @@ import { AttachmentImage } from "../media/AttachmentImage";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ComposerImageThumbnail } from "./ComposerImageThumbnail";
+import type { PreparingComposerImage } from "./preparingComposerImages";
 import {
   attachVideoThumbnail,
   buildExpandedImagePreview,
@@ -106,6 +107,7 @@ function SnapShotAttachmentFrame({
 export function ComposerAttachmentMediaRow({
   images,
   expandedImages,
+  preparingImages,
   videos,
   pendingSnapShotAnimations,
   pendingSnapShotIds,
@@ -124,6 +126,7 @@ export function ComposerAttachmentMediaRow({
 }: {
   readonly images: ReadonlyArray<ComposerImageAttachment>;
   readonly expandedImages: ReadonlyArray<ComposerImageAttachment>;
+  readonly preparingImages: ReadonlyArray<PreparingComposerImage>;
   readonly videos: ReadonlyArray<ComposerFileAttachment>;
   readonly pendingSnapShotAnimations: ReadonlyArray<PendingSnapShotAnimation>;
   readonly pendingSnapShotIds: ReadonlyArray<string>;
@@ -153,14 +156,20 @@ export function ComposerAttachmentMediaRow({
           : "flex-wrap",
       )}
     >
-      {expandedImages
-        .map((image) => {
-          const upload = supportsAttachmentUploads ? uploadsByImageId[image.id] : undefined;
+      {/* A preparing image renders through the same tile, keyed by the id its compressed image
+          takes, so the thumbnail element survives the swap. */}
+      {[
+        ...expandedImages.map((image) => ({ image, ready: image })),
+        ...preparingImages.map((image) => ({ image, ready: null })),
+      ]
+        .map(({ image, ready }) => {
+          const upload =
+            ready && supportsAttachmentUploads ? uploadsByImageId[image.id] : undefined;
+          const source = ready?.source;
           const snapShotAnimationPending =
-            image.source?.kind === "snap-shot" && pendingSnapShotIdSet.has(image.id);
+            source?.kind === "snap-shot" && pendingSnapShotIdSet.has(image.id);
           const snapShotArrival =
-            image.source?.kind === "snap-shot" &&
-            shouldAnimateSnapShotArrival(image.source.capturedAt);
+            source?.kind === "snap-shot" && shouldAnimateSnapShotArrival(source.capturedAt);
           return (
             <SnapShotAttachmentFrame
               key={image.id}
@@ -170,20 +179,21 @@ export function ComposerAttachmentMediaRow({
               arrival={snapShotArrival}
               animateArrival={snapShotAnimations && !snapShotAnimationPending && snapShotArrival}
               animationId={snapShotAnimationPending ? image.id : undefined}
-              animationSource={snapShotAnimationPending ? image.source : undefined}
+              animationSource={snapShotAnimationPending ? source : undefined}
               className={cn(
                 "group/attachment shrink-0 snap-start bg-background",
-                image.source?.kind === "snap-shot"
+                source?.kind === "snap-shot"
                   ? SNAP_SHOT_ATTACHMENT_FRAME_CLASS
                   : "relative h-16 w-16 overflow-hidden rounded-lg border border-border/80",
                 snapShotAnimationPending && "invisible",
               )}
             >
-              {image.previewUrl ? (
+              {!ready || ready.previewUrl ? (
                 <button
                   type="button"
-                  className="h-full w-full cursor-zoom-in"
+                  className={cn("h-full w-full", ready && "cursor-zoom-in")}
                   aria-label={`Preview ${image.name}`}
+                  disabled={!ready}
                   onClick={() => {
                     const preview = buildExpandedImagePreview(images, image.id);
                     if (!preview) return;
@@ -195,11 +205,11 @@ export function ComposerAttachmentMediaRow({
                     alt={image.name}
                     className="h-full w-full object-cover"
                     fallback={
-                      isHeicImageFile({ name: image.name, type: image.mimeType }) ? (
+                      ready && isHeicImageFile({ name: ready.name, type: ready.mimeType }) ? (
                         <AttachmentImage
-                          name={image.name}
-                          mimeType={image.mimeType}
-                          src={image.previewUrl}
+                          name={ready.name}
+                          mimeType={ready.mimeType}
+                          src={ready.previewUrl}
                           alt={image.name}
                           className="h-full w-full object-cover"
                         />
@@ -216,9 +226,9 @@ export function ComposerAttachmentMediaRow({
                   {image.name}
                 </div>
               )}
-              {image.source?.kind === "snap-shot" ? (
+              {source?.kind === "snap-shot" ? (
                 <SnapShotAttachmentDetails
-                  source={image.source}
+                  source={source}
                   className={cn(
                     upload?.status === "uploading" && "bottom-4",
                     upload?.status === "failed" && "bottom-8",
@@ -243,12 +253,14 @@ export function ComposerAttachmentMediaRow({
                   </TooltipPopup>
                 </Tooltip>
               )}
-              {upload?.status === "uploading" && (
+              {(ready ? upload?.status === "uploading" : supportsAttachmentUploads) && (
                 <span className="pointer-events-none absolute inset-x-0 bottom-0 bg-background/85 px-1 text-center text-3xs text-foreground">
-                  {formatAttachmentUploadProgress(upload.progress)}
+                  {formatAttachmentUploadProgress(
+                    upload?.status === "uploading" ? upload.progress : 0,
+                  )}
                 </span>
               )}
-              {upload?.status === "failed" && (
+              {ready && upload?.status === "failed" && (
                 <Tooltip>
                   <TooltipTrigger
                     render={
@@ -259,7 +271,7 @@ export function ComposerAttachmentMediaRow({
                         onClick={() =>
                           retryAttachmentUpload({
                             environmentId,
-                            image,
+                            image: ready,
                             draftTarget: attachmentDraftTarget,
                           })
                         }
@@ -276,7 +288,7 @@ export function ComposerAttachmentMediaRow({
               <span
                 className={cn(
                   "absolute right-1 top-1 flex",
-                  image.source?.kind === "snap-shot" &&
+                  source?.kind === "snap-shot" &&
                     "opacity-0 transition-opacity pointer-coarse:opacity-100 group-hover/attachment:opacity-100 group-focus-within/attachment:opacity-100",
                 )}
               >
