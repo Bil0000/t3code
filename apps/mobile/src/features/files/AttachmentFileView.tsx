@@ -228,6 +228,7 @@ export function AttachmentFileView(props: {
       setNativeViewer("unavailable");
       return;
     }
+    setNativeError(null);
     if (props.addToChat) setNativeViewer(null);
     else onBack();
   };

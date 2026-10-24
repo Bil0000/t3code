@@ -76,6 +76,7 @@ vi.mock("expo-file-system", () => ({
   },
 }));
 vi.mock("expo/fetch", () => ({ fetch: vi.fn() }));
+vi.mock("expo-crypto", () => ({ randomUUID: vi.fn() }));
 vi.mock("@react-navigation/native", () => ({
   useNavigation: () => ({}),
   usePreventRemove: (enabled: boolean, remove: () => void) => {
@@ -87,18 +88,52 @@ vi.mock("react-native-safe-area-context", () => ({
 }));
 vi.mock("../../native/native-layout-metrics", () => ({
   useNativeColumnLayoutMetrics: () => null,
+  useNativeLayoutMetrics: () => null,
+  useDeviceType: () => "phone",
 }));
 vi.mock("../../native/StackHeader", () => ({ NativeStackScreenOptions: () => null }));
-vi.mock("../../components/ui/Toolbar", () => ({
-  Toolbar: Object.assign(() => null, { Button: () => null }),
+vi.mock("expo-glass-effect", () => ({ isGlassEffectAPIAvailable: () => false }));
+vi.mock("../layout/AdaptiveWorkspaceLayout", () => ({
+  useAdaptiveWorkspaceLayout: () => ({ layout: { usesSplitView: false }, panes: {} }),
 }));
+vi.mock("../../components/ui/Toolbar", () => {
+  const Slot = (props: { readonly children?: ReactNode }) => <div>{props.children}</div>;
+  return {
+    Toolbar: Object.assign(Slot, {
+      Button: () => null,
+      Menu: Slot,
+      MenuAction: (props: {
+        readonly children?: ReactNode;
+        readonly disabled?: boolean;
+        readonly onPress?: () => void;
+      }) => (
+        <button disabled={props.disabled} onClick={props.onPress}>
+          {props.children}
+        </button>
+      ),
+    }),
+  };
+});
 vi.mock("../../components/ui/AndroidScreenHeader", () => ({ AndroidScreenHeader: () => null }));
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
 vi.mock("../../components/ui/Progress", () => ({ Progress: () => null }));
 vi.mock("../../components/ui/Dialog", () => ({ alert: vi.fn() }));
 vi.mock("../../components/PierreEntryIcon", () => ({ PierreEntryIcon: () => null }));
-vi.mock("../../components/FilePreviewModal", () => ({ FilePreviewModal: () => null }));
-vi.mock("../../lib/attachmentDownload", () => ({ writeGeneratedAttachmentFile: vi.fn() }));
+vi.mock("../../components/FilePreviewModal", () => ({
+  FilePreviewModal: (
+    props: ComponentProps<typeof import("../../components/FilePreviewModal").FilePreviewModal>,
+  ) => (
+    <div role="dialog" aria-label="Native file viewer">
+      <button onClick={() => props.onOpenError?.(new Error("Connection lost"))}>Fail</button>
+      <button onClick={props.onRequestClose}>Close</button>
+    </div>
+  ),
+}));
+vi.mock("../../lib/attachmentDownload", async (importOriginal) => {
+  const { nativeViewerErrorMessage } =
+    await importOriginal<typeof import("../../lib/attachmentDownload")>();
+  return { nativeViewerErrorMessage, writeGeneratedAttachmentFile: vi.fn() };
+});
 vi.mock("../../lib/copyTextWithHaptic", () => ({ copyTextWithHaptic: vi.fn() }));
 vi.mock("./zipEntryActions", () => ({
   addZipEntryToDraft: vi.fn(),
@@ -107,7 +142,6 @@ vi.mock("./zipEntryActions", () => ({
 vi.mock("./SourceFileSurface", () => ({
   SourceFileSurface: (props: { readonly contents: string }) => <pre>{props.contents}</pre>,
 }));
-vi.mock("./FileHeader", () => ({ FileHeader: () => null }));
 vi.mock("./AudioFilePreview", () => ({ AudioFilePreview: () => null }));
 vi.mock("./FileMarkdownPreview", () => ({ FileMarkdownPreview: () => null }));
 vi.mock("./WorkspaceFileWebPreview", () => ({ WorkspaceFileWebPreview: () => null }));
@@ -121,6 +155,7 @@ vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
 }));
 
 import { ZipArchiveView } from "./ZipArchiveView";
+import { AttachmentFileView } from "./AttachmentFileView";
 
 function setup() {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -170,6 +205,7 @@ function setup() {
   };
   return {
     container,
+    root,
     props,
     render: async (input = props) => {
       await act(async () => root.render(<ZipArchiveView {...input} />));
@@ -248,4 +284,54 @@ it("keeps the ZIP filter and archive open when native Back closes a selected ent
   expect(
     screen.container.querySelector<HTMLInputElement>('[aria-label="Filter files in ZIP"]')?.value,
   ).toBe("first");
+});
+
+it("clears the native error after a successful retry and keeps Add to chat available", async () => {
+  const screen = setup();
+  const onBack = vi.fn();
+  await act(async () =>
+    screen.root.render(
+      <AttachmentFileView
+        title="guide.pdf"
+        subtitle="PDF"
+        document={{
+          kind: "pdf",
+          renderedMode: null,
+          activeMode: "source",
+          uri: "file:///guide.pdf",
+          content: null,
+          table: null,
+          error: null,
+          needsText: false,
+          setRendered: () => {},
+          retry: () => {},
+          revision: 0,
+          share: async () => {},
+          sharing: false,
+        }}
+        nativeSource={{ kind: "pdf", uri: "file:///guide.pdf", name: "guide.pdf" }}
+        environmentId={null}
+        htmlRender={false}
+        addToChat={{ onPress: () => {}, busy: false }}
+        onRemove={null}
+        onBack={onBack}
+      />,
+    ),
+  );
+  const button = (label: string) =>
+    Array.from(screen.container.querySelectorAll("button")).find(
+      (element) => element.textContent === label,
+    )!;
+  await act(async () => button("Fail").click());
+  await act(async () => button("Close").click());
+  const error = "The file could not be opened. Check the connection and try again.";
+  expect(screen.container.textContent).toContain(error);
+
+  await act(async () => button("Try again").click());
+  await act(async () => button("Close").click());
+
+  expect(screen.container.querySelector('[role="dialog"]')).toBeNull();
+  expect(onBack).not.toHaveBeenCalled();
+  expect(button("Add to chat").disabled).toBe(false);
+  expect(screen.container.textContent).not.toContain(error);
 });
