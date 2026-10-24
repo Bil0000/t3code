@@ -8,13 +8,20 @@ import { useEffect, useId, useRef, useState } from "react";
 import { Platform, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Svg, { Defs, LinearGradient, Rect, Stop } from "react-native-svg";
-import { EnvironmentId, type ProjectReadFileResult, ThreadId } from "@t3tools/contracts";
+import {
+  type AssetResource,
+  EnvironmentId,
+  type ProjectReadFileResult,
+  ThreadId,
+} from "@t3tools/contracts";
 import { videoMimeType } from "@t3tools/shared/video";
 import {
+  hostPreviewMimeTypeFromExtension,
   isWorkspaceBrowserPreviewPath,
   isWorkspaceImagePreviewPath,
   mediaMimeTypeFromExtension,
 } from "@t3tools/shared/filePreview";
+import { clampFileAttachmentUploadBytes } from "@t3tools/client-runtime/state/attachments";
 import { mediaFileReference } from "@t3tools/client-runtime/media-reference";
 
 import { ScreenContent } from "../../components/ui/ScreenContent";
@@ -24,6 +31,10 @@ import { FilePreviewModal, type FilePreviewSource } from "../../components/FileP
 import { LoadingScreen } from "../../components/LoadingScreen";
 import { resolveFileSelectionNavigationAction } from "../../lib/adaptive-navigation";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
+import { downloadAttachmentForPreview } from "../../lib/attachmentDownload";
+import { scopedThreadKey } from "../../lib/scopedEntities";
+import { useRefreshAssetUrl } from "../../state/assets";
+import { useEnvironmentServerConfig } from "../../state/entities";
 import { isPdfFile } from "../../lib/filePreview";
 import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
@@ -69,6 +80,9 @@ import {
   isVideoPreviewFile,
 } from "./filePath";
 import { useWorkspaceFileAssetUrlState } from "./workspaceFileAssetUrl";
+import { FileHeader } from "./FileHeader";
+import { addFileToDraft } from "./zipEntryActions";
+import { useFileActions } from "./useFileActions";
 
 function FilesBrowserHeader(props: {
   readonly projectName: string;
@@ -102,80 +116,6 @@ function FilesBrowserHeader(props: {
             ]
           : undefined
       }
-    />
-  );
-}
-
-function FileHeader(props: {
-  readonly title: string;
-  readonly subtitle: string;
-  readonly iconColor: string;
-  readonly activeMode: string;
-  readonly fileInspectorSupported: boolean;
-  readonly onBack: () => void;
-  readonly onReturnToThread: () => void;
-  readonly actions: ReadonlyArray<{
-    readonly id: string;
-    readonly title: string;
-    readonly icon: string;
-    readonly inline: boolean;
-    readonly onPress: () => unknown;
-  }>;
-}) {
-  const { panes, toggleAuxiliaryPane } = useAdaptiveWorkspaceLayout();
-  const modes = props.actions.filter(({ inline }) => inline);
-  return (
-    <AppBar
-      title={props.title}
-      subtitle={props.subtitle}
-      onBack={props.onBack}
-      hideBottomBorder
-      options={{ headerTintColor: props.iconColor, headerTitle: props.title }}
-      backInSplitView={
-        props.fileInspectorSupported
-          ? {
-              accessibilityLabel: "Return to chat",
-              icon: "chevron.left",
-              onPress: props.onReturnToThread,
-            }
-          : undefined
-      }
-      actions={
-        props.fileInspectorSupported
-          ? [
-              {
-                accessibilityLabel: panes.auxiliaryPaneVisible
-                  ? "Hide file navigator"
-                  : "Show file navigator",
-                icon: "sidebar.right",
-                selected: panes.auxiliaryPaneVisible,
-                onPress: toggleAuxiliaryPane,
-              },
-            ]
-          : undefined
-      }
-      menus={[
-        {
-          title: "File actions",
-          icon: "ellipsis",
-          separateBackground: false,
-          items: [
-            ...(modes.length > 0
-              ? [
-                  {
-                    id: "modes",
-                    inline: true,
-                    items: modes.map((action) => ({
-                      ...action,
-                      selected: action.id === props.activeMode,
-                    })),
-                  },
-                ]
-              : []),
-            ...props.actions.filter(({ inline }) => !inline),
-          ],
-        },
-      ]}
     />
   );
 }
@@ -724,6 +664,49 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
       : null,
   );
   const fileData = fileQuery.data as ProjectReadFileResult | null;
+  const capabilities = useEnvironmentServerConfig(environmentId)?.environment.capabilities;
+  const maxAttachmentBytes =
+    capabilities?.attachmentUploads === true && capabilities.fileAttachments
+      ? clampFileAttachmentUploadBytes(capabilities.fileAttachments.maxUploadBytes)
+      : null;
+  const downloadResource: AssetResource | null =
+    assetPreview.resource?._tag === "media-file"
+      ? assetPreview.resource
+      : cwd === null || relativePath === null
+        ? null
+        : threadId !== null
+          ? {
+              _tag: "workspace-file",
+              threadId,
+              path: resolveWorkspaceFilePath(cwd, relativePath),
+              disposition: "attachment",
+            }
+          : { _tag: "draft-workspace-file", cwd, path: relativePath, disposition: "attachment" };
+  const refreshDownloadUrl = useRefreshAssetUrl(environmentId, downloadResource);
+  const fullFile = (() => {
+    if (relativePath === null || downloadResource === null) return null;
+    const attachment = {
+      name: basename(relativePath),
+      mimeType:
+        hostPreviewMimeTypeFromExtension(relativePath.slice(relativePath.lastIndexOf("."))) ??
+        "application/octet-stream",
+    };
+    return {
+      ...attachment,
+      sizeBytes: metadata.data?.byteLength ?? null,
+      open: async (signal: AbortSignal) => {
+        const url = await refreshDownloadUrl();
+        signal.throwIfAborted();
+        if (url === null) throw new Error("Could not prepare this file.");
+        return downloadAttachmentForPreview({ url, attachment, signal });
+      },
+    };
+  })();
+  const draftKey =
+    environmentId !== null && threadId !== null ? scopedThreadKey(environmentId, threadId) : null;
+  const { busy: fileActionBusy, run: runFileAction } = useFileActions(
+    relativePath === null ? "" : basename(relativePath),
+  );
 
   const handleSelectFile = (path: string) => {
     const targetPath =
@@ -803,6 +786,39 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
             icon: "text.alignleft",
             inline: false,
             onPress: () => setCodeWordBreak(!appearance.codeWordBreak),
+          } as const)
+        : null,
+      fullFile !== null && draftKey !== null && maxAttachmentBytes !== null
+        ? ({
+            id: "add-to-chat",
+            title: "Add to chat",
+            icon: "plus.bubble",
+            inline: false,
+            disabled: fileActionBusy !== null,
+            onPress: () =>
+              runFileAction("attach", (signal) =>
+                addFileToDraft({
+                  ...fullFile,
+                  draftKey,
+                  questionPrefix: null,
+                  maxBytes: maxAttachmentBytes,
+                  signal,
+                }),
+              ),
+          } as const)
+        : null,
+      fullFile !== null && !mediaSource
+        ? ({
+            id: "save",
+            title: "Save",
+            icon: "square.and.arrow.up",
+            inline: false,
+            disabled: fileActionBusy !== null,
+            onPress: () =>
+              runFileAction("save", async (signal) => {
+                const file = await fullFile.open(signal);
+                if (file !== null) await file.share(signal).finally(file.dispose);
+              }),
           } as const)
         : null,
       ...(mediaSource

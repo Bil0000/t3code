@@ -5,6 +5,7 @@ import { expect, it, onTestFinished, vi } from "vite-plus/test";
 import type { ZipTreeRow } from "./zipTree";
 
 const files = vi.hoisted(() => new Map<string, Uint8Array>());
+const navigation = vi.hoisted(() => ({ remove: null as (() => void) | null }));
 
 vi.mock("react-native", () => {
   const Slot = (props: { readonly children?: ReactNode }) => <div>{props.children}</div>;
@@ -77,7 +78,9 @@ vi.mock("expo-file-system", () => ({
 vi.mock("expo/fetch", () => ({ fetch: vi.fn() }));
 vi.mock("@react-navigation/native", () => ({
   useNavigation: () => ({}),
-  usePreventRemove: () => {},
+  usePreventRemove: (enabled: boolean, remove: () => void) => {
+    navigation.remove = enabled ? remove : null;
+  },
 }));
 vi.mock("react-native-safe-area-context", () => ({
   useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 0, left: 0 }),
@@ -104,6 +107,18 @@ vi.mock("./zipEntryActions", () => ({
 vi.mock("./SourceFileSurface", () => ({
   SourceFileSurface: (props: { readonly contents: string }) => <pre>{props.contents}</pre>,
 }));
+vi.mock("./FileHeader", () => ({ FileHeader: () => null }));
+vi.mock("./AudioFilePreview", () => ({ AudioFilePreview: () => null }));
+vi.mock("./FileMarkdownPreview", () => ({ FileMarkdownPreview: () => null }));
+vi.mock("./WorkspaceFileWebPreview", () => ({ WorkspaceFileWebPreview: () => null }));
+vi.mock("../threads/HtmlRenderWebView", () => ({ HtmlRenderWebView: () => null }));
+vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
+  useAppearancePreferences: () => ({
+    appearance: { codeWordBreak: false },
+    themeVariables: { "--color-icon": "#000000" },
+    setCodeWordBreak: () => {},
+  }),
+}));
 
 import { ZipArchiveView } from "./ZipArchiveView";
 
@@ -111,6 +126,7 @@ function setup() {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.useFakeTimers({ toFake: ["setImmediate", "clearImmediate"] });
   files.clear();
+  navigation.remove = null;
   files.set(
     "file:///first.zip",
     Uint8Array.from(
@@ -145,6 +161,7 @@ function setup() {
     uri: "file:///first.zip",
     isLocal: true,
     refresh: async () => null,
+    environmentId: null,
     draftKey: null,
     questionPrefix: null,
     maxAttachmentBytes: undefined,
@@ -180,7 +197,6 @@ it.each(["uri", "refresh"] as const)(
     );
 
     await screen.render({ ...screen.props, subtitle: "Updated metadata" });
-    expect(screen.container.querySelector('[aria-label="Back to files"]')).not.toBeNull();
     expect(screen.container.querySelector("pre")?.textContent).toBe("First archive contents");
 
     await screen.render(
@@ -196,8 +212,40 @@ it.each(["uri", "refresh"] as const)(
       ).not.toBeNull();
       expect(screen.container.textContent).not.toContain("Opening ZIP...");
     });
-    expect(screen.container.querySelector('[aria-label="Back to files"]')).toBeNull();
     expect(screen.container.querySelector("pre")).toBeNull();
     expect(screen.container.textContent).not.toContain("Couldn't read this file");
   },
 );
+
+it("keeps the ZIP filter and archive open when native Back closes a selected entry", async () => {
+  const screen = setup();
+  await screen.render();
+  await screen.settle(() =>
+    expect(screen.container.querySelector('[aria-label="first.txt"]')).not.toBeNull(),
+  );
+  const filter = screen.container.querySelector<HTMLInputElement>(
+    '[aria-label="Filter files in ZIP"]',
+  )!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
+      filter,
+      "first",
+    );
+    filter.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () =>
+    screen.container.querySelector<HTMLButtonElement>('[aria-label="first.txt"]')!.click(),
+  );
+  await screen.settle(() =>
+    expect(screen.container.querySelector("pre")?.textContent).toBe("First archive contents"),
+  );
+
+  expect(navigation.remove).not.toBeNull();
+  await act(async () => navigation.remove!());
+
+  expect(screen.container.querySelector("pre")).toBeNull();
+  expect(screen.container.querySelector('[aria-label="first.txt"]')).not.toBeNull();
+  expect(
+    screen.container.querySelector<HTMLInputElement>('[aria-label="Filter files in ZIP"]')?.value,
+  ).toBe("first");
+});

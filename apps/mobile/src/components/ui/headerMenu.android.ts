@@ -21,7 +21,10 @@ export function androidHeaderMenuActions(items: ReadonlyArray<AppBarMenuItem>): 
             subtitle: item.subtitle,
             image: item.icon,
             state: item.selected ? "on" : undefined,
-            attributes: item.disabled ? { disabled: true } : undefined,
+            attributes:
+              item.disabled || item.destructive
+                ? { disabled: item.disabled, destructive: item.destructive }
+                : undefined,
           },
         ],
   );

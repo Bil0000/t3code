@@ -5,6 +5,8 @@ import {
   ZipPreviewError,
   type ZipPreviewEntry,
 } from "@t3tools/client-runtime/zip-preview";
+import type { EnvironmentId } from "@t3tools/contracts";
+import { filePreviewDelimiter, parseDelimitedPreview } from "@t3tools/shared/delimitedPreview";
 import { decodeFilePreviewText, filePreviewKind } from "@t3tools/shared/filePreview";
 import { LegendList } from "@legendapp/list/react-native";
 import { fetch } from "expo/fetch";
@@ -15,22 +17,20 @@ import { Keyboard, Platform, Pressable, ScrollView, TextInput, View } from "reac
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { PierreEntryIcon } from "../../components/PierreEntryIcon";
-import { FilePreviewModal, type FilePreviewSource } from "../../components/FilePreviewModal";
 import { AndroidScreenHeader } from "../../components/ui/AndroidScreenHeader";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { AppText as Text } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
-import * as Dialog from "../../components/ui/Dialog";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { Progress } from "../../components/ui/Progress";
 import { Toolbar } from "../../components/ui/Toolbar";
 import { useNativeColumnLayoutMetrics } from "../../native/native-layout-metrics";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { writeGeneratedAttachmentFile } from "../../lib/attachmentDownload";
-import { cn } from "../../lib/cn";
-import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
-import { FilePreviewLoading, FilePreviewNotice } from "./FilePreviewFeedback";
-import { SourceFileSurface } from "./SourceFileSurface";
+import { attachmentDocumentPresentation } from "../../lib/attachmentDocumentPresentation";
+import { AttachmentFileView, type FileViewerDocument } from "./AttachmentFileView";
+import { FilePreviewLoading } from "./FilePreviewFeedback";
+import { useFileActions } from "./useFileActions";
 import { addZipEntryToDraft, withExtractedZipEntry } from "./zipEntryActions";
 import {
   buildZipTree,
@@ -212,7 +212,6 @@ function ZipArchiveHeader(props: {
   readonly name: string;
   readonly subtitle: string;
   readonly tintColor: string;
-  readonly hidden: boolean;
   readonly onSave: () => void;
   readonly onRemove: (() => void) | null;
 }) {
@@ -222,15 +221,14 @@ function ZipArchiveHeader(props: {
     <>
       <NativeStackScreenOptions
         options={{
-          headerShown: !isAndroid && !props.hidden,
-          gestureEnabled: !props.hidden,
+          headerShown: !isAndroid,
           headerTintColor: props.tintColor,
           headerTitle: props.name,
           title: props.name,
           unstable_headerSubtitle: isAndroid ? undefined : props.subtitle,
         }}
       />
-      {props.hidden ? null : isAndroid ? (
+      {isAndroid ? (
         <AndroidScreenHeader
           title={props.name}
           subtitle={props.subtitle}
@@ -440,6 +438,7 @@ export function ZipArchiveView(props: {
   readonly uri: string | null;
   readonly isLocal: boolean;
   readonly refresh: () => Promise<string | null>;
+  readonly environmentId: EnvironmentId | null;
   readonly draftKey: string | null;
   readonly questionPrefix: string | null;
   readonly maxAttachmentBytes: number | undefined;
@@ -460,18 +459,19 @@ export function ZipArchiveView(props: {
   const headerInset = Platform.OS === "ios" ? (columnMetrics?.safeArea.top ?? insets.top) : 0;
   return (
     <View className="flex-1 bg-sheet">
-      <ZipArchiveHeader
-        name={props.name}
-        subtitle={
-          archive
-            ? `${archive.fileCount} ${archive.fileCount === 1 ? "file" : "files"}${props.sizeBytes > 0 ? ` · ${formatAttachmentSize(props.sizeBytes)}` : ""}`
-            : props.subtitle
-        }
-        tintColor={props.tintColor}
-        hidden={entryOpen}
-        onSave={props.onSave}
-        onRemove={props.onRemove}
-      />
+      {entryOpen ? null : (
+        <ZipArchiveHeader
+          name={props.name}
+          subtitle={
+            archive
+              ? `${archive.fileCount} ${archive.fileCount === 1 ? "file" : "files"}${props.sizeBytes > 0 ? ` · ${formatAttachmentSize(props.sizeBytes)}` : ""}`
+              : props.subtitle
+          }
+          tintColor={props.tintColor}
+          onSave={props.onSave}
+          onRemove={props.onRemove}
+        />
+      )}
       {state.status === "ready" ? (
         <ZipArchiveList
           archive={state.archive}
@@ -509,6 +509,7 @@ export function ZipArchiveView(props: {
             archiveName={props.name}
             archive={archive}
             entry={selected}
+            environmentId={props.environmentId}
             draftKey={props.draftKey}
             questionPrefix={props.questionPrefix}
             maxAttachmentBytes={props.maxAttachmentBytes}
@@ -530,22 +531,22 @@ function ZipEntryView(props: {
   readonly archiveName: string;
   readonly archive: ZipArchive;
   readonly entry: ZipPreviewEntry;
+  readonly environmentId: EnvironmentId | null;
   readonly draftKey: string | null;
   readonly questionPrefix: string | null;
   readonly maxAttachmentBytes: number | undefined;
   readonly onBack: () => void;
 }) {
-  const insets = useSafeAreaInsets();
   const { archive, entry } = props;
   const mimeType = entry.mimeType ?? "application/octet-stream";
-  const kind = filePreviewKind({ name: entry.name, mimeType });
-  const isText = kind === "text" || kind === "markdown" || kind === "html";
+  const previewKind = filePreviewKind({ name: entry.name, mimeType });
+  const isText = previewKind === "text" || previewKind === "markdown" || previewKind === "html";
+  const kind = previewKind === "html" ? "text" : previewKind;
   const [content, setContent] = useState<EntryContent>({ status: "loading" });
   const [prefixRequested, setPrefixRequested] = useState(false);
-  const [busy, setBusy] = useState<"save" | "attach" | null>(null);
-  const [preview, setPreview] = useState<FilePreviewSource | null>(null);
-  const actionController = useRef<AbortController | null>(null);
-  useEffect(() => () => actionController.current?.abort(), []);
+  const [rendered, setRendered] = useState(true);
+  const [revision, setRevision] = useState(0);
+  const { busy, run } = useFileActions(entry.name);
   useEffect(() => {
     const controller = new AbortController();
     let release: (() => void) | undefined;
@@ -584,132 +585,95 @@ function ZipEntryView(props: {
       controller.abort();
       release?.();
     };
-  }, [archive, entry, isText, mimeType, prefixRequested]);
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Retry must reread the entry.
+  }, [archive, entry, isText, mimeType, prefixRequested, revision]);
 
-  const runAction = (action: "save" | "attach", run: (signal: AbortSignal) => Promise<void>) => {
-    if (busy) return;
-    setBusy(action);
-    const controller = new AbortController();
-    actionController.current = controller;
-    void run(controller.signal).then(
-      () => {
-        if (controller.signal.aborted) return;
-        setBusy(null);
-        if (action === "attach")
-          Dialog.alert("Added to chat", `${entry.name} is attached to your message.`);
-      },
-      (cause: unknown) => {
-        if (controller.signal.aborted) return;
-        setBusy(null);
-        Dialog.alert(
-          action === "save" ? "Could not save file" : "Could not add file to chat",
-          errorMessage(cause, "Please try again."),
-        );
-      },
-    );
-  };
   const save = () =>
-    runAction("save", (signal) =>
-      withExtractedZipEntry(archive, entry, signal, (file) => file.share()),
-    );
+    run("save", (signal) => withExtractedZipEntry(archive, entry, signal, (file) => file.share()));
   const { draftKey, questionPrefix, maxAttachmentBytes } = props;
-  const canAddToChat = draftKey !== null && maxAttachmentBytes !== undefined;
-  const addToChat = () => {
-    if (draftKey === null || maxAttachmentBytes === undefined) return;
-    runAction("attach", (signal) =>
-      addZipEntryToDraft({
-        archive,
-        entry,
-        draftKey,
-        questionPrefix,
-        maxBytes: maxAttachmentBytes,
-        signal,
-      }),
-    );
+  const text = content.status === "text" ? content : null;
+  const delimiter = filePreviewDelimiter({ name: entry.name, mimeType });
+  const table = text && delimiter ? parseDelimitedPreview(text.text, delimiter) : null;
+  const uri = content.status === "file" ? content.uri : null;
+  const document: FileViewerDocument = {
+    kind,
+    ...attachmentDocumentPresentation({
+      kind,
+      hasTable: table !== null,
+      hasEnvironment: props.environmentId !== null,
+      rendered,
+    }),
+    uri,
+    content: text && { text: text.text, truncated: text.truncated },
+    table,
+    error: null,
+    needsText: isText,
+    setRendered,
+    retry: () => setRevision((value) => value + 1),
+    revision,
+    share: async () => save(),
+    sharing: busy === "save",
   };
-
   const folders = entry.path.split("/").slice(0, -1);
-  const location = [props.archiveName, ...folders].join(" / ");
   const failure = content.status === "failed" ? content : null;
   const tooBig = failure?.reason === "file-limit" && isText && !prefixRequested;
   return (
-    <View className="flex-1 bg-card" style={{ paddingTop: insets.top }}>
-      <View className="flex-row items-center pt-1 pr-3 pb-2.5 pl-1.5">
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Back to files"
-          onPress={props.onBack}
-          hitSlop={6}
-          className="h-11 flex-row items-center gap-0.5 px-1.5 active:opacity-60"
-        >
-          <SymbolView name="chevron.left" size={18} tintColorClassName="accent-primary-text" />
-          <Text className="text-[15px] text-primary-text">Files</Text>
-        </Pressable>
-      </View>
-      <View className="gap-1 border-b border-border px-5 pb-3.5">
-        <Text
-          accessibilityRole="header"
-          className="text-[22px] font-t3-semibold text-foreground"
-          numberOfLines={2}
-        >
-          {entry.name}
-        </Text>
-        <Text className="text-xs text-foreground-muted">
-          {`${location} · ${formatAttachmentSize(entry.sizeBytes)}`}
-        </Text>
-      </View>
-      <View className="flex-1">
-        {content.status === "loading" ? (
-          <FilePreviewLoading message="Reading file..." background="card" />
-        ) : content.status === "text" ? (
-          <>
-            {content.truncated ? (
-              <FilePreviewNotice title="Partial file">
-                Showing the first 1 MB. Save the file to read it in full.
-              </FilePreviewNotice>
-            ) : null}
-            <SourceFileSurface contents={content.text} path={entry.path} selectable />
-          </>
-        ) : content.status === "file" ? (
-          <View className="flex-1 items-center justify-center px-6">
-            <EmptyState
-              variant="plain"
-              title={entry.name}
-              detail={
-                kind === "image"
-                  ? "Open the image to view it full screen."
-                  : "Open the file in the system viewer."
-              }
-              actionLabel="Open"
-              onAction={() =>
-                setPreview({
-                  kind: kind === "image" ? "image" : kind === "pdf" ? "pdf" : "document",
-                  name: entry.name,
-                  mimeType,
-                  uri: content.uri,
-                })
-              }
-            />
-          </View>
-        ) : (
+    <AttachmentFileView
+      title={entry.name}
+      subtitle={`${[props.archiveName, ...folders].join(" / ")} · ${formatAttachmentSize(entry.sizeBytes)}`}
+      document={document}
+      nativeSource={
+        uri
+          ? {
+              kind: kind === "image" ? "image" : kind === "pdf" ? "pdf" : "document",
+              name: entry.name,
+              mimeType,
+              uri,
+            }
+          : null
+      }
+      environmentId={props.environmentId}
+      htmlRender={false}
+      addToChat={
+        draftKey !== null && maxAttachmentBytes !== undefined
+          ? {
+              busy: busy !== null,
+              onPress: () =>
+                run("attach", (signal) =>
+                  addZipEntryToDraft({
+                    archive,
+                    entry,
+                    draftKey,
+                    questionPrefix,
+                    maxBytes: maxAttachmentBytes,
+                    signal,
+                  }),
+                ),
+            }
+          : null
+      }
+      onRemove={null}
+      onBack={props.onBack}
+      failure={
+        failure ? (
           <ScrollView contentContainerClassName="flex-grow items-center justify-center px-6">
             <EmptyState
               variant="plain"
               title={
                 tooBig
                   ? "Too big to preview in full"
-                  : content.reason === "image-limit"
+                  : failure.reason === "image-limit"
                     ? "Too large to preview safely"
-                    : content.reason === "file-limit"
+                    : failure.reason === "file-limit"
                       ? "Too big to preview"
                       : "Couldn't read this file"
               }
               detail={
                 tooBig
                   ? "Previews stop at 10 MB. You can read the start of the file or save the whole file."
-                  : content.reason === "image-limit"
+                  : failure.reason === "image-limit"
                     ? "It could freeze the app, so it isn't decoded. Save it to view it in another app."
-                    : content.message
+                    : failure.message
               }
               action={
                 <View className="flex-row gap-3">
@@ -730,73 +694,8 @@ function ZipEntryView(props: {
               }
             />
           </ScrollView>
-        )}
-      </View>
-      <View
-        className="gap-3 border-t border-border bg-card px-4 pt-3"
-        style={{ paddingBottom: Math.max(insets.bottom, 8) }}
-      >
-        <View className="flex-row gap-2.5">
-          {canAddToChat ? (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={`Add ${entry.name} to chat`}
-              accessibilityState={{ busy: busy === "attach", disabled: busy !== null }}
-              disabled={busy !== null}
-              onPress={addToChat}
-              className={cn(
-                "h-[46px] flex-1 flex-row items-center justify-center gap-2 rounded-xl active:opacity-70",
-                busy !== null ? "bg-subtle-strong" : "bg-primary",
-              )}
-            >
-              <SymbolView
-                name="plus.bubble"
-                size={18}
-                tintColorClassName={
-                  busy !== null ? "accent-foreground-muted" : "accent-primary-foreground"
-                }
-              />
-              <Text
-                className={cn(
-                  "text-[15px] font-t3-semibold",
-                  busy !== null ? "text-foreground-muted" : "text-primary-foreground",
-                )}
-              >
-                Add to chat
-              </Text>
-            </Pressable>
-          ) : (
-            <View className="flex-1" />
-          )}
-          {content.status === "text" ? (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={content.truncated ? "Copy preview" : "Copy contents"}
-              onPress={() => copyTextWithHaptic(content.text)}
-              className="size-[46px] items-center justify-center rounded-xl border border-border active:bg-subtle"
-            >
-              <SymbolView name="doc.on.doc" size={18} tintColorClassName="accent-icon" />
-            </Pressable>
-          ) : null}
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Save or share file"
-            accessibilityState={{ busy: busy === "save", disabled: busy !== null }}
-            disabled={busy !== null}
-            onPress={save}
-            className="size-[46px] items-center justify-center rounded-xl border border-border active:bg-subtle"
-          >
-            <SymbolView
-              name="square.and.arrow.up"
-              size={18}
-              tintColorClassName={busy !== null ? "accent-icon-subtle" : "accent-icon"}
-            />
-          </Pressable>
-        </View>
-      </View>
-      {preview ? (
-        <FilePreviewModal source={preview} onRequestClose={() => setPreview(null)} />
-      ) : null}
-    </View>
+        ) : undefined
+      }
+    />
   );
 }

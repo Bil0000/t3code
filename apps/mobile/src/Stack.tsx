@@ -766,7 +766,7 @@ const RootStackConfig = createWorkspaceStackNavigator({
     NewTaskAttachment: createNativeStackScreen({
       screen: AttachmentFileScreen,
       linking: "new/draft/attachments/:attachmentId",
-      options: SOLID_HEADER_OPTIONS,
+      options: GLASS_HEADER_OPTIONS,
     }),
     NewTaskThreadSettings: createNativeStackScreen({
       screen: NewTaskThreadSettingsRouteScreen,
@@ -847,7 +847,7 @@ const RootStackConfig = createWorkspaceStackNavigator({
     ThreadAttachment: createNativeStackScreen({
       screen: AttachmentFileScreen,
       linking: `${THREAD_LINKING_PREFIX}/attachments/:attachmentId`,
-      options: SOLID_HEADER_OPTIONS,
+      options: GLASS_HEADER_OPTIONS,
     }),
     ThreadSettingsSheet: createNativeStackScreen({
       screen: ExistingThreadSettingsRouteScreen,
