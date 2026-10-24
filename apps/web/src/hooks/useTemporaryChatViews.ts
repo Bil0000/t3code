@@ -14,6 +14,7 @@ import { useConnectedEnvironmentIds } from "../state/environments";
 import { threadEnvironment } from "../state/threads";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useStableCallback } from "./useStableCallback";
+import { isElectron } from "../env";
 
 type TemporaryViewPayload = ReturnType<
   ReturnType<typeof createTemporaryThreadView>["reconnect"]
@@ -109,7 +110,7 @@ export function useTemporaryChatViews() {
       const changed = view.update({
         environmentId,
         threadIds: [threadId],
-        background: document.visibilityState === "hidden",
+        background: isElectron && document.visibilityState === "hidden",
       });
       return send(changed.length > 0 ? changed : view.reconnect());
     },
@@ -128,7 +129,7 @@ export function useTemporaryChatViews() {
       isCurrent:
         mounted.current && environmentId === created.environmentId && threadId === created.threadId,
       view,
-      background: document.visibilityState === "hidden",
+      background: isElectron && document.visibilityState === "hidden",
       send,
     }),
   );

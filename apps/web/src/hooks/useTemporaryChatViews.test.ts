@@ -12,7 +12,14 @@ const state = vi.hoisted(() => ({
   target: null as ScopedThreadRef | null,
   draftId: null as string | null,
   readOnly: false,
+  native: false,
   update: vi.fn(),
+}));
+
+vi.mock("../env", () => ({
+  get isElectron() {
+    return state.native;
+  },
 }));
 
 vi.mock("react", async (original) => ({
@@ -77,6 +84,7 @@ function setup() {
   state.target = null;
   state.draftId = null;
   state.readOnly = false;
+  state.native = false;
   state.update = vi.fn().mockResolvedValue(AsyncResult.success(undefined));
   vi.stubGlobal("document", {
     visibilityState: "visible",
@@ -108,6 +116,28 @@ function setup() {
     },
   };
 }
+
+it.each([false, true])(
+  "keeps hidden page disconnect cleanup enabled unless native=%s",
+  async (native) => {
+    using app = setup();
+    state.native = native;
+    Object.defineProperty(document, "visibilityState", { value: "hidden" });
+    await app.select(a);
+    expect(state.update).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        input: expect.objectContaining({ threadIds: [a.threadId], background: native }),
+      }),
+    );
+    state.update.mockClear();
+    expect(await captureTemporaryChatLaunch()?.(a)).toBe(true);
+    expect(state.update).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        input: expect.objectContaining({ threadIds: [a.threadId], background: native }),
+      }),
+    );
+  },
+);
 
 it("retries an empty leave set after the view has moved Home", async () => {
   using app = setup();

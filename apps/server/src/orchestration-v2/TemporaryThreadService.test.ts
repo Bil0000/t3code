@@ -307,6 +307,32 @@ it.effect("a new reload view protects the thread when the old lease expires", ()
   }),
 );
 
+it.effect.each([false, true])(
+  "expires an abandoned reload view without deleting another live tab=%s",
+  (anotherTab) =>
+    Effect.gen(function* () {
+      const fixture = yield* setup;
+      yield* Effect.gen(function* () {
+        const service = yield* TemporaryThreadService.TemporaryThreadService;
+        yield* fixture.storage.register({ threadId });
+        yield* service.updateViews(first, views([threadId]));
+        yield* service.disconnectClient(first);
+        yield* service.updateViews(second, views([threadId], 1, false, "reload"));
+        if (anotherTab)
+          yield* service.updateViews(second, views([threadId], 1, false, "cloned-tab"));
+        yield* service.updateViews(second, views([], 2, false, "reload"));
+        yield* TestClock.adjust("29 seconds");
+        assert.deepEqual(fixture.operations, []);
+        yield* TestClock.adjust("1 second");
+        assert.equal(fixture.discarded.has(threadId), !anotherTab);
+        if (anotherTab) {
+          yield* service.updateViews(second, views([], 2, false, "cloned-tab"));
+          assert.isTrue(fixture.discarded.has(threadId));
+        }
+      }).pipe(Effect.provide(fixture.serviceLayer));
+    }),
+);
+
 it.effect(
   "reconnect can replace its socket identity and a late old disconnect cannot close it",
   () =>
