@@ -23,6 +23,8 @@ import { isGitImport, parseTurnDiffFilesFromNumstat } from "../checkpointing/Dif
 import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 
+import * as TemporaryResourcePolicy from "./TemporaryResourcePolicy.ts";
+
 const CHECKPOINT_REFS_PREFIX = "refs/t3/orchestration-v2/checkpoints";
 const ROOT_CHECKPOINT_SCOPE_NAME = "root";
 
@@ -249,6 +251,7 @@ export const layer: Layer.Layer<
   CheckpointServiceV2,
   Effect.gen(function* () {
     const checkpointStore = yield* CheckpointStore.CheckpointStore;
+    const policy = yield* TemporaryResourcePolicy.make;
     const crypto = yield* Crypto.Crypto;
     const checkpointRefFor = (input: Parameters<typeof checkpointRefForScopeOrdinal>[0]) =>
       checkpointRefForScopeOrdinal(input).pipe(Effect.provideService(Crypto.Crypto, crypto));
@@ -257,8 +260,14 @@ export const layer: Layer.Layer<
     const withWorkspaceLock = <A, E, R>(cwd: string, effect: Effect.Effect<A, E, R>) =>
       workspaceLocks.withLock(cwd, effect);
 
-    const isGitCheckpointable = (cwd: string) =>
-      checkpointStore.isGitRepository(cwd).pipe(Effect.orElseSucceed(() => false));
+    const isGitCheckpointable = Effect.fn("CheckpointService.isGitCheckpointable")(function* (
+      scope: OrchestrationV2CheckpointScope,
+    ) {
+      if (yield* policy.isVolatile(scope.threadId)) return false;
+      return yield* checkpointStore
+        .isGitRepository(scope.cwd)
+        .pipe(Effect.orElseSucceed(() => false));
+    });
 
     const ensureScope: CheckpointServiceV2Shape["ensureScope"] = (scope) => Effect.succeed(scope);
 
@@ -266,7 +275,7 @@ export const layer: Layer.Layer<
       withWorkspaceLock(
         input.scope.cwd,
         Effect.gen(function* () {
-          if (!(yield* isGitCheckpointable(input.scope.cwd))) {
+          if (!(yield* isGitCheckpointable(input.scope))) {
             return;
           }
 
@@ -317,7 +326,7 @@ export const layer: Layer.Layer<
               scopeId: input.scope.id,
               ordinalWithinScope: input.ordinalWithinScope,
             });
-            const checkpointable = yield* isGitCheckpointable(input.scope.cwd);
+            const checkpointable = yield* isGitCheckpointable(input.scope);
             const available = checkpointable
               ? yield* checkpointStore
                   .hasCheckpointRef({
@@ -382,7 +391,7 @@ export const layer: Layer.Layer<
             ordinalWithinScope: Math.max(0, input.ordinalWithinScope - 1),
           });
 
-          if (!(yield* isGitCheckpointable(input.scope.cwd))) {
+          if (!(yield* isGitCheckpointable(input.scope))) {
             return makeCheckpoint({
               id: checkpointId,
               scope: input.scope,
@@ -519,6 +528,7 @@ export const layer: Layer.Layer<
       withWorkspaceLock(
         input.scope.cwd,
         Effect.gen(function* () {
+          yield* policy.assertDurable(input.scope.threadId, "checkpoint restore");
           if (input.checkpoint.status !== "ready") {
             return yield* new CheckpointRestoreError({
               scopeId: input.scope.id,
@@ -555,9 +565,12 @@ export const layer: Layer.Layer<
     const deleteStaleRefs: CheckpointServiceV2Shape["deleteStaleRefs"] = (input) =>
       withWorkspaceLock(
         input.scope.cwd,
-        checkpointStore.deleteCheckpointRefs({
-          cwd: input.scope.cwd,
-          checkpointRefs: input.checkpoints.map((checkpoint) => checkpoint.ref),
+        Effect.gen(function* () {
+          if (yield* policy.isVolatile(input.scope.threadId)) return;
+          yield* checkpointStore.deleteCheckpointRefs({
+            cwd: input.scope.cwd,
+            checkpointRefs: input.checkpoints.map((checkpoint) => checkpoint.ref),
+          });
         }),
       ).pipe(
         Effect.mapError(

@@ -1,3 +1,4 @@
+import { setTemporaryThread } from "@t3tools/client-runtime/temporary-threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
@@ -241,4 +242,20 @@ describe("mergeBrowserHistoryState", () => {
     expect(merged.pendingVisitsByThreadKey).toEqual({});
     expect(merged.pendingTitlesByThreadKey).toEqual({});
   });
+});
+
+it("does not merge temporary visits or titles into project history", () => {
+  resetBrowserHistoryForTests();
+  useBrowserHistoryStore.getState().registerThreadProject(threadRef, "shared-project");
+  recordVisitForThread(threadRef, "https://saved.example/", 1);
+  setTemporaryThread(threadRef.environmentId, threadRef.threadId, true);
+  try {
+    recordVisitForThread(threadRef, "https://temporary-sentinel.example/", 2);
+    setTitleForThreadUrl(threadRef, "https://saved.example/", "temporary-title-sentinel");
+    const raw = JSON.stringify(useBrowserHistoryStore.getState());
+    expect(raw).toContain("saved.example");
+    expect(raw).not.toContain("temporary-");
+  } finally {
+    setTemporaryThread(threadRef.environmentId, threadRef.threadId, false);
+  }
 });

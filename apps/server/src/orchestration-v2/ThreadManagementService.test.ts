@@ -1,6 +1,7 @@
 import { expect, it } from "@effect/vitest";
 import {
   CommandId,
+  EventId,
   MessageId,
   type OrchestrationV2Run,
   type OrchestrationV2StoredEvent,
@@ -21,9 +22,12 @@ import * as Stream from "effect/Stream";
 import * as ServerSettings from "../serverSettings.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
+import * as EventSink from "./EventSink.ts";
+import * as ProjectionStore from "./ProjectionStore.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
+import * as TemporaryThreadStorage from "./TemporaryThreadStorage.ts";
 
 const layerReceiptsTest = CommandReceiptStore.layer.pipe(
   Layer.provide(SqlitePersistence.layerMemory),
@@ -199,16 +203,15 @@ it.effect("waitForThread follows a restart continuation instead of the cut run",
       Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
       Layer.provide(
         Layer.mock(Orchestrator.OrchestratorV2)({
-          getThreadEventSequence: () => Effect.succeed(0),
+          subscribeThreadRunUpdates: () =>
+            Effect.succeed(
+              Stream.fromEffect(Deferred.succeed(subscribed, undefined)).pipe(
+                Stream.drain,
+                Stream.concat(Stream.fromQueue(events).pipe(Stream.as(undefined))),
+              ),
+            ),
           restartContinuationPending: (run) => Effect.succeed(pending && run.id === runId),
           awaitRestartContinuation: () => Effect.never,
-          streamStoredEventsFrom: (input) =>
-            input?.eventType === "run.updated"
-              ? Stream.fromEffect(Deferred.succeed(subscribed, undefined)).pipe(
-                  Stream.drain,
-                  Stream.concat(Stream.fromQueue(events)),
-                )
-              : Stream.never,
           getThreadRecords: () =>
             Effect.sync(
               () =>
@@ -262,16 +265,15 @@ it.effect("waitForThread returns the cut run once its continuation is declined",
       Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
       Layer.provide(
         Layer.mock(Orchestrator.OrchestratorV2)({
-          getThreadEventSequence: () => Effect.succeed(0),
+          subscribeThreadRunUpdates: () =>
+            Effect.succeed(
+              Stream.fromEffect(Deferred.succeed(subscribed, undefined)).pipe(
+                Stream.drain,
+                Stream.concat(Stream.never),
+              ),
+            ),
           restartContinuationPending: () => Effect.succeed(pending),
           awaitRestartContinuation: () => Deferred.await(declined),
-          streamStoredEventsFrom: (input) =>
-            input?.eventType === "run.updated"
-              ? Stream.fromEffect(Deferred.succeed(subscribed, undefined)).pipe(
-                  Stream.drain,
-                  Stream.concat(Stream.never),
-                )
-              : Stream.never,
           getThreadRecords: () =>
             Effect.succeed({
               thread: { id: threadId, projectId, deletedAt: null },
@@ -311,7 +313,7 @@ it.effect.each([
       Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
       Layer.provide(
         Layer.mock(Orchestrator.OrchestratorV2)({
-          getThreadEventSequence: () => Effect.succeed(0),
+          subscribeThreadRunUpdates: () => Effect.succeed(Stream.empty),
           restartContinuationPending: () => Effect.succeed(false),
           getThreadRecords: () =>
             Effect.succeed({
@@ -336,4 +338,261 @@ it.effect.each([
 
     expect(dispatched).toEqual(settles ? ["thread.settle"] : []);
   }),
+);
+
+it.effect(
+  "registers temporary ownership before dispatch reaches any engine or receipt path",
+  () => {
+    const dispatched: Array<string> = [];
+    const threadId = ThreadId.make("thread:temporary-admission");
+    const owned = new Set<ThreadId>();
+    const layerTest = layerDispatchChokepointTest(ServerSettings.layerTest())(dispatched).pipe(
+      Layer.provide(
+        Layer.mock(TemporaryThreadStorage.TemporaryThreadStorage)({
+          register: ({ threadId: id }) =>
+            Effect.sync(() => {
+              owned.add(id);
+            }),
+        }),
+      ),
+    );
+    return Effect.gen(function* () {
+      const threads = yield* ThreadManagementService.ThreadManagementService;
+      yield* threads.dispatch({
+        type: "thread.create",
+        threadId,
+        temporary: true,
+        commandId: CommandId.make("temporary-admission"),
+        projectId: ProjectId.make("project:temporary"),
+        title: "Temporary",
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "test" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "user",
+        creationSource: "web",
+      });
+      expect(owned.has(threadId)).toBe(true);
+      expect(dispatched).toEqual(["thread.create"]);
+    }).pipe(Effect.provide(layerTest));
+  },
+);
+
+const createWaitThread = Effect.fn("test.createWaitThread")(function* (threadId: ThreadId) {
+  const sink = yield* EventSink.EventSinkV2;
+  const now = yield* DateTime.now;
+  yield* sink.write({
+    events: [
+      {
+        id: EventId.make("create-" + threadId),
+        threadId,
+        type: "thread.created",
+        occurredAt: now,
+        payload: {
+          id: threadId,
+          createdBy: "user",
+          creationSource: "web",
+          projectId: ProjectId.make("wait-project"),
+          title: "wait fixture",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "test" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          activeProviderThreadId: null,
+          lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+          forkedFrom: null,
+          createdAt: now,
+          updatedAt: now,
+          archivedAt: null,
+          settledOverride: null,
+          settledAt: null,
+          lastVisitedAt: null,
+          deletedAt: null,
+        },
+      },
+    ],
+  });
+});
+
+it.effect.each([
+  { method: "waitForThread" as const, memoryAhead: true, completeBeforeKeep: false },
+  { method: "waitForThread" as const, memoryAhead: false, completeBeforeKeep: false },
+  { method: "settleAfterRun" as const, memoryAhead: true, completeBeforeKeep: false },
+  { method: "settleAfterRun" as const, memoryAhead: false, completeBeforeKeep: false },
+  { method: "waitForThread" as const, memoryAhead: true, completeBeforeKeep: true },
+  { method: "settleAfterRun" as const, memoryAhead: true, completeBeforeKeep: true },
+])(
+  "$method sees completion when Keep wins before subscription, memoryAhead=$memoryAhead, completeBeforeKeep=$completeBeforeKeep",
+  ({ method, memoryAhead, completeBeforeKeep }) =>
+    Effect.gen(function* () {
+      const storage = yield* TemporaryThreadStorage.TemporaryThreadStorage;
+      const sink = yield* EventSink.EventSinkV2;
+      const projection = yield* ProjectionStore.ProjectionStoreV2;
+      const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
+      const projectId = ProjectId.make("wait-project");
+      const threadId = ThreadId.make("wait-target");
+      const fillerId = ThreadId.make("wait-filler");
+      const runId = RunId.make("wait-run");
+      const now = yield* DateTime.now;
+      if (memoryAhead) yield* storage.register({ threadId: fillerId });
+      yield* createWaitThread(fillerId);
+      const filler = yield* projection.getThread(fillerId);
+      yield* sink.write({
+        events: Array.from({ length: 8 }, (_, index) => ({
+          id: EventId.make("filler-" + index),
+          threadId: fillerId,
+          type: "thread.metadata-updated" as const,
+          occurredAt: now,
+          payload: filler,
+        })),
+      });
+      yield* storage.register({ threadId });
+      yield* createWaitThread(threadId);
+      const run: OrchestrationV2Run = {
+        id: runId,
+        threadId,
+        ordinal: 1,
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "test" },
+        providerThreadId: null,
+        userMessageId: MessageId.make("wait-message"),
+        rootNodeId: null,
+        activeAttemptId: null,
+        status: "running",
+        requestedAt: now,
+        startedAt: now,
+        completedAt: null,
+        checkpointId: null,
+        contextHandoffId: null,
+      };
+      yield* sink.write({
+        events: [
+          {
+            id: EventId.make("running-created"),
+            threadId,
+            type: "run.created",
+            occurredAt: now,
+            payload: run,
+          },
+          {
+            id: EventId.make("running-update"),
+            threadId,
+            type: "run.updated",
+            occurredAt: now,
+            payload: run,
+          },
+        ],
+      });
+      const memoryCursor = yield* sink.latestSequence({ threadId });
+      const snapshotRead = yield* Deferred.make<void>();
+      const resumeRead = yield* Deferred.make<void>();
+      const observed: Array<EventId> = [];
+      let firstRead = true;
+      let completionSequence = 0;
+      const observe = (stream: Stream.Stream<OrchestrationV2StoredEvent, unknown>) =>
+        stream.pipe(
+          Stream.tap((stored) =>
+            Effect.sync(() => {
+              if (stored.event.type === "run.updated") observed.push(stored.event.id);
+            }),
+          ),
+          Stream.orDie,
+        );
+      const layerTest = ThreadManagementService.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({}),
+            ServerSettings.layerTest(),
+            Layer.succeed(CommandReceiptStore.CommandReceiptStoreV2, receipts),
+            Layer.mock(Orchestrator.OrchestratorV2)({
+              subscribeThreadRunUpdates: (id) =>
+                storage.subscribeThreadRunUpdates(id).pipe(
+                  Effect.map((updates) => updates.pipe(Stream.orDie)),
+                  Effect.orDie,
+                ),
+              getThreadEventSequence: (id) =>
+                sink.latestSequence({ threadId: id }).pipe(Effect.orDie),
+              streamStoredEventsFrom: (input) =>
+                Stream.unwrap(
+                  Effect.sync(() => {
+                    expect(input?.afterSequence ?? 0).toBeLessThan(completionSequence);
+                    return observe(sink.stream(input));
+                  }),
+                ),
+              restartContinuationPending: () => Effect.succeed(false),
+              getThreadRecords: (id, fields, filter) =>
+                Effect.gen(function* () {
+                  const records = yield* projection.getThreadRecords(id, fields, filter);
+                  if (firstRead) {
+                    firstRead = false;
+                    yield* Deferred.succeed(snapshotRead, undefined);
+                    yield* Deferred.await(resumeRead);
+                  }
+                  return records;
+                }).pipe(Effect.orDie),
+              dispatch: (command) =>
+                Effect.gen(function* () {
+                  expect(command.type).toBe("thread.settle");
+                  const current = yield* projection.getThread(threadId);
+                  const storedEvents = yield* sink.write({
+                    events: [
+                      {
+                        id: EventId.make("settled"),
+                        threadId,
+                        type: "thread.settled",
+                        occurredAt: now,
+                        payload: { ...current, settledOverride: "settled", settledAt: now },
+                      },
+                    ],
+                  });
+                  return { sequence: storedEvents.at(-1)!.sequence, storedEvents };
+                }).pipe(Effect.orDie),
+            }),
+          ),
+        ),
+      );
+      yield* Effect.gen(function* () {
+        const service = yield* ThreadManagementService.ThreadManagementService;
+        const waiter = yield* (
+          method === "waitForThread"
+            ? service.waitForThread({ projectId, threadId, runId, timeoutMs: 60_000 })
+            : service.settleAfterRun({ projectId, threadId, runId })
+        ).pipe(Effect.forkChild);
+        yield* Deferred.await(snapshotRead);
+        const complete = sink.write({
+          events: [
+            {
+              id: EventId.make("actual-completion"),
+              threadId,
+              type: "run.updated",
+              occurredAt: now,
+              payload: { ...run, status: "completed", completedAt: now },
+            },
+          ],
+        });
+        if (completeBeforeKeep) yield* complete;
+        yield* storage.keep({ threadId, commandId: CommandId.make("keep-during-read") });
+        if (!completeBeforeKeep) yield* complete;
+        completionSequence = yield* sink.latestSequence({ threadId });
+        expect(
+          memoryAhead ? memoryCursor > completionSequence : memoryCursor < completionSequence,
+        ).toBe(true);
+        yield* Deferred.succeed(resumeRead, undefined);
+        const result = yield* Fiber.join(waiter);
+        if (method === "waitForThread")
+          expect(result).toMatchObject({
+            timedOut: false,
+            run: { id: runId, status: "completed" },
+          });
+        else expect((yield* projection.getThread(threadId)).settledOverride).toBe("settled");
+        expect(observed).not.toContain("running-update");
+      }).pipe(Effect.provide(layerTest));
+    }).pipe(
+      Effect.provide(
+        TemporaryThreadStorage.layer.pipe(Layer.provide(SqlitePersistence.layerMemory)),
+      ),
+    ),
 );

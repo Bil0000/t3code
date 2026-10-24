@@ -24,6 +24,7 @@ import { useProject, useQuietThreadShell } from "../state/entities";
 import { useEnvironmentThread } from "../state/threads";
 import {
   resolvePendingThreadCreation,
+  threadCreationHasStopped,
   pendingThreadCreationOutcomesAtom,
   pendingThreadCreationShell,
   type PendingThreadCreation,
@@ -67,6 +68,7 @@ function threadDetailToShell(
     projection.runtimeRequests.find((request) => request.status === "pending") ?? null;
   return presentThreadShell(environmentId, {
     id: thread.id,
+    temporary: thread.temporary,
     projectId: thread.projectId,
     title: thread.title,
     providerInstanceId: thread.providerInstanceId,
@@ -140,6 +142,8 @@ function useResolvedThreadSelection(params: ThreadSelectionRouteParams | undefin
           }
       : lastRouteThreadRef;
   const selectedThreadShell = useQuietThreadShell(selectedThreadRef);
+  const shellStatus =
+    selectedThreadShell?.runtime?.status ?? selectedThreadShell?.latestRun?.status;
   const selectedThreadKey =
     selectedThreadRef === null
       ? null
@@ -161,7 +165,9 @@ function useResolvedThreadSelection(params: ThreadSelectionRouteParams | undefin
   // before subscribing: an early not-found is cached as a deleted thread.
   // Every detail reader must use this ref, not the route id.
   const selectedThreadDetailRef =
-    pendingCreation === null || pendingCreation.outcome?.kind === "delivered"
+    pendingCreation === null ||
+    pendingCreation.outcome?.kind === "delivered" ||
+    threadCreationHasStopped(shellStatus)
       ? selectedThreadRef
       : null;
   const [previousCreation, setPreviousCreation] = useState<PendingThreadCreation | null>(null);
@@ -183,6 +189,7 @@ function useResolvedThreadSelection(params: ThreadSelectionRouteParams | undefin
     threadKey: selectedThreadKey,
     pending: pendingCreation,
     previous: previousCreation,
+    shellStatus,
     detail: selectedThreadDetail,
   });
   // `pendingCreation` is rebuilt each render, so compare contents: an identity

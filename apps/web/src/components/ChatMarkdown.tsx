@@ -63,6 +63,7 @@ import {
   markdownImageSourceFragment,
 } from "@t3tools/client-runtime/markdown-images";
 import { mediaUrlReference } from "@t3tools/client-runtime/media-reference";
+import { isTemporaryThread } from "@t3tools/client-runtime/temporary-threads";
 import { mediaKindFromPath, mediaMimeTypeFromExtension } from "@t3tools/shared/filePreview";
 import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
@@ -148,7 +149,7 @@ import { readLocalApi } from "../localApi";
 import { cn } from "../lib/utils";
 import { resolveRemoteOpenState, useRemoteOpenResolution } from "../remoteOpen";
 import { useRightPanelStore } from "../rightPanelStore";
-import { readThreadShell, useProjects } from "../state/entities";
+import { readThreadShell, useProjects, useQuietThreadShell } from "../state/entities";
 import { serverEnvironment } from "../state/server";
 import { shellEnvironment } from "../state/shell";
 import { assetEnvironment } from "../state/assets";
@@ -203,6 +204,7 @@ import { MarkdownFileLink } from "./chat/MarkdownFileLink";
 import { canUseMarkdownFileShellActions } from "./chat/MarkdownFileLink.logic";
 import { handleMarkdownFragmentClick, rehypeHeadingIds } from "./chat/markdownFragments";
 import { rehypeTextDirection } from "./chat/markdownTextDirection";
+import { rehypeTemporaryMedia } from "./chat/markdownTemporaryMedia";
 import { hastHasText, hastPlainTextDeep, plainHastText } from "./chat/markdownHast.logic";
 import {
   extractCodeBlock,
@@ -453,6 +455,10 @@ function useChatMarkdownState({
   headingLevelOffset = 0,
   sourceControlMedia = false,
 }: ChatMarkdownProps) {
+  const threadShell = useQuietThreadShell(threadRef ?? null);
+  const temporary =
+    threadShell?.temporary === true ||
+    (threadRef !== undefined && isTemporaryThread(threadRef.environmentId, threadRef.threadId));
   const resolvedTheme = useRenderedAppearance();
   const markdownRef = useRef<HTMLElement>(null);
   const mediaRequestId = useRef(0);
@@ -881,6 +887,7 @@ function useChatMarkdownState({
   };
 
   const componentState = {
+    temporary,
     canOperateHost,
     canOperatePreview,
     cwd,
@@ -1048,6 +1055,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
   },
   a: function MarkdownAnchor({ node, href, children, title: _title, ...props }) {
     const {
+      temporary,
       canOperateHost,
       canOperatePreview,
       cwd,
@@ -1257,7 +1265,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
             });
           }}
         >
-          {faviconHost && hasText && !isPullRequestAutolink ? (
+          {!temporary && faviconHost && hasText && !isPullRequestAutolink ? (
             <MarkdownExternalLinkContent host={faviconHost} plainText={plainHastText(node)}>
               {linkChildren}
             </MarkdownExternalLinkContent>
@@ -1615,11 +1623,12 @@ function ChatMarkdown({
         <ChatMarkdownTextContext value={text}>
           <ReactMarkdown
             remarkPlugins={remarkPlugins}
-            rehypePlugins={
-              parseRawHtml
+            rehypePlugins={[
+              ...(parseRawHtml
                 ? CHAT_MARKDOWN_RENDER_REHYPE_PLUGINS
-                : CHAT_MARKDOWN_LITERAL_HTML_REHYPE_PLUGINS
-            }
+                : CHAT_MARKDOWN_LITERAL_HTML_REHYPE_PLUGINS),
+              [rehypeTemporaryMedia, componentState.temporary],
+            ]}
             skipHtml={false}
             components={CHAT_MARKDOWN_COMPONENTS}
             urlTransform={markdownUrlTransform}

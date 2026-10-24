@@ -1,4 +1,5 @@
-import { isDraftThreadRoute } from "./features/threads/thread-route-state";
+import { useTemporaryThreadViews } from "./state/use-temporary-thread-views";
+import { isDraftThreadRoute, isWorkspaceOverlayRoute } from "./features/threads/thread-route-state";
 import { ComponentCatalogScreen } from "./features/development/ComponentCatalogScreen";
 import { PullRequestGuideStopScreen } from "./features/pull-requests/guide/PullRequestGuideScreen";
 import { PullRequestInlineCommentScreen } from "./features/pull-requests/PullRequestInlineCommentScreen";
@@ -83,7 +84,7 @@ import {
   ExistingThreadSettingsRouteScreen,
   NewTaskThreadSettingsRouteScreen,
 } from "./features/threads/ThreadSettingsSheet";
-import { NewTaskFlowProvider } from "./features/threads/new-task-flow-provider";
+import { NewTaskFlowProvider, useNewTaskFlow } from "./features/threads/new-task-flow-provider";
 import { NewTaskRouteScreen } from "./features/threads/NewTaskRouteScreen";
 import { SettingsNavigationRouteScreen } from "./features/settings/SettingsNavigationRouteScreen";
 import { SettingsAppearanceRouteScreen } from "./features/settings/SettingsAppearanceRouteScreen";
@@ -471,47 +472,9 @@ const SettingsSheetStack = createV5SheetStackNavigator({
 // across two bars the whole screen slides).
 const THREAD_LINKING_PREFIX = "threads/:environmentId/:threadId";
 
-const WORKSPACE_OVERLAY_ROUTES = new Set([
-  "PullRequestReview",
-  "PullRequestInlineComment",
-  "ConnectOnboarding",
-  "Connections",
-  "ConnectionsNew",
-  "GitBranches",
-  "GitCommit",
-  "GitConfirm",
-  "GitOverview",
-  "NewTaskProject",
-  "NewTaskFiles",
-  "NewTaskFile",
-  "NewTaskAttachment",
-  "NewTaskThreadSettings",
-  "AddProject",
-  "AddProjectRepository",
-  "AddProjectDestination",
-  "AddProjectLocal",
-  "AddProjectNew",
-  "NewTaskEnvironment",
-  "NewTaskBranch",
-  "SettingsLegal",
-  "SettingsSheet",
-  "ThreadAgents",
-  "ThreadBackgroundWork",
-  "ThreadPullRequests",
-  "ThreadQueue",
-  "ThreadReviewComment",
-  "ThreadDevicePreview",
-  "ThreadBrowserPreview",
-  "ThreadSettingsSheet",
-]);
-
 function workspaceLocationFromState(state: NavigationState) {
   // Android opens Settings as a workspace page rather than an overlay, so the layout sees it.
-  const routes = state.routes.filter(
-    (route) =>
-      !WORKSPACE_OVERLAY_ROUTES.has(route.name) ||
-      (Platform.OS === "android" && route.name === "SettingsSheet"),
-  );
+  const routes = state.routes.filter((route) => !isWorkspaceOverlayRoute(route.name, Platform.OS));
   const effectiveState =
     routes.length > 0 && routes.length !== state.routes.length
       ? ({ ...state, routes, index: routes.length - 1 } as NavigationState)
@@ -530,6 +493,13 @@ function workspaceLocationFromState(state: NavigationState) {
 function ThreadOutboxDrainWorker() {
   useThreadOutboxDrain();
   useComposerAttachmentUploadWorker();
+  return null;
+}
+
+function TemporaryThreadViewWorker(props: { readonly state: NavigationState }) {
+  const flow = useNewTaskFlow();
+  const navigation = useNavigation();
+  useTemporaryThreadViews(props.state, flow.draftKey, navigation);
   return null;
 }
 
@@ -577,6 +547,7 @@ function RootStackLayout(props: {
       routePendingTaskId={routePendingTaskId}
     >
       <HardwareKeyboardCommandProvider pathname={pathname}>
+        <TemporaryThreadViewWorker state={props.state} />
         <ThreadOutboxDrainWorker />
         <ShowcaseCaptureCoordinator pathname={pathname} />
         <ExistingThreadSettingsRouteProvider>

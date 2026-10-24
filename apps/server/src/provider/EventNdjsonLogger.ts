@@ -3,6 +3,7 @@
  * Native and canonical views share batching, rotation, and retention state so
  * they cannot race while appending to the same thread-scoped file.
  */
+import * as TemporaryResourcePolicy from "../orchestration-v2/TemporaryResourcePolicy.ts";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
@@ -647,6 +648,7 @@ export const makeEventNdjsonLogStore = Effect.fnUntraced(function* (
   FileSystem.FileSystem | Path.Path
 > {
   const fs = yield* FileSystem.FileSystem;
+  const policy = yield* TemporaryResourcePolicy.make;
   const path = yield* Path.Path;
   const resolved = yield* resolveOptions(filePath, options);
   const directory = NodePath.dirname(filePath);
@@ -759,6 +761,8 @@ export const makeEventNdjsonLogStore = Effect.fnUntraced(function* (
     if (existing) return existing;
 
     const write = Effect.fnUntraced(function* (event: unknown, threadId: ThreadId | null) {
+      if (threadId === null ? !policy.canRecordUnattributed() : yield* policy.isVolatile(threadId))
+        return;
       if (!shouldPersistProviderEvent(stream, event)) return;
       let payload = yield* serializeEvent(boundProviderEventForLogging(event));
       if (payload === undefined) return;

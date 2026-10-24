@@ -1,3 +1,4 @@
+import { isTemporaryThread } from "@t3tools/client-runtime/temporary-threads";
 import {
   type PendingSubagentRequest,
   presentThreadShell,
@@ -128,6 +129,7 @@ function EnvironmentNotifications({
     const next = new Map<ThreadId, NotificationState>();
     const subagentRequests = pendingSubagentRequestsByThread(threads);
     for (const rawThread of threads) {
+      if (rawThread.temporary || isTemporaryThread(environmentId, rawThread.id)) continue;
       if (rawThread.lineage.relationshipToParent === "subagent") continue;
       const prior = previous.current.get(rawThread.id);
       const subagentRequest = subagentRequests.get(rawThread.id) ?? null;

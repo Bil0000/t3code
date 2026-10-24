@@ -30,6 +30,7 @@ import * as Deferred from "effect/Deferred";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -58,6 +59,8 @@ import * as EffectOutbox from "./EffectOutbox.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ThreadLaunch from "./ThreadLaunchService.ts";
+import * as TemporaryThreadStorage from "./TemporaryThreadStorage.ts";
+import * as TemporaryThreadService from "./TemporaryThreadService.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 import * as ThreadTitleRegeneration from "./ThreadTitleRegenerationService.ts";
@@ -2170,3 +2173,110 @@ it.effect("replays an accepted send after the project disables the instance", ()
     }
   }).pipe(Effect.provide(Layer.mergeAll(harness.layer, layerFiles)));
 });
+
+it.effect("passes temporary mode to creation without title metadata generation", () => {
+  const harness = makeHarness();
+  const owned = new Set<ThreadId>();
+  const storageLayer = Layer.mock(TemporaryThreadStorage.TemporaryThreadStorage)({
+    register: ({ threadId }) =>
+      Effect.sync(() => {
+        owned.add(threadId);
+      }),
+    isTemporary: (threadId) => Effect.sync(() => owned.has(threadId)),
+    isDiscarded: () => Effect.succeed(false),
+    family: (threadId) => Effect.succeed([threadId]),
+  });
+  return Effect.gen(function* () {
+    const launches = yield* ThreadLaunch.ThreadLaunchService;
+    const input = {
+      ...launchInput({ command: "temporary-launch", thread: "temporary-launch" }),
+      temporary: true,
+    };
+    const result = yield* launches.launch(input);
+    assert.isTrue(result.projection.thread.temporary);
+    assert.isTrue(owned.has(result.threadId));
+    assert.equal(harness.generateThreadTitle.mock.calls.length, 0);
+  }).pipe(
+    Effect.provide(
+      harness.layer.pipe(
+        Layer.provide(storageLayer),
+        Layer.provide(TemporaryThreadService.layerState),
+      ),
+    ),
+  );
+});
+
+it.effect("cancels temporary setup and keeps the created user worktree", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const harness = makeHarness({
+      runSetup: () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
+    });
+    const owned = new Set<ThreadId>();
+    const layerStorage = Layer.mock(TemporaryThreadStorage.TemporaryThreadStorage)({
+      register: ({ threadId }) =>
+        Effect.sync(() => {
+          owned.add(threadId);
+        }),
+      isTemporary: (threadId) => Effect.sync(() => owned.has(threadId)),
+      isDiscarded: () => Effect.succeed(false),
+      family: (threadId) => Effect.succeed([threadId]),
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const state = yield* TemporaryThreadService.TemporaryThreadLifecycleState;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const launched = yield* launches.launch({
+        ...launchInput({
+          command: "temporary-setup",
+          thread: "temporary-setup",
+          message: "Private text",
+          workspace: { type: "worktree", baseRef: "main" },
+        }),
+        temporary: true,
+      });
+      yield* Deferred.await(entered);
+      const preparations = state.preparations.get(launched.threadId);
+      assert.isDefined(preparations);
+      assert.equal(preparations.size, 1);
+      yield* Effect.forEach(preparations, Fiber.interrupt, { discard: true });
+      assert.equal(harness.removeWorktree.mock.calls.length, 0);
+      assert.equal(harness.generateBranchName.mock.calls.length, 0);
+      assert.isNotNull((yield* threads.getThreadProjection(launched.threadId)).thread.worktreePath);
+    }).pipe(
+      Effect.provide(
+        harness.layer.pipe(
+          Layer.provide(layerStorage),
+          Layer.provideMerge(TemporaryThreadService.layerState),
+        ),
+      ),
+    );
+  }),
+);
+
+it.effect(
+  "refuses temporary launch without shared lifecycle ownership before creating a thread",
+  () => {
+    const harness = makeHarness();
+    const owned = new Set<ThreadId>();
+    const layerStorage = Layer.mock(TemporaryThreadStorage.TemporaryThreadStorage)({
+      register: ({ threadId }) =>
+        Effect.sync(() => {
+          owned.add(threadId);
+        }),
+      isTemporary: (threadId) => Effect.sync(() => owned.has(threadId)),
+      isDiscarded: () => Effect.succeed(false),
+      family: (threadId) => Effect.succeed([threadId]),
+    });
+    return Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const input = {
+        ...launchInput({ command: "missing-temporary-owner", thread: "missing-temporary-owner" }),
+        temporary: true,
+      };
+      assert.isTrue(Exit.isFailure(yield* Effect.exit(launches.launch(input))));
+      assert.isNull(yield* threads.getThreadShell(input.threadId));
+    }).pipe(Effect.provide(harness.layer.pipe(Layer.provide(layerStorage))));
+  },
+);

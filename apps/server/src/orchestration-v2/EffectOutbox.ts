@@ -296,13 +296,46 @@ const rowToEffect = (row: EffectRow) =>
     })),
   );
 
+export class EffectOutboxSignals extends Context.Service<
+  EffectOutboxSignals,
+  {
+    readonly available: Queue.Queue<void>;
+    readonly cancellationSignals: Map<string, Deferred.Deferred<void>>;
+    readonly settledSignals: Map<string, Deferred.Deferred<void>>;
+  }
+>()("t3/orchestration-v2/EffectOutbox/EffectOutboxSignals") {}
+
+export const layerSignals = Layer.effect(
+  EffectOutboxSignals,
+  Effect.gen(function* () {
+    return {
+      available: yield* Queue.dropping<void>(64),
+      cancellationSignals: new Map(),
+      settledSignals: new Map(),
+    };
+  }),
+);
+
+export class EffectOutboxThreadFilter extends Context.Service<
+  EffectOutboxThreadFilter,
+  {
+    readonly excludedThreadIds: () => ReadonlyArray<ThreadId>;
+  }
+>()("t3/orchestration-v2/EffectOutbox/EffectOutboxThreadFilter") {}
+
 export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = Layer.effect(
   EffectOutboxV2,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const available = yield* Queue.dropping<void>(64);
-    const cancellationSignals = new Map<string, Deferred.Deferred<void>>();
-    const settledSignals = new Map<string, Deferred.Deferred<void>>();
+    const sharedSignals = yield* Effect.serviceOption(EffectOutboxSignals);
+    const threadFilter = yield* Effect.serviceOption(EffectOutboxThreadFilter);
+    const { available, cancellationSignals, settledSignals } = Option.isSome(sharedSignals)
+      ? sharedSignals.value
+      : {
+          available: yield* Queue.dropping<void>(64),
+          cancellationSignals: new Map<string, Deferred.Deferred<void>>(),
+          settledSignals: new Map<string, Deferred.Deferred<void>>(),
+        };
     const signalSettled = (effectIds: ReadonlyArray<string>) =>
       Effect.forEach(
         effectIds,
@@ -324,9 +357,11 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
     const claimableCandidatePredicate = (
       availableBefore?: string,
       excludeRestartContinuations = false,
-    ) =>
-      sql`
-        ${
+    ) => {
+      const excluded = Option.isSome(threadFilter) ? threadFilter.value.excludedThreadIds() : [];
+      return sql`
+        ${excluded.length === 0 ? sql`1 = 1` : sql`candidate.thread_id NOT IN ${sql.in(excluded)}`}
+        AND ${
           availableBefore === undefined
             ? sql`1 = 1`
             : sql`candidate.available_at <= ${availableBefore}`
@@ -361,6 +396,7 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
             )
         )
       `;
+    };
 
     const cancellationSignal = (effectId: string) => {
       const existing = cancellationSignals.get(effectId);

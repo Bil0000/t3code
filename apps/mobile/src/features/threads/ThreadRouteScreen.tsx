@@ -1,3 +1,10 @@
+import { appAtomRegistry } from "../../state/atom-registry";
+import { composerDraftsAtom, updateComposerDraftSettings } from "../../state/use-composer-drafts";
+import { threadOutboxManager } from "../../state/thread-outbox";
+import { AsyncResult } from "effect/reactivity";
+import { setTemporaryThread } from "@t3tools/client-runtime/temporary-threads";
+import { useAtomValue } from "@effect/atom-react";
+import { CommandId } from "@t3tools/contracts";
 import * as Dialog from "../../components/ui/Dialog";
 import { useOpenPullRequest } from "../../native/useOpenPullRequest";
 import { makeTurnCommandMetadata } from "../../lib/commandMetadata";
@@ -33,7 +40,10 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useConnectionsReady } from "../../state/workspace";
 import { useEnvironmentShellReadiness } from "../../state/shell";
 import { restoredNewTaskDraftKey } from "../../state/new-task-draft-key";
-import { clearPendingThreadCreationOutcome } from "../../state/pending-thread-creation";
+import {
+  clearPendingThreadCreationOutcome,
+  threadCreationHasStopped,
+} from "../../state/pending-thread-creation";
 import { recoverFailedThreadDraft } from "../../state/recover-failed-thread-draft";
 import { useEnvironmentQuery } from "../../state/query";
 import { dismissGitActionResult, useGitActionProgress } from "../../state/use-vcs-action-state";
@@ -302,6 +312,51 @@ function ThreadRouteContent(
   const gitState = useSelectedThreadGitState();
   const gitActions = useSelectedThreadGitActions();
   const requests = useSelectedThreadRequests();
+  const keepThread = useAtomCommand(threadEnvironment.keep, {
+    reportFailure: false,
+    reportDefect: false,
+  });
+  const keepPermission = useAtomValue(
+    threadEnvironment.keep.permissionAtom(selectedThread?.environmentId ?? null),
+  );
+  const [keepingThread, setKeepingThread] = useState(false);
+  const [keptThreadKey, setKeptThreadKey] = useState<string | null>(null);
+  const keepCommandIds = useRef(new Map<string, CommandId>());
+  const keepCurrentThread = async () => {
+    if (!selectedThread || keepingThread || !keepPermission) return;
+    const key = scopedThreadKey(selectedThread.environmentId, selectedThread.id);
+    const commandId = keepCommandIds.current.get(key) ?? CommandId.make(uuidv4());
+    keepCommandIds.current.set(key, commandId);
+    setKeepingThread(true);
+    try {
+      const result = await keepThread({
+        environmentId: selectedThread.environmentId,
+        input: { threadId: selectedThread.id, commandId },
+      });
+      if (AsyncResult.isFailure(result)) {
+        Dialog.alert("Could not keep thread", "The thread is still temporary. Try again.");
+        return;
+      }
+      setTemporaryThread(selectedThread.environmentId, selectedThread.id, false);
+      setKeptThreadKey(key);
+      for (const draftKey of Object.keys(appAtomRegistry.get(composerDraftsAtom))) {
+        if (draftKey === key || draftKey.startsWith(`${key}~queued-edit~`))
+          updateComposerDraftSettings(draftKey, { temporary: false });
+      }
+      const queued =
+        appAtomRegistry.get(threadOutboxManager.queuedMessagesByThreadKeyAtom)[key] ?? [];
+      const saved = await Promise.allSettled(
+        queued.map((message) => threadOutboxManager.update({ ...message, temporary: false })),
+      );
+      if (saved.some((result) => result.status === "rejected"))
+        Dialog.alert(
+          "Thread kept",
+          "The server saved your thread. Some local queued messages could not be saved on this device.",
+        );
+    } finally {
+      setKeepingThread(false);
+    }
+  };
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, "thread interrupt");
   const resumeThreadQueue = useAtomCommand(threadEnvironment.resumeThreadQueue, "resume queue");
   const loadEarlierHistory = useAtomCommand(threadEnvironment.loadEarlierHistory, {
@@ -797,9 +852,12 @@ function ThreadRouteContent(
       1,
   });
   const awaitingBootstrapTurn =
-    worktreeSetup !== null
+    !threadCreationHasStopped(
+      selectedThread?.runtime?.status ?? selectedThread?.latestRun?.status,
+    ) &&
+    (worktreeSetup !== null
       ? worktreeSetup.phase === "running" && !worktreeSetupAgentStarted(worktreeSetup)
-      : (selectedThreadDetail?.runs.some((run) => run.status === "preparing") ?? false);
+      : (selectedThreadDetail?.runs.some((run) => run.status === "preparing") ?? false));
   const cancelWorktreeSetup = useAtomCommand(vcsEnvironment.cancelWorktreeSetup);
   const handleCancelWorktreeSetup = () => {
     if (!selectedThread) return;
@@ -829,6 +887,7 @@ function ThreadRouteContent(
     const launched = await startLocalThread({
       environmentId: selectedThread.environmentId,
       input: buildProjectThreadStartTurnInput({
+        temporary: selectedThread.temporary,
         ...metadata,
         projectId: selectedThread.projectId,
         projectCwd: selectedThreadProject.workspaceRoot,
@@ -907,8 +966,19 @@ function ThreadRouteContent(
         <ThreadScreenBinding
           header={
             <ThreadHeader
+              temporary={
+                selectedThread.temporary === true &&
+                keptThreadKey !== scopedThreadKey(selectedThread.environmentId, selectedThread.id)
+              }
+              keepingThread={keepingThread}
+              onKeepThread={keepPermission ? () => void keepCurrentThread() : undefined}
               title={selectedThread.title}
-              subtitle={headerSubtitle}
+              subtitle={
+                selectedThread.temporary &&
+                keptThreadKey !== scopedThreadKey(selectedThread.environmentId, selectedThread.id)
+                  ? "Temporary chat"
+                  : headerSubtitle
+              }
               headerColor={headerColor}
               usesNativeHeaderGlass={usesNativeHeaderGlass}
               gitControls={threadGitControlProps}

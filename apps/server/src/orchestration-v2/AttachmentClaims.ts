@@ -15,6 +15,8 @@ import {
 } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
 
+import * as TemporaryResourcePolicy from "./TemporaryResourcePolicy.ts";
+
 export class AttachmentClaimError extends Schema.TaggedError<AttachmentClaimError>()(
   "AttachmentClaimError",
   {
@@ -60,6 +62,12 @@ export const claimPendingAttachments = Effect.fn("AttachmentClaims.claimPendingA
     readonly threadId: string;
     readonly attachments: ReadonlyArray<ChatAttachment>;
   }) {
+    if (input.attachments.length > 0) {
+      const policy = yield* TemporaryResourcePolicy.make;
+      yield* policy
+        .assertDurable(input.threadId, "attachments")
+        .pipe(Effect.mapError((cause) => new AttachmentClaimError({ message: cause.message })));
+    }
     yield* validateAttachmentLimits(input.attachments);
     if (
       new Set(input.attachments.map((attachment) => attachment.id)).size !==

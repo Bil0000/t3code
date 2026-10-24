@@ -1,3 +1,5 @@
+import { enqueueTemporaryDraftThread } from "../../state/use-temporary-thread-views";
+import { temporaryThreadSendBlockReason } from "../../lib/temporaryThreadPolicy";
 import { DraftEnvironmentControl } from "./DraftEnvironmentControl";
 import { NativeScrollEdgeEffectsContext } from "../../native/NativeScrollViewMarker";
 import { DraftThreadHeader } from "./DraftThreadHeader";
@@ -5,7 +7,7 @@ import { threadHeaderAppearance } from "./thread-header-appearance";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { useComposerAttachmentActions } from "../../state/use-composer-attachment-actions";
 import { useWorkspaceBackNavigation } from "../workspace/useAndroidWorkspaceNavigation";
-import { submittedThreadParams } from "./thread-route-state";
+import { submittedThreadParams, selectedChatRoute } from "./thread-route-state";
 import { ThreadScreenBinding, ThreadScreenFallback } from "./ThreadScreenHost";
 import { draftThreadShell } from "./draft-thread-shell";
 import { connectionTone } from "../connection/connectionTone";
@@ -50,6 +52,7 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { threadContextsOutsideEnvironment } from "@t3tools/shared/composerContextReferences";
 
 import { makeTurnCommandMetadata } from "../../lib/commandMetadata";
+import { newTaskDraftThreadId } from "../../state/new-task-draft-key";
 
 import {
   clearComposerDraftContent,
@@ -555,6 +558,7 @@ export function NewTaskDraftScreen(props: {
       (destinationProject?.environmentId === initialEnvironmentId &&
         destinationProject.id === initialProjectId);
     if (
+      flow.temporary ||
       !shareId ||
       !draftKey ||
       !destinationProject ||
@@ -843,6 +847,20 @@ export function NewTaskDraftScreen(props: {
         draft.modelSelection ?? null,
         selectedProject.id,
       ) ?? flow.selectedModel;
+    if (draft.temporary) {
+      const reason = temporaryThreadSendBlockReason(
+        selectedEnvironmentServerConfig,
+        modelSelection,
+      );
+      if (reason) {
+        Dialog.alert("Temporary chat unavailable", reason);
+        return null;
+      }
+      if (draft.attachments.length > 0) {
+        Dialog.alert("Keep thread first", "Keep this draft before using attachments.");
+        return null;
+      }
+    }
     const workspaceSelection = resolveNewTaskWorkspaceSelection({
       selection: draft.workspaceSelection,
       fallback: {
@@ -933,7 +951,23 @@ export function NewTaskDraftScreen(props: {
     // Persist before clearing the draft or leaving its editor. This only waits
     // for the local outbox write; server and worktree setup run on the thread.
     flow.setSubmitting(true);
-    const queued = await settlePromise(() => enqueueThreadOutboxMessage(message));
+    const source = selectedChatRoute(navigation.getState(), Platform.OS)?.key;
+    const showThread = () => {
+      promptInputRef.current?.blur();
+      navigation.dispatch({
+        ...CommonActions.setParams(
+          submittedThreadParams(String(message.environmentId), String(message.threadId)),
+        ),
+        source,
+      });
+    };
+    const queued = await settlePromise(async () => {
+      if (message.temporary)
+        return enqueueTemporaryDraftThread(message, () => navigation.getState(), showThread);
+      await enqueueThreadOutboxMessage(message);
+      showThread();
+      return "queued" as const;
+    });
     flow.setSubmitting(false);
     if (AsyncResult.isFailure(queued)) {
       const error = squashAtomCommandFailure(queued);
@@ -943,12 +977,14 @@ export function NewTaskDraftScreen(props: {
       );
       return null;
     }
-    promptInputRef.current?.blur();
-    navigation.dispatch(
-      CommonActions.setParams(
-        submittedThreadParams(String(message.environmentId), String(message.threadId)),
-      ),
-    );
+    if (!AsyncResult.isSuccess(queued) || queued.value === "left") return null;
+    if (queued.value === "unavailable") {
+      Dialog.alert(
+        "Could not open temporary chat",
+        "Reconnect to this environment and try again. Your draft is still temporary.",
+      );
+      return null;
+    }
     const draftSnapshot = getComposerDraftSnapshot(draftKey);
     if (editingPendingTask) {
       flow.finishEditingPendingTask();
@@ -1123,6 +1159,38 @@ export function NewTaskDraftScreen(props: {
     </View>
   );
 
+  const temporaryControl = (
+    <Pressable
+      accessibilityRole="switch"
+      accessibilityLabel="Temporary chat"
+      accessibilityState={{
+        checked: flow.temporary,
+        disabled:
+          flow.editingPendingTask !== null || flow.submitting || Boolean(props.incomingShareId),
+      }}
+      disabled={
+        flow.editingPendingTask !== null || flow.submitting || Boolean(props.incomingShareId)
+      }
+      onPress={() => {
+        if (!flow.temporary && (flow.prompt.length > 0 || flow.attachments.length > 0))
+          Dialog.alert(
+            "New temporary draft",
+            "Your saved draft stays on this device. Temporary chat starts with an empty draft.",
+          );
+        flow.setTemporary(!flow.temporary);
+      }}
+      className="gap-1 px-4 py-3"
+    >
+      <Text className="text-foreground font-t3-semibold">
+        {flow.temporary ? "Temporary chat · On" : "Temporary chat · Off"}
+      </Text>
+      <Text className="text-xs text-foreground-muted">
+        {flow.temporary
+          ? "Kept in memory until you leave. Keep the thread to save it."
+          : "Turn on before typing. Existing text stays in its saved draft."}
+      </Text>
+    </Pressable>
+  );
   if (!flow.selectedModel) {
     return (
       <ThreadScreenFallback>
@@ -1139,8 +1207,11 @@ export function NewTaskDraftScreen(props: {
         />
         <View className="flex-1 justify-end gap-3 p-4">
           {environmentControl}
+          {temporaryControl}
           <Text className="text-foreground-muted">
-            Your draft is saved on this device. Connect to an environment to choose its first model.
+            {flow.temporary
+              ? "This temporary draft stays in memory. Connect to choose its first model."
+              : "Your draft is saved on this device. Connect to an environment to choose its first model."}
           </Text>
           <ComposerEditor
             draftKey={flow.draftKey}
@@ -1157,7 +1228,11 @@ export function NewTaskDraftScreen(props: {
   const thread = draftThreadShell({
     environmentId: selectedProject.environmentId,
     projectId: selectedProject.id,
-    threadId: ThreadId.make(flow.editingPendingTask?.threadId ?? creationMetadata.threadId),
+    threadId:
+      flow.editingPendingTask?.threadId ??
+      (flow.draftKey
+        ? newTaskDraftThreadId(flow.draftKey)
+        : ThreadId.make(creationMetadata.threadId)),
     modelSelection: flow.selectedModel,
     runtimeMode: flow.runtimeMode,
     interactionMode: flow.interactionMode,
@@ -1170,12 +1245,18 @@ export function NewTaskDraftScreen(props: {
       <ThreadScreenBinding
         environmentId={selectedProject.environmentId}
         header={
-          <DraftThreadHeader thread={thread} project={selectedProject} cwd={composerWorkspaceCwd} />
+          <DraftThreadHeader
+            thread={thread}
+            project={selectedProject}
+            cwd={composerWorkspaceCwd}
+            temporary={flow.temporary}
+          />
         }
         draftMode={{
           content: heroViewport,
           controls: (
             <View className="pb-1">
+              {temporaryControl}
               {projectClone && projectClone.phase !== "done" && selectedProject ? (
                 <View className="px-1 pb-2">
                   <ProjectCloneBanner

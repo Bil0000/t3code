@@ -1,3 +1,4 @@
+import { isTemporaryThread } from "@t3tools/client-runtime/temporary-threads";
 import { useAtomValue } from "@effect/atom-react";
 import {
   EnvironmentId as EnvironmentIdSchema,
@@ -332,6 +333,7 @@ export class ComposerDraftPersistenceError extends Schema.TaggedError<ComposerDr
 }
 
 export interface ComposerDraft {
+  readonly temporary?: boolean;
   readonly text: string;
   readonly context?: OrchestrationMessageContext;
   readonly attachments: ReadonlyArray<DraftComposerAttachment>;
@@ -366,7 +368,12 @@ export interface ComposerDraftWorkspaceSelection {
 
 export type ComposerDraftSettingsUpdate = Pick<
   ComposerDraft,
-  "modelSelection" | "runtimeMode" | "interactionMode" | "workspaceSelection" | "project"
+  | "modelSelection"
+  | "runtimeMode"
+  | "interactionMode"
+  | "workspaceSelection"
+  | "project"
+  | "temporary"
 >;
 
 const ComposerDraftWorkspaceSelectionSchema = Schema.Struct({
@@ -552,16 +559,28 @@ function normalizeDraft(draft: ComposerDraft | undefined): ComposerDraft {
   };
 }
 
+export function isTemporaryComposerDraft(
+  draftKey: string,
+  draft: Pick<ComposerDraft, "temporary"> | undefined = appAtomRegistry.get(composerDraftsAtom)[
+    draftKey
+  ],
+): boolean {
+  if (draft?.temporary === true) return true;
+  const scoped = parseScopedThreadKey(draftKey.split("~queued-edit~")[0]!);
+  return scoped !== null && isTemporaryThread(scoped.environmentId, scoped.threadId);
+}
+
 export function getComposerDraftSnapshot(draftKey: string): ComposerDraft {
   return normalizeDraft(appAtomRegistry.get(composerDraftsAtom)[draftKey]);
 }
 
 export function isComposerDraftEmpty(draft: ComposerDraft): boolean {
-  return isEmptyDraft(draft);
+  return isEmptyDraft({ ...draft, temporary: false });
 }
 
 function isEmptyDraft(draft: ComposerDraft): boolean {
   return (
+    draft.temporary !== true &&
     draft.text.length === 0 &&
     draft.attachments.length === 0 &&
     draft.modelSelection === undefined &&
@@ -714,7 +733,9 @@ async function writePersistedComposerState(
     const file = await getComposerDraftsFile();
     operation = "encode";
     const nonEmptyDrafts = Object.fromEntries(
-      Object.entries(drafts).filter(([, draft]) => !isEmptyDraft(draft)),
+      Object.entries(drafts).filter(
+        ([key, draft]) => !isTemporaryComposerDraft(key, draft) && !isEmptyDraft(draft),
+      ),
     );
     const document = {
       schemaVersion: COMPOSER_DRAFTS_SCHEMA_VERSION,
@@ -730,8 +751,18 @@ async function writePersistedComposerState(
               Object.entries(cloudDrafts.signedOut).map(([id, saved]) => [
                 id,
                 {
-                  drafts: saved.drafts,
-                  queuedMessages: saved.queuedMessages.map(encodeQueuedThreadMessage),
+                  drafts: Object.fromEntries(
+                    Object.entries(saved.drafts).filter(
+                      ([key, draft]) => !isTemporaryComposerDraft(key, draft),
+                    ),
+                  ),
+                  queuedMessages: saved.queuedMessages
+                    .filter(
+                      (message) =>
+                        !message.temporary &&
+                        !isTemporaryThread(message.environmentId, message.threadId),
+                    )
+                    .map(encodeQueuedThreadMessage),
                 },
               ]),
             ),
@@ -1735,6 +1766,7 @@ export async function restoreComposerDraftSnapshot(
 
 export function sameComposerDraftState(a: ComposerDraft, b: ComposerDraft): boolean {
   return (
+    a.temporary === b.temporary &&
     a.text === b.text &&
     a.attachments === b.attachments &&
     a.context === b.context &&
@@ -2003,14 +2035,14 @@ export const newTaskComposerDraftsAtom = Atom.make((get): ComposerDraftsByKey =>
   return matching.length === 0 ? EMPTY_DRAFTS : Object.fromEntries(matching);
 }).pipe(Atom.withEquality(sameDrafts));
 
-type ComposerDraftUploadSource = Pick<ComposerDraft, "attachments" | "project">;
+type ComposerDraftUploadSource = Pick<ComposerDraft, "attachments" | "project" | "temporary">;
 // What the upload worker reads: equal while only draft text changes.
 type ComposerDraftUploadSources = Readonly<Record<string, ComposerDraftUploadSource>>;
 export const composerDraftUploadSourcesAtom = Atom.make((get): ComposerDraftUploadSources =>
   Object.fromEntries(
     Object.entries(get(composerDraftsAtom)).map(([key, draft]) => [
       key,
-      { attachments: draft.attachments, project: draft.project },
+      { attachments: draft.attachments, project: draft.project, temporary: draft.temporary },
     ]),
   ),
 ).pipe(
@@ -2019,7 +2051,10 @@ export const composerDraftUploadSourcesAtom = Atom.make((get): ComposerDraftUplo
     return (
       keys.length === Object.keys(b).length &&
       keys.every(
-        (key) => a[key]?.attachments === b[key]?.attachments && a[key]?.project === b[key]?.project,
+        (key) =>
+          a[key]?.attachments === b[key]?.attachments &&
+          a[key]?.project === b[key]?.project &&
+          a[key]?.temporary === b[key]?.temporary,
       )
     );
   }),

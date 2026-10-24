@@ -9,6 +9,7 @@ import {
 import { runAtomCommand, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type {
   ChatFileAttachment,
+  AttachmentUploadOwner,
   ChatImageAttachment,
   EnvironmentId,
   UploadChatImageAttachment,
@@ -286,6 +287,7 @@ async function uploadFileBytes(
  */
 export async function prepareTurnAttachments(input: {
   readonly environmentId: EnvironmentId;
+  readonly owner?: AttachmentUploadOwner;
   readonly attachments: ReadonlyArray<DraftComposerAttachment>;
   readonly supportsImageUploads?: boolean;
   readonly signal?: AbortSignal;
@@ -376,7 +378,10 @@ export async function prepareTurnAttachments(input: {
         createUploadUrl: attachmentEnvironment.createUploadUrl,
         remove: attachmentEnvironment.remove,
         environmentId,
-        upload: attachmentUploadInput(attachment),
+        upload: {
+          ...attachmentUploadInput(attachment),
+          ...(input.owner === undefined ? {} : { owner: input.owner }),
+        },
         // Read the connection at transfer time: the environment may have
         // reconnected on a new base URL since this cycle started.
         resolveUploadUrl: (relativeUrl) => {

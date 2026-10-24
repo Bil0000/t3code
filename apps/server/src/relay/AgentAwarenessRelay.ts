@@ -48,6 +48,7 @@ import {
 import { getOrCreateEnvironmentKeyPairFromSecretStore } from "../cloud/environmentKeys.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import * as TemporaryResourcePolicy from "../orchestration-v2/TemporaryResourcePolicy.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import { forkParked } from "../serverActivation.ts";
 
@@ -364,6 +365,7 @@ export const make = Effect.gen(function* () {
   const secrets = yield* ServerSecretStore.ServerSecretStore;
   const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
   const threads = yield* ThreadManagement.ThreadManagementService;
+  const temporaryResources = yield* TemporaryResourcePolicy.make;
   const projects = yield* ProjectService.ProjectService;
   const crypto = yield* Crypto.Crypto;
   const scope = yield* Effect.scope;
@@ -514,10 +516,14 @@ export const make = Effect.gen(function* () {
     // Per-thread shell read: this publish runs for every activity-relevant
     // domain event, so materializing the full shell here would make the cost
     // of one thread's activity proportional to how many threads exist.
-    const threadShell = yield* threads.getThreadShell(threadId);
+    const publishedStateByThread = yield* Ref.get(publishedStateByThreadRef);
+    const volatile = yield* temporaryResources.isVolatile(threadId);
+    if (volatile && !publishedStateByThread.has(threadId)) return;
+    const threadShell = volatile ? null : yield* threads.getThreadShell(threadId);
+    const temporary = volatile || threadShell?.temporary === true;
     if (
-      threadShell?.lineage.relationshipToParent === "subagent" &&
-      !(yield* Ref.get(publishedStateByThreadRef)).has(threadId)
+      (temporary || threadShell?.lineage.relationshipToParent === "subagent") &&
+      !publishedStateByThread.has(threadId)
     ) {
       // Subagents never project activity, so the relay holds no row to clear.
       // Their events would otherwise publish a tombstone each, and every
@@ -525,7 +531,7 @@ export const make = Effect.gen(function* () {
       return;
     }
     const thread =
-      threadShell === null || threadShell.archivedAt !== null
+      temporary || threadShell === null || threadShell.archivedAt !== null
         ? Option.none<OrchestrationV2ThreadShell>()
         : Option.some(threadShell);
     const project = Option.isSome(thread)
@@ -538,7 +544,6 @@ export const make = Effect.gen(function* () {
       project,
     });
     const publishIdentity = agentAwarenessPublishIdentity(snapshot.state);
-    const publishedStateByThread = yield* Ref.get(publishedStateByThreadRef);
     if (
       (snapshot.state?.phase === "completed" || snapshot.state?.phase === "failed") &&
       !publishedStateByThread.has(threadId)
@@ -565,9 +570,10 @@ export const make = Effect.gen(function* () {
     //   "ready" before their first turn, which projects as completed for an
     //   instant and sends a spurious Done notification at thread birth.
     const requiresConfirmation =
-      (snapshot.state === null &&
+      !temporary &&
+      ((snapshot.state === null &&
         publishedStateByThread.get(threadId) !== agentAwarenessPublishIdentity(null)) ||
-      (snapshot.state?.phase === "completed" && !publishedStateByThread.has(threadId));
+        (snapshot.state?.phase === "completed" && !publishedStateByThread.has(threadId)));
     if (requiresConfirmation) {
       const nowMs = (yield* DateTime.now).epochMilliseconds;
       const deadline = publishConfirmDeadlines.get(threadId);

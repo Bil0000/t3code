@@ -12,6 +12,27 @@ becomes an attachment when inserting it would exceed the message limit. On a
 hardware keyboard, use `Cmd+Shift+V` on Apple devices or `Ctrl+Shift+V` elsewhere
 to keep a large paste editable in the composer instead.
 
+## Temporary chats
+
+Start a new thread in a project or **No project** and turn on **Temporary** before
+typing. Temporary chats keep the conversation and drafts in memory instead of
+saving them to your T3 Code history.
+
+Leaving the last open view of the thread stops its agent and child work, then
+discards the chat. A view on another device keeps it open. Putting the app in the
+background also counts as keeping it open. A refresh or connection loss allows
+30 seconds to reconnect. Temporary chats do not survive a server restart.
+
+Choose **Save thread** on web or desktop, or **Keep thread** on mobile, to save
+the conversation and continue in the same thread. Wait for the save to succeed before leaving. If saving fails, the thread
+stays temporary. Discarding a temporary chat leaves file edits in place. Temporary
+chat does not erase records held by your provider or other services.
+
+If your provider does not support temporary chats, choose a supported provider or
+turn off Temporary before sending. Keep the thread before attaching files,
+stashing prompts, sending to multiple models, sending in the background, or copying
+its context to another chat.
+
 ## Formatting
 
 The composer writes Markdown and shows it styled as you type. Markers such as

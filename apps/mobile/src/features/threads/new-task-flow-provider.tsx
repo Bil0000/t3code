@@ -22,7 +22,6 @@ import {
   MessageId,
   repositoryGroupingKeyOf,
   T3_PROJECT_FILE_NAME,
-  ThreadId,
 } from "@t3tools/contracts";
 import { sanitizeNewRefName } from "@t3tools/shared/git";
 import { threadContextsOutsideEnvironment } from "@t3tools/shared/composerContextReferences";
@@ -38,6 +37,7 @@ import {
   useThreadShells,
 } from "../../state/entities";
 import type { TurnCommandMetadata } from "../../lib/commandMetadata";
+import { newTaskDraftThreadId } from "../../state/new-task-draft-key";
 import type { DraftComposerAttachment } from "../../lib/composerImages";
 import type { ModelOption, ProviderGroup } from "../../lib/modelOptions";
 import {
@@ -180,6 +180,8 @@ type NewTaskFlowContextValue = {
   readonly startFromOrigin: boolean;
   readonly pullRequestReference: string | undefined;
   readonly draftKey: string | null;
+  readonly temporary: boolean;
+  readonly setTemporary: (temporary: boolean) => void;
   readonly editingPendingTask: QueuedThreadMessage | null;
   readonly prompt: string;
   readonly attachments: ReadonlyArray<DraftComposerAttachment>;
@@ -959,6 +961,7 @@ export function NewTaskFlowProvider(
       return false;
     }
     const draftKey = pendingTaskDraftKey(message.messageId);
+    updateComposerDraftSettings(draftKey, { temporary: message.temporary === true });
     if (isComposerDraftEmpty(getComposerDraftSnapshot(draftKey))) {
       setComposerDraftText(draftKey, message.text);
       setComposerDraftContext(draftKey, message.context);
@@ -1032,7 +1035,8 @@ export function NewTaskFlowProvider(
       : selectedProject.workspaceRoot;
     return {
       environmentId: selectedProject.environmentId,
-      threadId: ThreadId.make(metadata.threadId),
+      temporary: draft.temporary === true,
+      threadId: editingPendingTask?.threadId ?? newTaskDraftThreadId(selectedProjectDraftKey),
       messageId: MessageId.make(metadata.messageId),
       commandId: CommandId.make(metadata.commandId),
       text,
@@ -1184,6 +1188,26 @@ export function NewTaskFlowProvider(
     selectedBranchName,
     selectedWorktreePath,
     startFromOrigin,
+    temporary: selectedProjectDraft.temporary === true,
+    setTemporary: (temporary: boolean) => {
+      if (!selectedProjectDraftKey || editingPendingTask) return;
+      if (
+        temporary &&
+        (selectedProjectDraft.text.length > 0 ||
+          selectedProjectDraft.attachments.length > 0 ||
+          selectedProjectDraft.context !== undefined)
+      ) {
+        if (!selectedProject) return;
+        const key = createNewTaskDraft({
+          environmentId: selectedProject.environmentId,
+          projectId: selectedProject.id,
+        });
+        updateComposerDraftSettings(key, { temporary: true });
+        setActiveDraftKey(key);
+        return;
+      }
+      updateComposerDraftSettings(selectedProjectDraftKey, { temporary });
+    },
     draftKey: selectedProjectDraftKey,
     pullRequestReference: selectedProjectDraft.workspaceSelection?.pullRequestReference,
     editingPendingTask,

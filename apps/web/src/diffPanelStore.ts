@@ -1,3 +1,4 @@
+import { persistentThreadEntries } from "./temporaryChat";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { RunId, ScopedThreadRef } from "@t3tools/contracts";
 import { create } from "zustand";
@@ -123,8 +124,8 @@ export const useDiffPanelStore = create<DiffPanelStoreState>()(
         resolveStorage(typeof window !== "undefined" ? window.localStorage : undefined),
       ),
       partialize: (state) => ({
-        byThreadKey: state.byThreadKey,
-        branchBaseRefByThreadKey: state.branchBaseRefByThreadKey,
+        byThreadKey: persistentThreadEntries(state.byThreadKey),
+        branchBaseRefByThreadKey: persistentThreadEntries(state.branchBaseRefByThreadKey),
       }),
     },
   ),

@@ -2,6 +2,8 @@ import {
   ATTACHMENT_UPLOAD_URL_TTL_MS,
   type AttachmentCreateUploadUrlInput,
   AttachmentUploadSigningKeyError,
+  AttachmentUploadOwner,
+  TemporaryResourceError,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
@@ -32,6 +34,8 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import { inferImageExtension } from "../imageMime.ts";
 
+import * as TemporaryResourcePolicy from "../orchestration-v2/TemporaryResourcePolicy.ts";
+
 export const ATTACHMENT_UPLOAD_ROUTE_PREFIX = "/api/attachments/upload";
 
 const SIGNING_SECRET_NAME = "asset-access-signing-key";
@@ -49,6 +53,7 @@ const AttachmentUploadClaims = Schema.Struct({
   mimeType: Schema.String,
   sizeBytes: Schema.Number,
   expiresAt: Schema.Number,
+  owner: Schema.optionalKey(AttachmentUploadOwner),
 });
 export type AttachmentUploadClaims = typeof AttachmentUploadClaims.Type;
 
@@ -69,9 +74,30 @@ const loadSigningSecret = Effect.gen(function* () {
   return yield* secretStore.getOrCreateRandom(SIGNING_SECRET_NAME, 32);
 });
 
+const assertUploadOwnerDurable = Effect.fn("AttachmentUpload.assertOwnerDurable")(function* (
+  owner: AttachmentUploadOwner | undefined,
+) {
+  yield* TemporaryResourcePolicy.assertCurrentThreadDurable("attachments");
+  const policy = yield* TemporaryResourcePolicy.make;
+  if (owner?._tag === "thread") {
+    yield* policy.assertDurable(owner.threadId, "attachments");
+    return;
+  }
+  if (owner?._tag === "draft") {
+    if (owner.temporary) return yield* new TemporaryResourceError({ resource: "attachments" });
+    if (owner.threadId !== undefined) {
+      yield* policy.assertDurable(owner.threadId, "attachments");
+      if (owner.temporary === false) return;
+    }
+  }
+  if (!policy.canRecordUnattributed())
+    return yield* new TemporaryResourceError({ resource: "attachments" });
+});
+
 export const issueAttachmentUploadUrl = Effect.fn("AttachmentUpload.issueUrl")(function* (
   input: AttachmentCreateUploadUrlInput,
 ) {
+  yield* assertUploadOwnerDurable(input.owner);
   const secret = yield* loadSigningSecret.pipe(
     Effect.mapError((cause) => new AttachmentUploadSigningKeyError({ cause })),
   );
@@ -107,6 +133,7 @@ export const issueAttachmentUploadUrl = Effect.fn("AttachmentUpload.issueUrl")(f
       mimeType: input.mimeType,
       sizeBytes: input.sizeBytes,
       expiresAt,
+      ...(input.owner === undefined ? {} : { owner: input.owner }),
     }),
   );
 
@@ -150,6 +177,13 @@ export const storeAttachmentUpload = Effect.fn("AttachmentUpload.store")(functio
   claims: AttachmentUploadClaims,
   body: Uint8Array | HttpServerRequest.HttpServerRequest["stream"],
 ) {
+  const admitted = yield* Effect.result(assertUploadOwnerDurable(claims.owner));
+  if (admitted._tag === "Failure")
+    return {
+      ok: false,
+      status: 409,
+      detail: admitted.failure.message,
+    } satisfies StoreAttachmentUploadResult;
   if (body instanceof Uint8Array && body.byteLength !== claims.sizeBytes) {
     return {
       ok: false,

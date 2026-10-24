@@ -1,3 +1,4 @@
+import { isTemporaryThread } from "@t3tools/client-runtime/temporary-threads";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import { create } from "zustand";
@@ -242,6 +243,7 @@ export const useBrowserHistoryStore = create<BrowserHistoryStoreState>()(
         set({ byProjectKey: { ...state.byProjectKey, [projectKey]: next } });
       },
       registerThreadProject: (ref, projectKey) => {
+        if (isTemporaryThread(ref.environmentId, ref.threadId)) return;
         const threadKey = scopedThreadKey(ref);
         const state = get();
         const pendingVisits = state.pendingVisitsByThreadKey[threadKey];
@@ -324,6 +326,7 @@ function migratePersistedThreadProjectKeys(
 }
 
 export function recordVisitForThread(ref: ScopedThreadRef, url: string, at?: number): void {
+  if (isTemporaryThread(ref.environmentId, ref.threadId)) return;
   const threadKey = scopedThreadKey(ref);
   const state = useBrowserHistoryStore.getState();
   const projectKey = state.projectKeyByThreadKey[threadKey];
@@ -349,6 +352,7 @@ export function setTitleForThreadUrl(
   title: string,
   environmentHostname?: string | null,
 ): void {
+  if (isTemporaryThread(ref.environmentId, ref.threadId)) return;
   const threadKey = scopedThreadKey(ref);
   const state = useBrowserHistoryStore.getState();
   const projectKey = state.projectKeyByThreadKey[threadKey];

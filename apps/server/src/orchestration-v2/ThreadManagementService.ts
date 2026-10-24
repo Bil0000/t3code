@@ -56,6 +56,7 @@ import { DispatchModeLimit, exceededDispatchModeLimit } from "./DispatchModeLimi
 import { projectTurnItemForDetail } from "./WireProjection.ts";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as TemporaryThreadStorage from "./TemporaryThreadStorage.ts";
 
 export type ThreadManagementSendMode = "auto" | "queue" | "steer" | "restart";
 
@@ -515,6 +516,9 @@ const make = Effect.gen(function* () {
   const legacyImporter = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
+  const temporaryStorage = yield* Effect.serviceOption(
+    TemporaryThreadStorage.TemporaryThreadStorage,
+  );
 
   const assertProviderInstanceEnabled: ThreadManagementServiceShape["assertProviderInstanceEnabled"] =
     (input) =>
@@ -670,11 +674,32 @@ const make = Effect.gen(function* () {
     }
   };
 
-  const dispatch: ThreadManagementServiceShape["dispatch"] = (command) =>
-    ensureCommandTranscripts(command).pipe(
-      Effect.andThen(assertDispatchTargetEnabled(command)),
-      Effect.andThen(orchestrator.dispatch(command)),
-    );
+  const dispatch: ThreadManagementServiceShape["dispatch"] = Effect.fn(
+    "ThreadManagementService.dispatch",
+  )(function* (command) {
+    if (command.type === "thread.create" && command.temporary === true) {
+      if (Option.isNone(temporaryStorage)) {
+        return yield* new Orchestrator.OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "Temporary storage is unavailable.",
+        });
+      }
+      yield* temporaryStorage.value.register({ threadId: command.threadId }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new Orchestrator.OrchestratorDispatchError({
+              commandId: command.commandId,
+              commandType: command.type,
+              cause,
+            }),
+        ),
+      );
+    }
+    yield* ensureCommandTranscripts(command);
+    yield* assertDispatchTargetEnabled(command);
+    return yield* orchestrator.dispatch(command);
+  });
 
   const getProjectThread: ThreadManagementServiceShape["getProjectThread"] = (input) =>
     getThreadProjection(input.threadId).pipe(
@@ -842,10 +867,8 @@ const make = Effect.gen(function* () {
         threadId: input.threadId,
         cause,
       });
-    // Taken before the first read, so a run update between that read and
-    // the subscription below still replays.
-    const afterSequence = yield* orchestrator
-      .getThreadEventSequence(input.threadId)
+    const updates = yield* orchestrator
+      .subscribeThreadRunUpdates(input.threadId)
       .pipe(Effect.mapError(loadError));
     const target = yield* getProjectThreadRecords(input, ["runs"]);
     const selectedRun =
@@ -885,26 +908,7 @@ const make = Effect.gen(function* () {
     // A declined continuation records no event, so its effect settling wakes
     // the wait too.
     const wait = Stream.merge(
-      Stream.merge(
-        orchestrator.streamStoredEventsFrom({
-          threadId: input.threadId,
-          afterSequence,
-          eventType: "run.updated",
-        }),
-        orchestrator.streamStoredEventsFrom({
-          threadId: input.threadId,
-          afterSequence,
-          eventType: "thread.deleted",
-        }),
-      ).pipe(
-        Stream.mapError(loadError),
-        Stream.filter(
-          (stored) =>
-            stored.event.type !== "run.updated" ||
-            stored.event.payload.id === selectedRun.id ||
-            stored.event.payload.restartContinuationOfRunId !== undefined,
-        ),
-      ),
+      updates.pipe(Stream.mapError(loadError)),
       initial.pending
         ? Stream.fromEffect(orchestrator.awaitRestartContinuation(initial.run))
         : Stream.empty,
@@ -927,7 +931,7 @@ const make = Effect.gen(function* () {
     // happened, so only a still-active run counts as timed out.
     const final = yield* outcome((yield* getProjectThreadRecords(input, ["runs"])).runs);
     return { threadId: input.threadId, run: final.run, timedOut: !final.settled };
-  });
+  }, Effect.scoped);
 
   const settleAfterRun: ThreadManagementServiceShape["settleAfterRun"] = Effect.fn(
     "orchestrationV2.threadManagement.settleAfterRun",

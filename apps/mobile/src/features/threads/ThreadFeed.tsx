@@ -1,3 +1,4 @@
+import { isTemporaryThread } from "@t3tools/client-runtime/temporary-threads";
 import { Button } from "../../components/ui/Button";
 import * as Dialog from "../../components/ui/Dialog";
 import { useOpenPullRequest } from "../../native/useOpenPullRequest";
@@ -443,7 +444,12 @@ function AssistantForkButton(props: {
   });
   const runId = props.projectedItem.item.runId;
 
-  if (!canFork || runId === null) return null;
+  if (
+    !canFork ||
+    runId === null ||
+    isTemporaryThread(props.environmentId, props.projectedItem.sourceThreadId)
+  )
+    return null;
 
   return (
     <Pressable
@@ -505,6 +511,7 @@ function MessageAttachmentImage(props: {
   readonly className: string;
   readonly onPressPreview: (source: FilePreviewSource) => void;
 }) {
+  const { selectedThread } = useThreadSelection();
   const withGallery = useFilePreviewGallery();
   const sourceIdentifier = useId();
   const resource = useMemo(
@@ -521,6 +528,8 @@ function MessageAttachmentImage(props: {
   const retriedImage = useRef(false);
   const imageStyle = useResolveClassNames(props.className);
 
+  if (selectedThread?.temporary)
+    return <Text className="text-xs text-foreground-muted">Keep thread to open media.</Text>;
   if (uri === null) {
     return (
       <View className={`${props.className} items-center justify-center`}>
@@ -676,6 +685,8 @@ function MessageAttachmentFile(props: {
     })();
   };
 
+  if (selectedThread?.temporary)
+    return <Text className="text-xs text-foreground-muted">Keep thread to open media.</Text>;
   if (videoType !== null) {
     const sourceIdentifier = `attachment:${props.environmentId}:${attachment.id}`;
     return (
@@ -1298,6 +1309,11 @@ function renderFeedEntry(
     return <ThreadThinkingRow rowSizing={props.workRowSizing} iconSubtleColor={iconSubtleColor} />;
   }
 
+  if (
+    (entry.type === "html-render" || entry.type === "mcp-app") &&
+    isTemporaryThread(props.environmentId, props.threadId)
+  )
+    return <Text className="text-xs text-foreground-muted">Keep thread to open media.</Text>;
   if (entry.type === "html-render") {
     return (
       <ThreadHtmlRender
@@ -1916,6 +1932,10 @@ function UserMessageContent(props: UserMessageContentProps) {
               (item) => item.contextId === reference.contextId,
             );
             if (actionId === "copy-context" && record) {
+              if (selectedThread?.temporary) {
+                Dialog.alert("Keep thread first", "Keep this thread before copying context.");
+                return;
+              }
               void writeComposerContextClipboard(
                 formatComposerContextReference({
                   ...reference,
@@ -1958,13 +1978,15 @@ function UserMessageMarkdownContent(props: UserMessageContentProps) {
   const text = props.text;
   const segments = parseReviewCommentMessageSegments(text);
   const hasReviewComment = segments.some((segment) => segment.kind === "review-comment");
-  const contextClipboardFragment = props.context
-    ? (encodeComposerContextFragment({
-        version: 1,
-        source: { environmentId: props.environmentId },
-        records: props.context.records,
-      }) ?? undefined)
-    : undefined;
+  const { selectedThread } = useThreadSelection();
+  const contextClipboardFragment =
+    props.context && !selectedThread?.temporary
+      ? (encodeComposerContextFragment({
+          version: 1,
+          source: { environmentId: props.environmentId },
+          records: props.context.records,
+        }) ?? undefined)
+      : undefined;
   if (!hasReviewComment) {
     return (
       <SelectableMarkdownText
@@ -2251,6 +2273,10 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     );
   };
   const onMarkdownLinkPress = (href: string, imageEmbed = false) => {
+    if (isTemporaryThread(props.environmentId, props.threadId)) {
+      Dialog.alert("Keep thread first", "Keep this thread before opening media or links.");
+      return;
+    }
     markdownLinkRequest.current?.abort();
     const request = new AbortController();
     markdownLinkRequest.current = request;
@@ -2461,6 +2487,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     },
   };
   const renderMarkdownImage: MarkdownImageRenderer = (image) => {
+    if (isTemporaryThread(props.environmentId, props.threadId))
+      return <Text className="text-xs text-foreground-muted">Keep thread to open media.</Text>;
     const media = resolveMarkdownMediaPreview(image.href, {
       environmentId: props.environmentId,
       threadId: props.threadId,
@@ -2513,6 +2541,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     );
   };
   const renderViewedImage: MarkdownImageRenderer = (image) => {
+    if (isTemporaryThread(props.environmentId, props.threadId))
+      return <Text className="text-xs text-foreground-muted">Keep thread to open media.</Text>;
     const viewedImage = resolveViewedImageAsset(image.href, {
       threadId: props.threadId,
       workspaceRoot: props.workspaceRoot,
@@ -2956,10 +2986,18 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   };
 
   const onPressPreview = (source: FilePreviewSource) => {
+    if (isTemporaryThread(props.environmentId, props.threadId)) {
+      Dialog.alert("Keep thread first", "Keep this thread before opening media.");
+      return;
+    }
     markdownLinkRequest.current?.abort();
     setExpandedFile((current) => current ?? source);
   };
   const onPressVideo = (attachment: ChatFileAttachment, sourceIdentifier: string) => {
+    if (isTemporaryThread(props.environmentId, props.threadId)) {
+      Dialog.alert("Keep thread first", "Keep this thread before opening media.");
+      return;
+    }
     markdownLinkRequest.current?.abort();
     setExpandedVideo(
       (current) =>

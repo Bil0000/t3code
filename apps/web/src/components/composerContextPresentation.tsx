@@ -5,7 +5,7 @@ import { formatAttachmentSize } from "@t3tools/client-runtime/state/attachments"
 import { videoMimeType } from "@t3tools/shared/video";
 import { MessageCircleIcon, MousePointerClickIcon } from "lucide-react";
 import { createContext, type MouseEvent, type ReactElement, type ReactNode, use } from "react";
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
 
 import type { ComposerFileAttachment, ComposerImageAttachment } from "~/composerDraftStore";
 import { composerFileNeedsReattach } from "~/composerDraftStore";
@@ -62,6 +62,7 @@ export type ComposerDraftContextRecord =
 
 export interface ComposerContextActions {
   environmentId: EnvironmentId | null;
+  threadRef?: ScopedThreadRef | undefined;
   cwd?: string | undefined;
   expandImage: (imageId: string) => void;
   expandVideo: (fileId: string) => void;
@@ -276,6 +277,7 @@ function previewAnnotationTooltip(annotation: PreviewAnnotationPayload): string 
 }
 
 function ComposerReviewCommentDetails({ comment }: { comment: ReviewCommentContext }) {
+  const { threadRef } = use(ComposerContextActionsContext);
   return (
     <div className="space-y-2 overflow-hidden rounded-lg border border-border/70 bg-background/70 p-3">
       <div className="space-y-1">
@@ -284,7 +286,9 @@ function ComposerReviewCommentDetails({ comment }: { comment: ReviewCommentConte
           {comment.sectionTitle} · {comment.rangeLabel}
         </div>
       </div>
-      {comment.text.trim() ? <ChatMarkdown text={comment.text.trim()} cwd={undefined} /> : null}
+      {comment.text.trim() ? (
+        <ChatMarkdown text={comment.text.trim()} cwd={undefined} threadRef={threadRef} />
+      ) : null}
       {comment.diff.trim() ? (
         <div className="flex h-64 min-h-0 flex-col overflow-hidden rounded-md border border-border">
           <ReadOnlySourcePreview name="review.diff" text={comment.diff} />

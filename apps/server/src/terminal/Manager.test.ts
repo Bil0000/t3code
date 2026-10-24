@@ -223,6 +223,8 @@ const historyLogPath = (logsDir: string, threadId = "thread-1") =>
     Effect.map(({ join }) => join(logsDir, `terminal_${Base64Url.encode(threadId)}.log`)),
   );
 
+import { temporaryResourceStorage } from "../orchestration-v2/testkit/TemporaryResourceStorage.ts";
+
 interface CreateManagerOptions {
   shellResolver?: () => string;
   env?: NodeJS.ProcessEnv;
@@ -1704,3 +1706,24 @@ it.layer(
     }),
   );
 });
+
+it.live("temporary terminal open fails before starting a shell or writing history", () =>
+  Effect.gen(function* () {
+    const { manager, ptyAdapter, logsDir } = yield* createManager();
+    const fs = yield* FileSystem.FileSystem;
+    const before = yield* fs.readDirectory(logsDir);
+    const result = yield* Effect.result(manager.open(openInput()));
+    assert.equal(result._tag, "Failure");
+    if (result._tag === "Failure") assert.include(result.failure.message, "Keep this thread");
+    expect(ptyAdapter.spawnInputs).toHaveLength(0);
+    assert.deepEqual(yield* fs.readDirectory(logsDir), before);
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        temporaryResourceStorage,
+        NodeServices.layer,
+        ProcessRunner.layer.pipe(Layer.provide(NodeServices.layer)),
+      ),
+    ),
+  ),
+);

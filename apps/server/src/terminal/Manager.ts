@@ -1,5 +1,7 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's Crypto digest is effectful; a sync hash keeps historyPath a plain function.
 import * as NodeCrypto from "node:crypto";
+import { TemporaryResourceError } from "@t3tools/contracts";
+import * as TemporaryResourcePolicy from "../orchestration-v2/TemporaryResourcePolicy.ts";
 
 import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import {
@@ -163,25 +165,25 @@ export class TerminalManager extends Context.Service<
   {
     readonly open: (
       input: TerminalOpenInput,
-    ) => Effect.Effect<TerminalSessionSnapshot, TerminalError>;
+    ) => Effect.Effect<TerminalSessionSnapshot, TerminalError | TemporaryResourceError>;
 
     readonly attachStream: (
       input: TerminalAttachInput,
       listener: (event: TerminalAttachStreamEvent) => Effect.Effect<void>,
       registerCleanup?: (stop: () => void) => void,
-    ) => Effect.Effect<() => void, TerminalError>;
+    ) => Effect.Effect<() => void, TerminalError | TemporaryResourceError>;
 
     readonly observeStream: (
       input: TerminalObserveInput,
       listener: (event: TerminalAttachStreamEvent) => Effect.Effect<void>,
       registerCleanup?: (stop: () => void) => void,
-    ) => Effect.Effect<() => void, TerminalError>;
+    ) => Effect.Effect<() => void, TerminalError | TemporaryResourceError>;
 
     readonly resyncStream: (
       input: TerminalObserveInput,
       listener: (event: TerminalAttachStreamEvent) => Effect.Effect<void>,
       registerCleanup?: (stop: () => void) => void,
-    ) => Effect.Effect<() => void, TerminalError>;
+    ) => Effect.Effect<() => void, TerminalError | TemporaryResourceError>;
 
     readonly write: (input: TerminalWriteInput) => Effect.Effect<void, TerminalError>;
 
@@ -194,7 +196,7 @@ export class TerminalManager extends Context.Service<
      */
     readonly restart: (
       input: TerminalRestartInput,
-    ) => Effect.Effect<TerminalSessionSnapshot, TerminalError>;
+    ) => Effect.Effect<TerminalSessionSnapshot, TerminalError | TemporaryResourceError>;
 
     /**
      * When `terminalId` is omitted, closes all sessions for the thread.
@@ -1514,6 +1516,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   options: TerminalManagerOptions,
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
+  const policy = yield* TemporaryResourcePolicy.make;
   const path = yield* Path.Path;
   const context = yield* Effect.context<never>();
   const runFork = Effect.runForkWith(context);
@@ -1811,6 +1814,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         return;
       }
 
+      if (yield* policy.isVolatile(threadId)) return;
       yield* fileSystem
         .writeFileString(historyPath(threadId, terminalId), request.history.value())
         .pipe(
@@ -1830,6 +1834,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     terminalId: string,
     history: BoundedTerminalHistory,
   ) {
+    if (yield* policy.isVolatile(threadId)) return;
     yield* persistWorker.enqueue(toSessionKey(threadId, terminalId), {
       history,
       immediate: false,
@@ -1848,6 +1853,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     terminalId: string,
     history: BoundedTerminalHistory,
   ) {
+    if (yield* policy.isVolatile(threadId)) return;
     yield* persistWorker.enqueue(toSessionKey(threadId, terminalId), {
       history,
       immediate: true,
@@ -2725,6 +2731,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   const openWithWorkspaceLease = Effect.fn("terminal.openLocked")(function* (
     input: TerminalOpenInput,
   ) {
+    yield* policy.assertDurable(input.threadId, "terminal sessions");
     const terminalId = input.terminalId;
     yield* assertValidCwd(input.cwd);
 
@@ -2867,10 +2874,13 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   const open: TerminalManager["Service"]["open"] = (input) =>
     withThreadLock(
       input.threadId,
-      resolveLaunchInputEnvironment(input).pipe(Effect.flatMap(openLocked)),
+      policy
+        .assertDurable(input.threadId, "terminal sessions")
+        .pipe(Effect.andThen(resolveLaunchInputEnvironment(input)), Effect.flatMap(openLocked)),
     );
 
   const openOrAttachForStream = Effect.fnUntraced(function* (input: TerminalAttachInput) {
+    yield* policy.assertDurable(input.threadId, "terminal sessions");
     const terminalId = input.terminalId;
     const existing = yield* getSession(input.threadId, terminalId);
 
@@ -2958,7 +2968,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   // Snapshot listeners run under that lock and must not block.
   const streamSession = (
     input: TerminalObserveInput,
-    initial: Effect.Effect<TerminalSessionSnapshot | null, TerminalError>,
+    initial: Effect.Effect<TerminalSessionSnapshot | null, TerminalError | TemporaryResourceError>,
     listener: (event: TerminalAttachStreamEvent) => Effect.Effect<void>,
     registerCleanup?: (stop: () => void) => void,
   ) => {
@@ -3219,7 +3229,9 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   const restartResolved = Effect.fn("Manager.restartResolved")(function* (
     input: TerminalRestartInput,
   ) {
+    yield* policy.assertDurable(input.threadId, "terminal sessions");
     yield* increment(terminalRestartsTotal, { scope: "thread" });
+    yield* policy.assertDurable(input.threadId, "terminal sessions");
     const terminalId = input.terminalId;
     yield* assertValidCwd(input.cwd);
 
@@ -3299,7 +3311,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   const restart: TerminalManager["Service"]["restart"] = (input) =>
     withThreadLock(
       input.threadId,
-      resolveLaunchInputEnvironment(input).pipe(
+      policy.assertDurable(input.threadId, "terminal sessions").pipe(
+        Effect.andThen(resolveLaunchInputEnvironment(input)),
         Effect.flatMap((resolved) =>
           withWorkspaceLease(
             path.resolve(resolved.worktreePath ?? resolved.cwd),

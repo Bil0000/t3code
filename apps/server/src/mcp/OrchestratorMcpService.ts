@@ -1,3 +1,4 @@
+import * as TemporaryResourcePolicy from "../orchestration-v2/TemporaryResourcePolicy.ts";
 import {
   CommandId,
   type RunId,
@@ -1063,6 +1064,23 @@ function timelineItem(input: {
 }
 
 const make = Effect.gen(function* () {
+  const resourcePolicy = yield* TemporaryResourcePolicy.make;
+  const requireDurableScope = Effect.fn("OrchestratorMcpService.requireDurableScope")(function* (
+    scope: McpInvocationScope,
+  ) {
+    if (scope.thread === undefined) return;
+    yield* resourcePolicy
+      .assertDurable(scope.thread.threadId, "persistent MCP actions")
+      .pipe(Effect.mapError((error) => failure("capability_denied", error.message)));
+  });
+  const requireCopyTarget = Effect.fn("OrchestratorMcpService.requireCopyTarget")(function* (
+    source: ThreadId,
+    target: ThreadId | undefined,
+  ) {
+    yield* resourcePolicy
+      .assertCopyTarget(source, target)
+      .pipe(Effect.mapError((error) => failure("capability_denied", error.message)));
+  });
   const crypto = yield* Crypto.Crypto;
   const threadManagement = yield* ThreadManagementService.ThreadManagementService;
   const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
@@ -1812,6 +1830,7 @@ const make = Effect.gen(function* () {
 
   return OrchestratorMcpService.of({
     scheduleTask: Effect.fn("OrchestratorMcpService.scheduleTask")(function* (scope, input) {
+      yield* requireDurableScope(scope);
       const { parent, limits } = yield* loadCaller(scope);
       const projectId = yield* resolveProjectTarget(parent, input.projectId);
       yield* assertLiveCallerForOtherProject(scope, parent, projectId);
@@ -1887,6 +1906,7 @@ const make = Effect.gen(function* () {
     ),
     updateScheduledTask: Effect.fn("OrchestratorMcpService.updateScheduledTask")(
       function* (scope, input) {
+        yield* requireDurableScope(scope);
         const { parent, limits } = yield* loadCaller(scope);
         const existing = yield* loadScheduledTask(input.scheduledTaskId, limits);
         yield* assertLiveCallerForOtherProject(scope, parent, existing.projectId);
@@ -1941,6 +1961,7 @@ const make = Effect.gen(function* () {
     ),
     deleteScheduledTask: Effect.fn("OrchestratorMcpService.deleteScheduledTask")(
       function* (scope, input) {
+        yield* requireDurableScope(scope);
         const { parent, limits } = yield* loadCaller(scope);
         const existing = yield* loadScheduledTask(input.scheduledTaskId, limits);
         yield* assertLiveCallerForOtherProject(scope, parent, existing.projectId);
@@ -1955,6 +1976,7 @@ const make = Effect.gen(function* () {
       },
     ),
     requestSecret: Effect.fn("OrchestratorMcpService.requestSecret")(function* (scope, input) {
+      yield* requireDurableScope(scope);
       const { scope: threadScope, parent } = yield* loadThreadCaller(scope, "request_secret");
       const threadId = threadScope.thread.threadId;
       const run = ThreadManagementService.latestActiveRun(parent);
@@ -2525,6 +2547,7 @@ const make = Effect.gen(function* () {
     }),
     createThreads: Effect.fn("OrchestratorMcpService.createThreads")(
       function* (callerScope, input) {
+        yield* requireDurableScope(callerScope);
         const { scope, parent } = yield* loadThreadCaller(callerScope, "create_threads");
         const parentRun = ThreadManagementService.latestActiveRun(parent);
         if (
@@ -2708,7 +2731,13 @@ const make = Effect.gen(function* () {
       const nowMs = yield* Clock.currentTimeMillis;
       const statuses = input.statuses === undefined ? null : new Set(input.statuses);
       const titleContains = input.titleContains?.toLocaleLowerCase();
-      const filtered = projectThreads
+      const visibleThreads = yield* Effect.filter(projectThreads, (thread) =>
+        requireCopyTarget(thread.id, scope.thread?.threadId).pipe(
+          Effect.as(true),
+          Effect.orElseSucceed(() => false),
+        ),
+      );
+      const filtered = visibleThreads
         .filter(
           (thread) => statuses === null || statuses.has(thread.activityRunStatus ?? thread.status),
         )
@@ -2736,6 +2765,7 @@ const make = Effect.gen(function* () {
       } satisfies OrchestratorMcpThreadListResult;
     }),
     readThread: Effect.fn("OrchestratorMcpService.readThread")(function* (scope, input) {
+      yield* requireCopyTarget(input.threadId, scope.thread?.threadId);
       const { parent, target, shell } = yield* loadReadableThread(scope, input.threadId);
       const view = input.view ?? "messages";
       const afterPosition = input.afterPosition ?? -1;
@@ -2828,6 +2858,8 @@ const make = Effect.gen(function* () {
       } satisfies OrchestratorMcpThreadReadResult;
     }),
     sendToThread: Effect.fn("OrchestratorMcpService.sendToThread")(function* (scope, input) {
+      if (scope.thread !== undefined)
+        yield* requireCopyTarget(scope.thread.threadId, input.threadId);
       const { parent, limits, target } = yield* loadScopedThread(scope, input.threadId);
       yield* assertLiveCallerForOtherThread(scope, parent, target);
       yield* resolveRuntimeMode(limits.runtimeMode, target.thread.runtimeMode);
@@ -2877,6 +2909,7 @@ const make = Effect.gen(function* () {
       } satisfies OrchestratorMcpThreadSendResult;
     }),
     waitForThread: Effect.fn("OrchestratorMcpService.waitForThread")(function* (scope, input) {
+      yield* requireCopyTarget(input.threadId, scope.thread?.threadId);
       const { target } = yield* loadScopedThread(scope, input.threadId);
       const result = yield* threadManagement
         .waitForThread({

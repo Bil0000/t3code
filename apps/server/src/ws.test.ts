@@ -4,6 +4,8 @@ import {
   AuthSessionId,
   EnvironmentId,
   ProjectId,
+  MessageId,
+  OrchestrationV2GetThreadProjectionError,
   ThreadId,
   WS_METHODS,
   WsSubscribeServerConfigRpc,
@@ -15,7 +17,9 @@ import {
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as FileSystem from "effect/FileSystem";
 import * as PubSub from "effect/PubSub";
+import * as Result from "effect/Result";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import { Headers } from "effect/http";
@@ -80,6 +84,8 @@ import * as DatabaseStorage from "./persistence/DatabaseStorage.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
+import * as TemporaryThreadService from "./orchestration-v2/TemporaryThreadService.ts";
+import * as TemporaryThreadStorage from "./orchestration-v2/TemporaryThreadStorage.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
@@ -107,6 +113,7 @@ import * as ProjectEnrichment from "./project/ProjectEnrichmentService.ts";
 import * as ProjectService from "./project/ProjectService.ts";
 import {
   layerWsRpc,
+  persistChatAttachments,
   subscribeOrchestrationV2Shell,
   subscribeOrchestrationV2Thread,
   WS_RPC_SERVER_OPTIONS,
@@ -115,6 +122,52 @@ import {
 
 const snapshotConfig = (fields: Partial<ServerConfig>) =>
   ({ availableEditors: [], settings: {}, ...fields }) as unknown as ServerConfig;
+
+it.effect("rejects temporary image persistence before writing attachment bytes", () =>
+  Effect.gen(function* () {
+    const writes: Array<string> = [];
+    const result = yield* Effect.result(
+      persistChatAttachments({
+        threadId: ThreadId.make("temporary-image"),
+        messageId: MessageId.make("message"),
+        attachments: [
+          {
+            type: "image",
+            name: "private.png",
+            mimeType: "image/png",
+            sizeBytes: 1,
+            dataUrl: "data:image/png;base64,AQ==",
+          },
+        ],
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            NodeServices.layer,
+            ServerConfigModule.layerTest(process.cwd(), {
+              prefix: "temporary-attachment-test-",
+            }).pipe(Layer.provide(NodeServices.layer)),
+            Layer.mock(TemporaryThreadStorage.TemporaryThreadStorage)({
+              isTemporary: () => Effect.succeed(true),
+              isDiscarded: () => Effect.succeed(false),
+            }),
+            Layer.succeed(
+              FileSystem.FileSystem,
+              FileSystem.makeNoop({
+                writeFile: (path) =>
+                  Effect.sync(() => {
+                    writes.push(String(path));
+                  }),
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+    assert.strictEqual(result._tag, "Failure");
+    if (result._tag === "Failure") assert.include(result.failure.message, "Keep this thread");
+    assert.deepEqual(writes, []);
+  }),
+);
 
 const settingsUpdated = (settings: object): ServerConfigStreamEvent => ({
   version: 1,
@@ -172,8 +225,49 @@ it.effect("resends a file manager reveal kind that missed the snapshot", () =>
   }),
 );
 
+it.effect.each([false, true])(
+  "marks only authoritative missing thread snapshot failures, bounded=%s",
+  (acceptBoundedSnapshot) =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("thread:cold-missing");
+      for (const missing of [true, false]) {
+        const cause = new Orchestrator.OrchestratorProjectionError({
+          threadId,
+          cause: missing
+            ? new ProjectionStore.ProjectionStoreThreadNotFoundError({ threadId })
+            : new ProjectionStore.ProjectionStoreReadError({ threadId }),
+        });
+        const result = yield* subscribeOrchestrationV2Thread({
+          threadId,
+          acceptTemporaryThreads: true,
+          acceptBoundedSnapshot,
+        }).pipe(
+          Effect.flatMap(Stream.runCollect),
+          Effect.result,
+          Effect.provide(
+            Layer.mergeAll(
+              Layer.mock(ThreadManagement.ThreadManagementService)({
+                ensureLegacyTranscript: () => Effect.void,
+                getThreadSnapshot: () => Effect.fail(cause),
+                getThreadSnapshotWindow: () => Effect.fail(cause),
+              }),
+              Layer.mock(OrchestrationEventStore.OrchestrationEventStore)({}),
+            ),
+          ),
+        );
+        assert.isTrue(Result.isFailure(result));
+        if (Result.isFailure(result)) {
+          assert.instanceOf(result.failure, OrchestrationV2GetThreadProjectionError);
+          assert.deepInclude(result.failure, missing ? { reason: "thread_not_found" } : { cause });
+          if (!missing) assert.notProperty(result.failure, "reason");
+        }
+      }
+    }),
+);
+
 const ReplayTestLayer = OrchestrationEventStore.layer.pipe(
   Layer.provideMerge(SqlitePersistence.layerMemory),
+  Layer.provideMerge(NodeServices.layer),
 );
 
 it.live.each(["thread", "shell"] as const)(
@@ -292,6 +386,8 @@ it.live.each(["thread", "shell"] as const)(
 
 // Build the production RPC layer; unrelated capabilities fail if this test calls them.
 const layerUnusedConfigRpcServices = Layer.mergeAll(
+  TemporaryThreadStorage.layer,
+  Layer.mock(TemporaryThreadService.TemporaryThreadService)({}),
   Layer.mock(ServerSecretStore.ServerSecretStore)({}),
   Layer.mock(WorkspacePaths.WorkspacePaths)({}),
   Layer.mock(TraceDiagnostics.TraceDiagnostics)({}),

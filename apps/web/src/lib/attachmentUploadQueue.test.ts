@@ -1,4 +1,4 @@
-import { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { Atom, AsyncResult } from "effect/reactivity";
 import { appAtomRegistry } from "../rpc/atomRegistry";
@@ -164,6 +164,57 @@ function setConnected(environmentId: EnvironmentId, connected: boolean) {
 }
 
 describe("attachmentUploadQueue", () => {
+  it.each(["project", "scratch"])(
+    "sends explicit normal provenance for a first %s draft",
+    async (project) => {
+      const draftId = DraftId.make(`new-${project}-draft`);
+      const threadId = ThreadId.make(`reserved-${project}-thread`);
+      useComposerDraftStore
+        .getState()
+        .setProjectDraftThreadId(
+          { environmentId: firstEnvironment, projectId: ProjectId.make(project) },
+          draftId,
+          { threadId },
+        );
+      const image = makeImage(`first-${project}-image`);
+      startAttachmentUpload({ environmentId: firstEnvironment, image, draftTarget: draftId });
+      await Promise.resolve();
+      const settled = awaitAttachmentUploads([image.id]);
+      TestXmlHttpRequest.requests[0]!.complete();
+      await settled;
+      expect(mocks.runAtomCommand).toHaveBeenCalledWith(
+        expect.anything(),
+        mocks.createUploadUrl,
+        expect.objectContaining({
+          input: expect.objectContaining({
+            owner: { _tag: "draft", draftId, threadId, temporary: false },
+          }),
+        }),
+        expect.anything(),
+      );
+      useComposerDraftStore.getState().clearDraftThread(draftId);
+    },
+  );
+
+  it("requires Keep before a temporary draft can upload an attachment", () => {
+    const draftId = DraftId.make("temporary-upload-draft");
+    useComposerDraftStore
+      .getState()
+      .setProjectDraftThreadId(
+        { environmentId: firstEnvironment, projectId: ProjectId.make("temporary-upload-project") },
+        draftId,
+        { threadId: ThreadId.make("temporary-upload-thread"), temporary: true },
+      );
+    const image = makeImage("temporary-upload-image");
+    startAttachmentUpload({ environmentId: firstEnvironment, image, draftTarget: draftId });
+    expect(readAttachmentUpload(image.id)).toMatchObject({
+      status: "failed",
+      reason: "Keep this thread before attaching files.",
+    });
+    expect(TestXmlHttpRequest.requests).toHaveLength(0);
+    useComposerDraftStore.getState().clearDraftThread(draftId);
+  });
+
   beforeEach(() => {
     mocks.connectionStateAtom.mockImplementation(connectionStates);
     setConnected(firstEnvironment, true);
@@ -208,6 +259,46 @@ describe("attachmentUploadQueue", () => {
       releaseAttachmentUpload(imageId);
     }
     vi.unstubAllGlobals();
+  });
+
+  it("sends the saved thread owner when it mints an upload", async () => {
+    const image = makeImage("saved-owner");
+    const threadId = ThreadId.make("saved-thread");
+    startAttachmentUpload({
+      environmentId: firstEnvironment,
+      image,
+      draftTarget: { environmentId: firstEnvironment, threadId },
+    });
+    await Promise.resolve();
+    const settled = awaitAttachmentUploads([image.id]);
+    TestXmlHttpRequest.requests[0]!.complete();
+    await settled;
+    expect(mocks.runAtomCommand).toHaveBeenCalledWith(
+      expect.anything(),
+      mocks.createUploadUrl,
+      expect.objectContaining({
+        input: expect.objectContaining({ owner: { _tag: "thread", threadId } }),
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("sends the draft owner when it mints an upload", async () => {
+    const image = makeImage("draft-owner");
+    const draftId = DraftId.make("saved-draft");
+    startAttachmentUpload({ environmentId: firstEnvironment, image, draftTarget: draftId });
+    await Promise.resolve();
+    const settled = awaitAttachmentUploads([image.id]);
+    TestXmlHttpRequest.requests[0]!.complete();
+    await settled;
+    expect(mocks.runAtomCommand).toHaveBeenCalledWith(
+      expect.anything(),
+      mocks.createUploadUrl,
+      expect.objectContaining({
+        input: expect.objectContaining({ owner: { _tag: "draft", draftId } }),
+      }),
+      expect.anything(),
+    );
   });
 
   it("keeps an attachment local until its own environment grants write access", async () => {

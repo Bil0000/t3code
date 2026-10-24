@@ -1,12 +1,18 @@
+import * as TemporaryThreadStorage from "./TemporaryThreadStorage.ts";
+import * as TemporaryThreadService from "./TemporaryThreadService.ts";
+import * as TemporaryThreadDiagnostics from "../observability/TemporaryThreadDiagnostics.ts";
 import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as Layer from "effect/Layer";
+import * as Effect from "effect/Effect";
+import * as Context from "effect/Context";
+import * as EventSink from "./EventSink.ts";
+import * as EventStore from "./EventStore.ts";
+import * as ProjectionStore from "./ProjectionStore.ts";
+import { streamLiveStoredEvents } from "./ShellStream.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
-import * as OrchestrationCommandReceipts from "../persistence/OrchestrationCommandReceipts.ts";
-import * as OrchestrationEventStore from "../persistence/OrchestrationEventStore.ts";
 import * as McpAppModelContext from "../mcpApps/McpAppModelContext.ts";
 import * as McpAppRequests from "../mcpApps/McpAppRequests.ts";
-import * as ProviderSessionRuntime from "../persistence/ProviderSessionRuntime.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import * as ProviderAuthService from "../provider/ProviderAuthService.ts";
 import * as AgentSessionImporter from "../project/AgentSessionImporter.ts";
@@ -18,16 +24,12 @@ import * as CheckpointCaptureService from "./CheckpointCaptureService.ts";
 import * as CheckpointService from "./CheckpointService.ts";
 import * as CheckpointRollbackService from "./CheckpointRollbackService.ts";
 import * as CommandPolicy from "./CommandPolicy.ts";
-import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as ContextHandoffService from "./ContextHandoffService.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EffectWorker from "./EffectWorker.ts";
-import * as EventSink from "./EventSink.ts";
-import * as EventStore from "./EventStore.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
 import * as Orchestrator from "./Orchestrator.ts";
-import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProjectionMaintenance from "./ProjectionMaintenance.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
@@ -51,40 +53,49 @@ import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ThreadLaunchService from "./ThreadLaunchService.ts";
 import * as ThreadLifecycleService from "./ThreadLifecycleService.ts";
 import * as ThreadForkService from "./ThreadForkService.ts";
-import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 
-export const layerEventInfrastructure = Layer.mergeAll(
-  OrchestrationEventStore.layer,
-  OrchestrationCommandReceipts.layer,
+export const layerStorage = Layer.effect(
+  EventSink.EventSinkV2,
+  Effect.gen(function* () {
+    const routed = yield* EventSink.EventSinkV2;
+    const stores = yield* TemporaryThreadStorage.TemporaryThreadStores;
+    return EventSink.EventSinkV2.of({
+      ...routed,
+      stream: (input) =>
+        input?.threadId === undefined
+          ? streamLiveStoredEvents(
+              [stores.durable.eventSink, stores.volatile.eventSink].map((store) => ({
+                latestSequence: () => store.latestSequence(),
+                stream: (cursor) => store.stream({ ...input, ...cursor }),
+              })),
+            )
+          : routed.stream(input),
+    });
+  }),
+).pipe(
+  Layer.provideMerge(TemporaryThreadStorage.layer),
+  Layer.provideMerge(TemporaryThreadDiagnostics.layer),
 );
-
+export const layerEventSink = Layer.suspend(() => layerStorage);
+export const layerDurableMaintenanceStores = Layer.effectContext(
+  Effect.gen(function* () {
+    const { durable } = yield* TemporaryThreadStorage.TemporaryThreadStores;
+    return Context.make(EventStore.EventStoreV2, durable.eventStore).pipe(
+      Context.add(ProjectionStore.ProjectionStoreV2, durable.projectionStore),
+    );
+  }),
+).pipe(Layer.provide(layerStorage));
+const layerStores = layerStorage;
+const layerEventSinkProvided = layerStorage;
+const layerCommandReceiptStoreProvided = layerStorage;
 const layerRuntimePolicyProvided = RuntimePolicy.layerFromProjectStore.pipe(
   Layer.provide(ProjectStore.layer),
 );
 
-const layerEventStoreProvided = EventStore.layerFromOrchestrationEventStore.pipe(
-  Layer.provide(layerEventInfrastructure),
-);
-const layerCommandReceiptStoreProvided = CommandReceiptStore.layerFromApplicationReceipts.pipe(
-  Layer.provide(layerEventInfrastructure),
-);
-
-const layerStores = Layer.mergeAll(
-  layerEventInfrastructure,
-  layerEventStoreProvided,
-  ProjectionStore.layer,
-  ProjectStore.layer,
-  layerCommandReceiptStoreProvided,
-  EffectOutbox.layer,
-  TurnItemPositionStore.layer,
-);
-
-export const layerEventSink = EventSink.layerFromStores.pipe(Layer.provide(layerStores));
-const layerEventSinkProvided = layerEventSink;
 const layerProjectionMaintenanceProvided = ProjectionMaintenance.layer.pipe(
-  Layer.provide(layerStores),
+  Layer.provide(layerDurableMaintenanceStores),
 );
 const layerLegacyV1ThreadImporterProvided = LegacyV1ThreadImporter.layer.pipe(
   Layer.provide(layerEventSinkProvided),
@@ -94,7 +105,7 @@ export const layerProjectService = ProjectService.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
       ProjectStore.layer,
-      ProjectionStore.layer,
+      layerStorage,
       layerEventSinkProvided,
       IdAllocator.layer,
       layerLegacyV1ThreadImporterProvided,
@@ -107,7 +118,7 @@ const layerProviderEventIngestorProvided = ProviderEventIngestor.layer.pipe(
     Layer.mergeAll(
       layerEventSinkProvided,
       IdAllocator.layer,
-      ProjectionStore.layer,
+      layerStorage,
       ThreadCommandExecutor.layer,
       GitVcsDriver.layer,
     ),
@@ -128,7 +139,7 @@ const layerProviderSwitchServiceProvided = ProviderSwitchService.layer.pipe(
 );
 
 const layerCommandOutputHubProvided = CommandOutputHub.layer.pipe(
-  Layer.provide(Layer.merge(layerEventSinkProvided, ProjectionStore.layer)),
+  Layer.provide(Layer.merge(layerEventSinkProvided, layerStorage)),
 );
 
 const layerProviderSessionManagerProvided = ProviderSessionManager.layer.pipe(
@@ -139,13 +150,13 @@ const layerProviderSessionManagerProvided = ProviderSessionManager.layer.pipe(
       layerEventSinkProvided,
       IdAllocator.layer,
       layerProviderEventIngestorProvided,
-      ProjectionStore.layer,
+      layerStorage,
     ),
   ),
 );
 
 const layerProviderAuthServiceProvided = ProviderAuthService.layer.pipe(
-  Layer.provide(Layer.merge(ProjectionStore.layer, layerProviderSessionManagerProvided)),
+  Layer.provide(Layer.merge(layerStorage, layerProviderSessionManagerProvided)),
 );
 
 const layerRunExecutionServiceProvided = RunExecutionService.layer.pipe(
@@ -156,7 +167,7 @@ const layerRunExecutionServiceProvided = RunExecutionService.layer.pipe(
       layerEventSinkProvided,
       IdAllocator.layer,
       layerProviderEventIngestorProvided,
-      TurnItemPositionStore.layer,
+      layerStorage,
     ),
   ),
 );
@@ -167,7 +178,7 @@ const layerProviderTurnStartServiceProvided = ProviderTurnStartService.layer.pip
       layerContextHandoffServiceProvided,
       layerEventSinkProvided,
       IdAllocator.layer,
-      ProjectionStore.layer,
+      layerStorage,
       layerProviderSessionManagerProvided,
       layerProviderAuthServiceProvided,
       layerRunExecutionServiceProvided,
@@ -177,10 +188,10 @@ const layerProviderTurnStartServiceProvided = ProviderTurnStartService.layer.pip
 );
 
 const layerProviderTurnControlServiceProvided = ProviderTurnControlService.layer.pipe(
-  Layer.provide(Layer.merge(ProjectionStore.layer, layerProviderSessionManagerProvided)),
+  Layer.provide(Layer.merge(layerStorage, layerProviderSessionManagerProvided)),
 );
 const layerRuntimeRequestServiceProvided = RuntimeRequestService.layer.pipe(
-  Layer.provide(Layer.merge(ProjectionStore.layer, layerProviderSessionManagerProvided)),
+  Layer.provide(Layer.merge(layerStorage, layerProviderSessionManagerProvided)),
 );
 const layerCheckpointRollbackServiceProvided = CheckpointRollbackService.layer.pipe(
   Layer.provide(
@@ -189,7 +200,7 @@ const layerCheckpointRollbackServiceProvided = CheckpointRollbackService.layer.p
       layerCheckpointServiceProvided,
       layerEventSinkProvided,
       IdAllocator.layer,
-      ProjectionStore.layer,
+      layerStorage,
       layerProviderSessionManagerProvided,
       ThreadCommandExecutor.layer,
       layerRuntimePolicyProvided,
@@ -202,12 +213,12 @@ const layerCheckpointCaptureServiceProvided = CheckpointCaptureService.layer.pip
       layerCheckpointServiceProvided,
       layerEventSinkProvided,
       IdAllocator.layer,
-      ProjectionStore.layer,
+      layerStorage,
     ),
   ),
 );
 const layerRunFinalizationServiceProvided = RunFinalizationService.layer.pipe(
-  Layer.provide(Layer.merge(layerCheckpointCaptureServiceProvided, ProjectionStore.layer)),
+  Layer.provide(Layer.merge(layerCheckpointCaptureServiceProvided, layerStorage)),
 );
 
 const layerOrchestratorProvided = Orchestrator.layer.pipe(
@@ -215,6 +226,7 @@ const layerOrchestratorProvided = Orchestrator.layer.pipe(
     Layer.mergeAll(
       layerCheckpointServiceProvided,
       CommandPolicy.layer,
+      TemporaryThreadService.layerState,
       layerStores,
       layerEventSinkProvided,
       layerCommandReceiptStoreProvided,
@@ -237,15 +249,10 @@ const layerOrchestratorProvided = Orchestrator.layer.pipe(
 
 const layerAgentSessionImporterProvided = AgentSessionImporter.layer.pipe(
   Layer.provide(
-    Layer.mergeAll(
-      AgentSessionScanner.layer,
-      layerProjectService,
-      layerOrchestratorProvided,
-      layerEventSinkProvided,
-      IdAllocator.layer,
-      ProviderSessionRuntime.layer,
-    ),
+    Layer.mergeAll(AgentSessionScanner.layer, layerOrchestratorProvided, IdAllocator.layer),
   ),
+  Layer.provide(layerProjectService),
+  Layer.provide(layerStorage),
 );
 
 const layerThreadManagementProvided = ThreadManagementService.layerWithLegacyImporter.pipe(
@@ -267,6 +274,7 @@ const layerManagedProjectFoldersProvided = ManagedProjectFolders.layer.pipe(
 const layerThreadLaunchProvided = ThreadLaunchService.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
+      TemporaryThreadService.layerState,
       layerProjectService,
       layerProjectSetupScriptRunner,
       layerManagedProjectFoldersProvided,
@@ -330,7 +338,7 @@ const layerProviderRuntimeRecoveryProvided = ProviderRuntimeRecoveryService.laye
       layerStores,
       layerEventSinkProvided,
       IdAllocator.layer,
-      ProjectionStore.layer,
+      layerStorage,
     ),
   ),
 );
@@ -342,6 +350,28 @@ const layerMcpAppRequestsProvided = McpAppRequests.layer.pipe(
       layerOrchestratorProvided,
       layerThreadManagementProvided,
       layerProviderSessionManagerProvided,
+    ),
+  ),
+);
+
+const layerTemporaryThreadCleanupProvided = TemporaryThreadService.layerCleanup.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      layerOrchestratorProvided,
+      layerEffectWorkerProvided,
+      layerProviderSessionManagerProvided,
+      TemporaryThreadService.layerState,
+    ),
+  ),
+  Layer.provide(layerProjectService),
+  Layer.provide(layerStorage),
+);
+const layerTemporaryThreadServiceProvided = TemporaryThreadService.layer.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      TemporaryThreadService.layerState,
+      layerStorage,
+      layerTemporaryThreadCleanupProvided,
     ),
   ),
 );
@@ -360,8 +390,8 @@ export const layer = Layer.mergeAll(
 );
 
 export const layerProduction = Layer.mergeAll(
-  layer.pipe(Layer.provide(layerProjectService)),
-  layerProjectService,
+  layerTemporaryThreadServiceProvided,
+  layer,
   layerManagedProjectFoldersProvided,
   layerThreadLaunchProvided,
   layerThreadLifecycleProvided,
@@ -369,18 +399,19 @@ export const layerProduction = Layer.mergeAll(
   layerSecretRequestsProvided,
   UsageLimitRecoveryWorker.layer.pipe(
     Layer.provide(
-      Layer.mergeAll(
-        ProjectionStore.layer,
-        layerThreadManagementProvided,
-        layerOrchestratorProvided,
-      ),
+      Layer.mergeAll(layerStorage, layerThreadManagementProvided, layerOrchestratorProvided),
     ),
   ),
   layerProviderContinuationWorkerProvided,
   layerAgentSessionImporterProvided,
-  EffectOutbox.layerPruneWorker.pipe(Layer.provide(EffectOutbox.layer)),
+  EffectOutbox.layerPruneWorker.pipe(Layer.provide(layerStorage)),
 ).pipe(
-  Layer.provide(ResourceCleanupService.layer.pipe(Layer.provide(layerScheduledTaskProvided))),
+  Layer.provide(
+    ResourceCleanupService.layer.pipe(
+      Layer.provide(Layer.mergeAll(layerScheduledTaskProvided, layerCommandOutputHubProvided)),
+    ),
+  ),
   Layer.provide(Scheduler.layer),
-  Layer.provideMerge(layerEventInfrastructure),
+  Layer.provideMerge(layerStorage),
+  Layer.provideMerge(layerProjectService),
 );

@@ -20,6 +20,7 @@ import {
   type PreviewTabId,
 } from "@t3tools/contracts";
 
+import * as TemporaryResourcePolicy from "../../../orchestration-v2/TemporaryResourcePolicy.ts";
 import {
   parseAttachmentUuid,
   parseAttachmentFileExtension,
@@ -120,6 +121,8 @@ export const claimPreviewRecording = Effect.fn("PreviewToolkit.claimRecording")(
   threadId: ThreadId,
   response: unknown,
 ) {
+  const policy = yield* TemporaryResourcePolicy.make;
+  yield* policy.assertDurable(threadId, "browser recordings");
   const artifact = yield* decodeUploadedRecordingArtifact(response).pipe(
     Effect.mapError(
       (cause) =>

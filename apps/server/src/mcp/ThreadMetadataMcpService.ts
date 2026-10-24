@@ -15,6 +15,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import * as TemporaryResourcePolicy from "../orchestration-v2/TemporaryResourcePolicy.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import { threadNotFound } from "./OrchestratorMcpService.ts";
 
@@ -138,6 +139,7 @@ function resultFromThread(input: {
 const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const threadManagement = yield* ThreadManagementService.ThreadManagementService;
+  const policy = yield* TemporaryResourcePolicy.make;
 
   const update = Effect.fn("ThreadMetadataMcpService.update")(function* (
     scope: McpInvocationScope,
@@ -157,6 +159,9 @@ const make = Effect.gen(function* () {
         "Pass threadId: this MCP client is not running inside a T3 thread.",
       );
     }
+    yield* policy
+      .assertCopyTarget(threadId, scope.thread?.threadId)
+      .pipe(Effect.mapError((error) => failure("capability_denied", error.message)));
     const shell = yield* threadManagement
       .getThreadShell(threadId)
       .pipe(

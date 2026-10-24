@@ -1,3 +1,5 @@
+import { isTemporaryThread } from "@t3tools/client-runtime/temporary-threads";
+import { isTemporaryComposerDraft } from "../../state/use-composer-drafts";
 import { Toolbar } from "../../components/ui/Toolbar";
 import * as Dialog from "../../components/ui/Dialog";
 /* oxlint-disable react/no-array-index-key -- Captured table rows and columns have stable positions and may contain identical values. */
@@ -165,6 +167,20 @@ function AttachmentDocumentBody(props: {
 }
 
 export function AttachmentFileScreen(props: AttachmentFileScreenProps) {
+  const params = props.route.params;
+  if (
+    (params.environmentId &&
+      params.threadId &&
+      isTemporaryThread(params.environmentId, params.threadId)) ||
+    (params.draftKey && isTemporaryComposerDraft(params.draftKey))
+  )
+    return (
+      <EmptyState title="Keep thread first" detail="Keep this thread before opening attachments." />
+    );
+  return <SavedAttachmentFileScreen {...props} />;
+}
+
+function SavedAttachmentFileScreen(props: AttachmentFileScreenProps) {
   const navigation = useNavigation();
   const { appearance, setCodeWordBreak } = useAppearancePreferences();
   const iconColor = useUniwindTheme()["--color-icon"];

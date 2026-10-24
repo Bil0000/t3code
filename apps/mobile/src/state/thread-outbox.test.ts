@@ -112,6 +112,23 @@ function queuedMessage(input: {
 }
 
 describe("thread outbox", () => {
+  it("keeps temporary messages out of disk across writes and removal", async () => {
+    onTestFinished(() => outboxFiles.clear());
+    const message = {
+      ...queuedMessage({ messageId: "temporary-sentinel", createdAt: "2026-10-24T00:00:00Z" }),
+      temporary: true,
+    };
+    await expoThreadOutboxStorage.write(message);
+    expect(outboxFiles.size).toBe(0);
+    await expoThreadOutboxStorage.write({ ...message, text: "edited-secret" });
+    expect(outboxFiles.size).toBe(0);
+    await expoThreadOutboxStorage.remove(message);
+    expect([...outboxFiles.values()].join(" ")).not.toContain("temporary-sentinel");
+    expect(outboxFiles.size).toBe(0);
+    await expoThreadOutboxStorage.write({ ...message, temporary: false });
+    expect([...outboxFiles.values()].join(" ")).toContain("temporary-sentinel");
+  });
+
   it("retains structured context through a persisted offline queue round trip", () => {
     const message: QueuedThreadMessage = {
       ...queuedMessage({ messageId: "context-message", createdAt: "2026-09-06T12:00:00.000Z" }),

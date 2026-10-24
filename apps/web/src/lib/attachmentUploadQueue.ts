@@ -1,3 +1,4 @@
+import { isTemporaryComposerTarget } from "../temporaryChat";
 import {
   AuthOrchestrationOperateScope,
   PROVIDER_SEND_TURN_SUPPORTED_IMAGE_MIME_TYPES,
@@ -272,12 +273,32 @@ async function runUpload(job: UploadJob): Promise<void> {
     });
     return;
   }
+  const draft =
+    job.draftTarget === undefined
+      ? null
+      : useComposerDraftStore.getState().getDraftThread(job.draftTarget);
+  const owner =
+    job.draftTarget === undefined
+      ? undefined
+      : typeof job.draftTarget === "string"
+        ? {
+            _tag: "draft" as const,
+            draftId: job.draftTarget,
+            ...(draft
+              ? {
+                  threadId: draft.threadId,
+                  temporary: draft.temporary === true,
+                }
+              : {}),
+          }
+        : { _tag: "thread" as const, threadId: job.draftTarget.threadId };
   const result = await runAttachmentUploadCycle({
     registry: appAtomRegistry,
     createUploadUrl: attachmentEnvironment.createUploadUrl,
     remove: attachmentEnvironment.remove,
     environmentId: job.environmentId,
     upload: {
+      ...(owner === undefined ? {} : { owner }),
       ...(job.image.type === "file" ? { type: "file" as const } : {}),
       name: job.image.name,
       mimeType,
@@ -407,6 +428,14 @@ export function startAttachmentUpload(input: {
   readonly image: ComposerImageAttachment | ComposerFileAttachment;
   readonly draftTarget?: ComposerThreadTarget;
 }): void {
+  if (input.draftTarget && isTemporaryComposerTarget(input.draftTarget)) {
+    setUploadState(input.image.id, {
+      status: "failed",
+      environmentId: input.environmentId,
+      reason: "Keep this thread before attaching files.",
+    });
+    return;
+  }
   if (!readEnvironmentScope(input.environmentId, AuthOrchestrationOperateScope)) return;
   const existingJob = jobsByImageId.get(input.image.id);
   if (existingJob?.environmentId === input.environmentId) {

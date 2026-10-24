@@ -7,6 +7,11 @@ import { PrimaryConnectionTarget, type PreparedConnection } from "../connection/
 import * as RpcHttp from "../rpc/http.ts";
 import * as BoundedThreadSnapshotHttp from "./boundedThreadSnapshotHttp.ts";
 import * as ThreadSnapshotLoader from "./threadSnapshotHttp.ts";
+import {
+  forgetTemporaryThread,
+  markTemporaryThreadDeleted,
+  setTemporaryThread,
+} from "../temporaryThreads.ts";
 
 const TARGET = new PrimaryConnectionTarget({
   environmentId: "environment-bounded" as never,
@@ -120,6 +125,56 @@ const boundedBody = (compact: boolean) => ({
 });
 
 describe("boundedThreadSnapshotLoader", () => {
+  it.effect("uses the native socket before classifying an unknown deep-link ID", () => {
+    const urls: string[] = [];
+    const fetchFn: typeof fetch = async (input) => {
+      urls.push(String(input));
+      return Response.json(boundedBody(false));
+    };
+    return Effect.gen(function* () {
+      const loader = yield* ThreadSnapshotLoader.ThreadSnapshotLoader;
+      expect(yield* loader.load(PREPARED, THREAD_ID)).toEqual({ _tag: "unavailable" });
+      expect(urls).toEqual([]);
+    }).pipe(
+      Effect.provide(
+        Layer.provide(
+          BoundedThreadSnapshotHttp.layerSocket,
+          RpcHttp.layerRemoteHttpClient(fetchFn),
+        ),
+      ),
+    );
+  });
+
+  it.effect.each(["temporary", "deleted"] as const)(
+    "uses the socket without an HTTP request for a %s thread",
+    (retention) => {
+      const urls: string[] = [];
+      const fetchFn: typeof fetch = async (input) => {
+        urls.push(String(input));
+        return Response.json(boundedBody(false));
+      };
+      return Effect.gen(function* () {
+        setTemporaryThread(PREPARED.environmentId, THREAD_ID, true);
+        if (retention === "deleted") markTemporaryThreadDeleted(PREPARED.environmentId, THREAD_ID);
+        const loader = yield* ThreadSnapshotLoader.ThreadSnapshotLoader;
+        expect(yield* loader.load(PREPARED, THREAD_ID)).toEqual({ _tag: "unavailable" });
+        expect(urls).toEqual([]);
+        if (retention === "temporary") {
+          setTemporaryThread(PREPARED.environmentId, THREAD_ID, false);
+          expect((yield* loader.load(PREPARED, THREAD_ID))._tag).toBe("present");
+          expect(urls).toHaveLength(1);
+        }
+      }).pipe(
+        Effect.provide(
+          Layer.provide(BoundedThreadSnapshotHttp.layer, RpcHttp.layerRemoteHttpClient(fetchFn)),
+        ),
+        Effect.ensuring(
+          Effect.sync(() => forgetTemporaryThread(PREPARED.environmentId, THREAD_ID)),
+        ),
+      );
+    },
+  );
+
   it.effect.each([
     ["an older server that ignores the opt-in", false],
     ["a server that sends compact turnItems", true],
@@ -191,33 +246,39 @@ describe("boundedThreadSnapshotLoader", () => {
     );
   });
 
-  it.effect("treats structured EnvironmentResourceNotFoundError from bounded as missing", () => {
-    const fetchFn = ((input: RequestInfo | URL) => {
-      const url = String(input);
-      expect(url).toContain(`/api/orchestration/threads/${THREAD_ID}/bounded`);
-      return Promise.resolve(
-        Response.json(
-          {
-            _tag: "EnvironmentResourceNotFoundError",
-            code: "not_found",
-            reason: "thread_not_found",
-            traceId: "trace-bounded-missing",
-          },
-          { status: 404 },
+  it.effect.each(["bounded", "full"] as const)(
+    "uses the socket when %s HTTP hides an unknown temporary thread as not found",
+    (endpoint) => {
+      const fetchFn = ((input: RequestInfo | URL) => {
+        const url = String(input);
+        expect(url).toContain(`/api/orchestration/threads/${THREAD_ID}`);
+        if (endpoint === "full" && url.includes("/bounded")) {
+          return Promise.resolve(new Response("Not Found", { status: 404 }));
+        }
+        return Promise.resolve(
+          Response.json(
+            {
+              _tag: "EnvironmentResourceNotFoundError",
+              code: "not_found",
+              reason: "thread_not_found",
+              traceId: "trace-bounded-missing",
+            },
+            { status: 404 },
+          ),
+        );
+      }) satisfies typeof fetch;
+
+      return Effect.gen(function* () {
+        const loader = yield* ThreadSnapshotLoader.ThreadSnapshotLoader;
+        const result = yield* loader.load(PREPARED, THREAD_ID);
+        expect(result).toEqual({ _tag: "unavailable" });
+      }).pipe(
+        Effect.provide(
+          Layer.provide(BoundedThreadSnapshotHttp.layer, RpcHttp.layerRemoteHttpClient(fetchFn)),
         ),
       );
-    }) satisfies typeof fetch;
-
-    return Effect.gen(function* () {
-      const loader = yield* ThreadSnapshotLoader.ThreadSnapshotLoader;
-      const result = yield* loader.load(PREPARED, THREAD_ID);
-      expect(result).toEqual({ _tag: "missing" });
-    }).pipe(
-      Effect.provide(
-        Layer.provide(BoundedThreadSnapshotHttp.layer, RpcHttp.layerRemoteHttpClient(fetchFn)),
-      ),
-    );
-  });
+    },
+  );
 
   it.effect(
     "uses socket fallback directly when the bounded endpoint has a transient failure",

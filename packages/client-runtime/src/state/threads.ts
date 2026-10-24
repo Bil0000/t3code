@@ -30,6 +30,12 @@ import { connectionProjectionPhase } from "../connection/model.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as ConnectionWakeups from "../connection/wakeups.ts";
 import * as Persistence from "../platform/persistence.ts";
+import { canPersistThreadSnapshot } from "../platform/orchestrationCache.ts";
+import {
+  isTemporaryThread,
+  setTemporaryThread,
+  markTemporaryThreadDeleted,
+} from "../temporaryThreads.ts";
 import { runCachePersistence } from "./cachePersistence.ts";
 import * as ManagedRelay from "../relay/managedRelay.ts";
 import { request, subscribeDynamic } from "../rpc/client.ts";
@@ -94,19 +100,25 @@ function snapshotToPersist(
   projection: OrchestrationV2ThreadProjection,
   history: ThreadHistoryMeta,
   acceptsBoundedSnapshots: boolean,
+  storageGeneration?: string,
 ): OrchestrationV2ThreadDetailSnapshot {
   // A complete bounded snapshot still proves paging support. Retain that evidence
   // so a thread that grows while closed can resume with a bounded fallback.
   if (acceptsBoundedSnapshots || history.hasMoreHistory || history.historyCursor !== null) {
     return {
       snapshotSequence,
+      ...(storageGeneration === undefined ? {} : { storageGeneration }),
       projection,
       historyCursor: history.historyCursor,
       hasMoreHistory: history.hasMoreHistory,
       latestLocalTurnOrdinal: history.latestLocalTurnOrdinal,
     };
   }
-  return { snapshotSequence, projection };
+  return {
+    snapshotSequence,
+    projection,
+    ...(storageGeneration === undefined ? {} : { storageGeneration }),
+  };
 }
 
 function shouldPersistThread(
@@ -115,7 +127,7 @@ function shouldPersistThread(
 ): boolean {
   // After the user loads older pages the in-memory timeline can grow large.
   // Keep those expanded projections out of the monolithic cache.
-  if (history.expanded) {
+  if (thread.thread.temporary === true || history.expanded) {
     return false;
   }
   return !thread.runs.some(
@@ -151,6 +163,7 @@ interface ThreadResumeSnapshot {
   readonly sequence: number;
   readonly persisted: boolean;
   readonly acceptsBoundedSnapshots?: boolean;
+  readonly storageGeneration?: string;
 }
 
 interface ThreadResumeCache {
@@ -208,7 +221,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   const owner = {};
   if (resumeCache) resumeCache.owner = owner;
   const cached =
-    retained === undefined
+    retained === undefined && !isTemporaryThread(environmentId, threadId)
       ? yield* cache.loadThread(environmentId, threadId).pipe(
           Effect.catch((error) =>
             Effect.logWarning("Could not load cached thread.").pipe(
@@ -243,9 +256,12 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     retained?.sequence ??
     Option.match(cached, { onNone: () => 0, onSome: (snapshot) => snapshot.snapshotSequence });
   const lastSequence = yield* SubscriptionRef.make(initialSequence);
+  let storageGeneration =
+    retained?.storageGeneration ?? Option.getOrUndefined(cached)?.storageGeneration;
   let committed: ThreadResumeSnapshot = {
     state: initialState,
     sequence: initialSequence,
+    ...(storageGeneration === undefined ? {} : { storageGeneration }),
     persisted: retained?.persisted ?? Option.isSome(cached),
     acceptsBoundedSnapshots: canLoadHistory,
   };
@@ -260,6 +276,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     committed = {
       state: current,
       sequence,
+      ...(storageGeneration === undefined ? {} : { storageGeneration }),
       acceptsBoundedSnapshots: yield* Ref.get(acceptsBoundedSocketSnapshots),
       persisted:
         committed.persisted &&
@@ -272,6 +289,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   let savedSnapshot = queuedSnapshot;
   const queuePersist = (snapshot: OrchestrationV2ThreadDetailSnapshot) =>
     Effect.suspend(() => {
+      if (!canPersistThreadSnapshot(snapshot, environmentId)) return Effect.void;
       queuedSnapshot = snapshot;
       return Queue.offer(persistence, snapshot);
     });
@@ -280,7 +298,16 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     snapshot: OrchestrationV2ThreadDetailSnapshot,
   ) {
     if (resumeCache !== undefined && resumeCache.owner !== owner) return;
-    if (committed.state.status === "deleted") return;
+    if (
+      snapshot.storageGeneration !== storageGeneration ||
+      committed.state.status === "deleted" ||
+      !canPersistThreadSnapshot(snapshot, environmentId) ||
+      Option.match(committed.state.data, {
+        onNone: () => false,
+        onSome: (projection) => projection.thread.temporary === true,
+      })
+    )
+      return;
     if (
       committed.persisted &&
       matchesThreadSnapshot(
@@ -333,6 +360,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
                   projection,
                   current.history,
                   committed.acceptsBoundedSnapshots === true,
+                  committed.storageGeneration,
                 ),
               )
             : // The consumer may still be waiting out its delay; an expanded thread queues
@@ -390,6 +418,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       readonly history?: ThreadHistoryMeta;
     },
   ) {
+    setTemporaryThread(environmentId, threadId, thread.thread.temporary === true);
     const waiting = yield* Ref.get(awaitingCompletion);
     // Atomic with concurrent history meta updates: never get-then-set the whole
     // state when only the projection changes. Bounded installs pass history so
@@ -424,6 +453,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
           thread,
           next.history,
           yield* Ref.get(acceptsBoundedSocketSnapshots),
+          storageGeneration,
         ),
       );
     }
@@ -436,6 +466,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     }));
 
   const setDeleted = Effect.fn("EnvironmentThreadState.setDeleted")(function* () {
+    markTemporaryThreadDeleted(environmentId, threadId);
     yield* Ref.set(awaitingCompletion, false);
     yield* SubscriptionRef.set(state, {
       data: Option.none(),
@@ -570,6 +601,8 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       yield* setDeleted();
       return;
     }
+    if (result._tag === "applied")
+      setTemporaryThread(environmentId, threadId, result.projection.thread.temporary === true);
     if (result._tag === "applied" && shouldPersistThread(result.projection, result.history)) {
       const snapshotSequence = yield* SubscriptionRef.get(lastSequence);
       yield* queuePersist(
@@ -578,6 +611,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
           result.projection,
           result.history,
           yield* Ref.get(acceptsBoundedSocketSnapshots),
+          storageGeneration,
         ),
       );
     }
@@ -597,6 +631,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     }
 
     if (item.kind === "snapshot") {
+      storageGeneration = item.storageGeneration;
       yield* SubscriptionRef.set(lastSequence, item.snapshotSequence);
       const hasProgressiveHistory =
         item.historyCursor !== undefined ||
@@ -666,6 +701,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     // Capture the cursor that initiated this request. Completions/failures must
     // no-op if a socket or new bounded snapshot replaced progressive meta mid-flight.
     const requestCursor = current.history.historyCursor;
+    const requestStorageGeneration = storageGeneration;
     yield* patchHistoryMeta((history) =>
       isActiveHistoryRequestCursor(requestCursor, history)
         ? { ...history, loading: true, error: null }
@@ -723,7 +759,12 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
               ThreadHistoryController.ThreadHistoryLoadEarlierResult,
               EnvironmentThreadState,
             ] => {
-              if (!isActiveHistoryRequestCursor(requestCursor, latest.history))
+              if (
+                requestStorageGeneration !== storageGeneration ||
+                (page.storageGeneration !== undefined &&
+                  page.storageGeneration !== storageGeneration) ||
+                !isActiveHistoryRequestCursor(requestCursor, latest.history)
+              )
                 return [{ _tag: "noop" }, latest];
               if (Option.isNone(latest.data) || latest.status === "deleted")
                 return [{ _tag: "noop" }, { ...latest, history: EMPTY_THREAD_HISTORY_META }];
@@ -771,7 +812,11 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       const fetched = yield* Effect.forEach(
         pending,
         (item) =>
-          request(ORCHESTRATION_V2_WS_METHODS.getTurnItem, { threadId, itemId: item.id }).pipe(
+          request(ORCHESTRATION_V2_WS_METHODS.getTurnItem, {
+            threadId,
+            itemId: item.id,
+            acceptTemporaryThreads: true,
+          }).pipe(
             Effect.timeout("10 seconds"),
             Effect.map((result) => result.item),
             Effect.orElseSucceed(() => null),
@@ -916,6 +961,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
               // snapshots still go through applyItem (resetHistory).
               yield* applyLock.withPermits(1)(
                 Effect.gen(function* () {
+                  storageGeneration = httpResult.snapshot.storageGeneration;
                   yield* SubscriptionRef.set(lastSequence, httpResult.snapshot.snapshotSequence);
                   const history: ThreadHistoryMeta =
                     httpResult.history !== undefined
@@ -958,6 +1004,8 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
 
         return {
           threadId,
+          acceptTemporaryThreads: true,
+          ...(storageGeneration === undefined ? {} : { storageGeneration }),
           ...(canResume ? { afterSequence: sequence } : {}),
           ...(supportsCompletionMarker ? { requestCompletionMarker: true as const } : {}),
           ...(acceptBoundedSnapshot
@@ -967,7 +1015,16 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       }),
       {
         onDefect: () => setStreamError("Could not synchronize the thread."),
-        onExpectedFailure: (cause) => setStreamError(formatThreadError(cause)),
+        onExpectedFailure: (cause) =>
+          cause.reasons.every(
+            (reason) =>
+              reason._tag === "Fail" &&
+              reason.error._tag === "OrchestrationV2GetThreadProjectionError" &&
+              reason.error.reason === "thread_not_found" &&
+              reason.error.threadId === threadId,
+          )
+            ? setDeleted().pipe(Effect.andThen(Effect.never))
+            : setStreamError(formatThreadError(cause)),
         retryExpectedFailureAfter: "250 millis",
         resubscribe: foregroundResubscriptions,
       },

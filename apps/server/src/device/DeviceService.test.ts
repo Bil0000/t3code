@@ -35,6 +35,8 @@ import { NodeRuntimeUnavailableError } from "@t3tools/shared/nodeRuntime";
 
 import * as DeviceService from "./DeviceService.ts";
 
+import { temporaryResourceStorage } from "../orchestration-v2/testkit/TemporaryResourceStorage.ts";
+
 const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const decodeBootError = Schema.decodeUnknownSync(Schema.fromJsonString(DeviceBootError));
 const encodeBootError = Schema.encodeSync(Schema.fromJsonString(DeviceBootError));
@@ -1133,5 +1135,30 @@ it.effect("a failed tool update reports npm's exit code but not its output", () 
       ).pipe(Layer.provideMerge(NodeServices.layer)),
     ),
     Effect.scoped,
+  ),
+);
+
+it.effect("temporary device open fails before host startup", () =>
+  Effect.gen(function* () {
+    const devices = yield* DeviceService.makeWithHosts(new Map());
+    const result = yield* Effect.result(
+      devices.open({
+        threadId: ThreadId.make("private-device"),
+        deviceId: DeviceId.make("private"),
+        platform: "ios",
+      }),
+    );
+    expect(result._tag).toBe("Failure");
+    if (result._tag === "Failure") expect(result.failure.message).toContain("Keep this thread");
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        temporaryResourceStorage,
+        Layer.mock(ServerSettings.ServerSettingsService)({
+          getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS),
+        }),
+        NodeCrypto.layer,
+      ),
+    ),
   ),
 );

@@ -3,7 +3,9 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { AgentScope } from "@t3tools/shared/AgentScope";
 import {
+  CommandId,
   EnvironmentId,
+  MessageId,
   type ModelSelection,
   type OrchestrationV2AppThread,
   type OrchestrationV2DomainEvent,
@@ -50,6 +52,9 @@ import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
+import * as Orchestrator from "./Orchestrator.ts";
+import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
+import * as TemporaryThreadStorage from "./TemporaryThreadStorage.ts";
 import * as CommandOutputHub from "./CommandOutputHub.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 
@@ -320,6 +325,7 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
   state: Ref.Ref<TestProviderRuntimeState>,
   options: {
     readonly failEventStream?: boolean;
+    readonly driver?: ProviderDriverKind;
     readonly capabilities?: OrchestrationV2ProviderCapabilities;
     readonly mcpConfigs?: Ref.Ref<
       ReadonlyArray<McpProviderSession.McpProviderSessionConfig | undefined>
@@ -356,7 +362,7 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
   );
   return ProviderAdapter.ProviderAdapterV2.of({
     instanceId: ProviderInstanceId.make("codex"),
-    driver: CODEX_DRIVER,
+    driver: options.driver ?? CODEX_DRIVER,
     getCapabilities: () => Effect.succeed(options.capabilities ?? CodexCapabilities),
     planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" }),
     openSession: (input) =>
@@ -459,6 +465,7 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
 function layerTest(input: {
   readonly state: Ref.Ref<TestProviderRuntimeState>;
   readonly idleTimeoutMs: number;
+  readonly driver?: ProviderDriverKind;
   readonly maxIdlePinMs?: number;
   readonly failEventStream?: boolean;
   readonly capabilities?: OrchestrationV2ProviderCapabilities;
@@ -501,6 +508,7 @@ function layerTest(input: {
   const layerRegistry = Layer.unwrap(
     makeProviderAdapter(input.state, {
       failEventStream: input.failEventStream ?? false,
+      ...(input.driver === undefined ? {} : { driver: input.driver }),
       ...(input.capabilities === undefined ? {} : { capabilities: input.capabilities }),
       ...(input.mcpConfigs === undefined ? {} : { mcpConfigs: input.mcpConfigs }),
       ...(input.beforeOpen === undefined ? {} : { beforeOpen: input.beforeOpen }),
@@ -821,6 +829,243 @@ function makePendingRuntimeRequestEvents(input: {
     return { events, providerEvents, requestId, nodeId };
   });
 }
+
+it.effect(
+  "ProviderSessionManagerV2 rejects unproved temporary providers before native startup",
+  () =>
+    Effect.gen(function* () {
+      for (const driver of [
+        "claude",
+        "cursor",
+        "grok",
+        "opencode",
+        "antigravity",
+        "pi",
+        "muse",
+        "acp",
+      ]) {
+        const state = yield* Ref.make(emptyState);
+        yield* Effect.gen(function* () {
+          const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+          const idAllocator = yield* IdAllocator.IdAllocatorV2;
+          const threadId = ThreadId.make(`temporary-unsupported-${driver}`);
+          const providerSessionId = yield* idAllocator.allocate.providerSession({
+            threadId,
+            providerInstanceId: modelSelection.instanceId,
+          });
+          const error = yield* manager
+            .open({
+              threadId,
+              providerSessionId,
+              modelSelection,
+              runtimePolicy: { ...runtimePolicy, temporary: true },
+            })
+            .pipe(Effect.flip);
+          assert.equal(error._tag, "ProviderSessionOpenError");
+          assert.equal((yield* Ref.get(state)).openCount, 0);
+        }).pipe(
+          Effect.provide(
+            layerTest({ state, idleTimeoutMs: 1000, driver: ProviderDriverKind.make(driver) }),
+          ),
+        );
+      }
+    }),
+);
+
+it.effect.each([
+  [true, true],
+  [false, true],
+  [true, false],
+  [false, false],
+] as const)(
+  "opens independent temporary conversations on the same Codex instance: %s then %s",
+  ([firstTemporary, secondTemporary]) =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const owned = new Set<ThreadId>();
+      const storageLayer = Layer.mock(TemporaryThreadStorage.TemporaryThreadStorage)({
+        register: ({ threadId }) => Effect.sync(() => void owned.add(threadId)),
+        isTemporary: (threadId) => Effect.sync(() => owned.has(threadId)),
+        isDiscarded: () => Effect.succeed(false),
+        family: (threadId) => Effect.succeed([threadId]),
+      });
+      const registryLayer = Layer.unwrap(
+        makeProviderAdapter(state).pipe(
+          Effect.map((adapter) => ProviderAdapterRegistry.layerFromAdapters([adapter])),
+        ),
+      );
+      const engineLayer = ProviderReplayHarness.layerWithRegistry(
+        { name: "temporary-session-allocation" },
+        registryLayer,
+        { databaseLayer: layerTestDatabase, runEffectWorker: false },
+      ).pipe(Layer.provide(storageLayer));
+      yield* Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const sessions: Array<ProviderAdapter.ProviderAdapterV2SessionRuntime> = [];
+        const selection = {
+          ...modelSelection,
+          model: "gpt-6-astra",
+          options: [{ id: "reasoningEffort", value: "medium" }],
+        } satisfies ModelSelection;
+        for (const [index, temporary] of [firstTemporary, secondTemporary].entries()) {
+          const threadId = ThreadId.make(`temporary-session-allocation-${index}`);
+          yield* orchestrator.dispatch({
+            type: "thread.create",
+            commandId: CommandId.make(`allocation-create-${index}`),
+            threadId,
+            temporary,
+            projectId: ProjectId.make("temporary-session-allocation"),
+            title: "Session allocation",
+            modelSelection: selection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+            createdBy: "user",
+            creationSource: "web",
+          });
+          yield* orchestrator.dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make(`allocation-message-${index}`),
+            threadId,
+            messageId: MessageId.make(`allocation-message-${index}`),
+            text: "Start the configured provider",
+            attachments: [],
+            dispatchMode: { type: "start_immediately" },
+            createdBy: "user",
+            creationSource: "web",
+          });
+          const projection = yield* orchestrator.getThreadRecords(threadId, ["providerThreads"]);
+          const providerSessionId = projection.providerThreads[0]!.providerSessionId!;
+          sessions.push(
+            yield* manager.open({
+              threadId,
+              providerSessionId,
+              modelSelection: selection,
+              runtimePolicy: { ...runtimePolicy, ...(temporary ? { temporary: true } : {}) },
+            }),
+          );
+          assert.strictEqual(
+            yield* manager.open({
+              threadId,
+              providerSessionId,
+              modelSelection: { ...selection, options: [] },
+              runtimePolicy: { ...runtimePolicy, ...(temporary ? { temporary: true } : {}) },
+            }),
+            sessions[index],
+          );
+        }
+        const expectedOpens = firstTemporary || secondTemporary ? 2 : 1;
+        assert.equal((yield* Ref.get(state)).openCount, expectedOpens);
+        assert.equal(
+          new Set(sessions.map((session) => session.providerSessionId)).size,
+          expectedOpens,
+        );
+      }).pipe(Effect.provide(engineLayer));
+    }),
+);
+
+it.effect("ProviderSessionManagerV2 retains temporary sessions past the idle limit", () =>
+  Effect.gen(function* () {
+    const state = yield* Ref.make(emptyState);
+    yield* Effect.gen(function* () {
+      const eventSink = yield* EventSink.EventSinkV2;
+      const idAllocator = yield* IdAllocator.IdAllocatorV2;
+      const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("temporary-idle");
+      const providerSessionId = yield* idAllocator.allocate.providerSession({
+        providerInstanceId: modelSelection.instanceId,
+        threadId,
+      });
+      yield* eventSink.write({
+        events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
+      });
+      const runtime = yield* manager.open({
+        threadId,
+        providerSessionId,
+        modelSelection,
+        runtimePolicy: { ...runtimePolicy, temporary: true },
+      });
+      yield* TestClock.adjust("5 hours");
+      assert.isTrue(yield* manager.isLive(providerSessionId));
+      assert.equal((yield* Ref.get(state)).closeCount, 0);
+      const fork = yield* runtime
+        .forkThread({
+          sourceProviderThread: makeProviderThread({
+            idAllocator,
+            threadId,
+            providerSessionId,
+            now,
+          }),
+          targetThreadId: ThreadId.make("temporary-idle-child"),
+        })
+        .pipe(Effect.flip);
+      assert.equal(fork._tag, "ProviderAdapterForkThreadError");
+      yield* manager.close(providerSessionId);
+      assert.equal((yield* Ref.get(state)).closeCount, 1);
+    }).pipe(Effect.provide(layerTest({ state, idleTimeoutMs: 1000 })));
+  }),
+);
+
+it.effect(
+  "ProviderSessionManagerV2 rejects temporary disk recovery before opening the adapter",
+  () =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      yield* Effect.gen(function* () {
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const threadId = ThreadId.make("temporary-no-resume");
+        const providerSessionId = yield* idAllocator.allocate.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+          threadId,
+        });
+        const error = yield* manager
+          .open({
+            threadId,
+            providerSessionId,
+            modelSelection,
+            runtimePolicy: { ...runtimePolicy, temporary: true },
+            initialNativeThreadId: "lost-native",
+          })
+          .pipe(Effect.flip);
+        assert.equal(error._tag, "ProviderSessionOpenError");
+        assert.equal((yield* Ref.get(state)).openCount, 0);
+        const eventSink = yield* EventSink.EventSinkV2;
+        const now = yield* DateTime.now;
+        const providerThread = makeProviderThread({
+          idAllocator,
+          threadId,
+          providerSessionId,
+          now,
+        });
+        yield* eventSink.write({
+          events: [
+            yield* makeThreadCreatedEvent({ idAllocator, threadId, now }),
+            {
+              id: yield* idAllocator.allocate.event({ threadId }),
+              type: "provider-thread.updated",
+              threadId,
+              occurredAt: now,
+              payload: providerThread,
+            },
+          ],
+        });
+        const lost = yield* manager
+          .open({
+            threadId,
+            providerSessionId,
+            modelSelection,
+            runtimePolicy: { ...runtimePolicy, temporary: true },
+          })
+          .pipe(Effect.flip);
+        assert.equal(lost._tag, "ProviderSessionOpenError");
+        assert.equal((yield* Ref.get(state)).openCount, 0);
+      }).pipe(Effect.provide(layerTest({ state, idleTimeoutMs: 1000 })));
+    }),
+);
 
 it.effect("ProviderSessionManagerV2 opens independent sessions concurrently", () =>
   Effect.gen(function* () {

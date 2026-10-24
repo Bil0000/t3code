@@ -266,6 +266,7 @@ import {
   resolveScrollToEndClearance,
 } from "./composerFooterLayout";
 import { ChatHeader } from "./chat/ChatHeader";
+import { TemporaryChatControls } from "./chat/TemporaryChatControls";
 import { useRemoteOpenState } from "~/remoteOpen";
 import { shouldShowOpenInPicker } from "./chat/OpenInPicker.logic";
 import { useOpenFavoriteEditorShortcut } from "./chat/OpenInPickerShortcut";
@@ -3131,10 +3132,19 @@ export default function ChatView(props: ChatViewProps) {
     onToggleRightPanel: toggleRightPanelStable,
   } satisfies PanelLayoutControlsProps;
   const panelToggleControls = (
-    <PanelLayoutControls
-      {...panelToggleControlProps}
-      showThreadPanelControl={!inlineRightPanelOwnsTitleBar}
-    />
+    <div className="flex h-full shrink-0 items-center gap-1">
+      <TemporaryChatControls
+        key={`${activeThread.environmentId}:${activeThread.id}`}
+        threadRef={scopeThreadRef(activeThread.environmentId, activeThread.id)}
+        draftId={draftId}
+        temporary={serverThread?.temporary === true || draftThread?.temporary === true}
+        isServerThread={isServerThread}
+      />
+      <PanelLayoutControls
+        {...panelToggleControlProps}
+        showThreadPanelControl={!inlineRightPanelOwnsTitleBar}
+      />
+    </div>
   );
   const threadPanelHeaderControl = <ThreadPanelHeaderControl {...panelToggleControlProps} />;
   const panelLayoutControls = (
@@ -3212,6 +3222,17 @@ export default function ChatView(props: ChatViewProps) {
               : {})}
           />
         </header>
+        {serverThread?.temporary === true || draftThread?.temporary === true ? (
+          <div className="shrink-0 px-3 pb-2 sm:px-5">
+            <div
+              role="note"
+              className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 rounded-lg border border-border/60 bg-muted/30 px-3 py-2 text-xs leading-relaxed text-muted-foreground"
+            >
+              <span className="font-medium text-foreground">Temporary chat</span>
+              <span>Deleted when you leave. Save to keep it. File changes stay.</span>
+            </div>
+          </div>
+        ) : null}
 
         <div className="relative flex min-h-0 min-w-0 flex-1">
           <ThreadFindCanvas

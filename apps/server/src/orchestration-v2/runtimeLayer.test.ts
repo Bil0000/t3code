@@ -56,6 +56,7 @@ import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.
 import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
+import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
 import * as Orchestrator from "./Orchestrator.ts";
@@ -72,6 +73,7 @@ import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as RuntimeLayer from "./runtimeLayer.ts";
+import * as CommandOutputHub from "./CommandOutputHub.ts";
 import { shellStreamItemFromThreadShell } from "./ShellStream.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
@@ -83,6 +85,13 @@ import * as PreviewManager from "../preview/Manager.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
 import * as ResourceCleanupService from "./ResourceCleanupService.ts";
 import * as ThreadLaunchService from "./ThreadLaunchService.ts";
+import * as TemporaryThreadService from "./TemporaryThreadService.ts";
+import * as TemporaryThreadStorage from "./TemporaryThreadStorage.ts";
+import * as WorktreeSetupTracker from "../project/WorktreeSetupTracker.ts";
+import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
+import * as ProviderRegistryMock from "../provider/testUtils/providerRegistryMock.ts";
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 
@@ -273,10 +282,8 @@ const moveProject = (projectId: ProjectId, workspaceRoot: string, updatedAt: str
 
 const layerTest = Layer.mergeAll(
   RuntimeLayer.layer,
-  RuntimeLayer.layerEventSink,
+  RuntimeLayer.layerStorage,
   ProjectStore.layer,
-  ProjectionStore.layer,
-  EffectOutbox.layer,
   ThreadCommandExecutor.layer,
 ).pipe(
   Layer.provide(McpSessionRegistryTestkit.layer),
@@ -319,6 +326,7 @@ const layerScheduledTasksTest = ScheduledTaskService.layer.pipe(
   ),
 );
 const layerResourceCleanupTest = ResourceCleanupService.layer.pipe(
+  Layer.provide(CommandOutputHub.layer.pipe(Layer.provide(RuntimeLayer.layerStorage))),
   Layer.provideMerge(layerScheduledTasksTest),
   Layer.provide(
     Layer.mergeAll(
@@ -599,7 +607,7 @@ const layerSharedApplicationDataPlaneTest = Layer.mergeAll(
   RuntimeLayer.layer.pipe(Layer.provide(RuntimeLayer.layerProjectService)),
   RuntimeLayer.layerProjectService,
   RuntimeLayer.layerEventSink,
-  RuntimeLayer.layerEventInfrastructure,
+  RuntimeLayer.layerStorage,
 ).pipe(
   Layer.provide(
     Layer.mock(WorkspacePaths.WorkspacePaths)({
@@ -634,6 +642,111 @@ const layerSharedApplicationDataPlaneTest = Layer.mergeAll(
   Layer.provide(layerTestProviderInstanceRegistry),
   Layer.provide(layerGitWorkflowTest),
   Layer.provide(layerPlatformTest),
+);
+
+it.effect("production runtime stops temporary launch preparation on the last view leave", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const interrupted = yield* Deferred.make<void>();
+    const production = RuntimeLayer.layerProduction.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          WorktreeSetupTracker.layer,
+          ProviderRegistryMock.layer(),
+          Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({
+            get: () => Effect.succeed(null),
+          }),
+          Layer.mock(ServerSecretStore.ServerSecretStore)({
+            getOrCreateRandom: () => Effect.succeed(new Uint8Array(32)),
+          }),
+          Layer.mock(TerminalManager.TerminalManager)({ close: () => Effect.void }),
+          Layer.mock(PreviewManager.PreviewManager)({ close: () => Effect.void }),
+          Layer.mock(GitVcsDriver.GitVcsDriver)({}),
+          Layer.mock(TextGeneration.TextGeneration)({}),
+          Layer.mock(GitWorkflow.GitWorkflowService)({
+            hasCommit: () => Effect.succeed(true),
+            createWorktree: () =>
+              Deferred.succeed(entered, undefined).pipe(
+                Effect.andThen(Effect.never),
+                Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined)),
+              ),
+          }),
+          Layer.mock(WorkspacePaths.WorkspacePaths)({
+            normalizeWorkspaceRoot: (root) => Effect.succeed(root),
+          }),
+          Layer.mock(ProjectEnrichmentService.ProjectEnrichmentService)({
+            peek: () =>
+              Effect.succeed({
+                repositoryIdentity: null,
+                faviconPath: null,
+                repositoryIdentityResolved: false,
+              }),
+            getAvailable: () =>
+              Effect.succeed({
+                repositoryIdentity: null,
+                faviconPath: null,
+                repositoryIdentityResolved: false,
+              }),
+            request: () => Effect.void,
+            invalidate: () => Effect.void,
+          }),
+          McpSessionRegistryTestkit.layer,
+          McpProviderSessions.layer,
+          layerCheckpointStoreTest,
+          layerTestProviderInstanceRegistry,
+        ),
+      ),
+      Layer.provide(SqlitePersistence.layerMemory),
+      Layer.provide(ServerSettings.layerTest()),
+      Layer.provide(layerServerConfig),
+      Layer.provide(layerPlatformTest),
+    );
+    yield* Effect.gen(function* () {
+      const projects = yield* ProjectService.ProjectService;
+      const launches = yield* ThreadLaunchService.ThreadLaunchService;
+      const lifecycle = yield* TemporaryThreadService.TemporaryThreadService;
+      const storage = yield* TemporaryThreadStorage.TemporaryThreadStorage;
+      const stores = yield* TemporaryThreadStorage.TemporaryThreadStores;
+      const projectId = ProjectId.make("production-temporary-project");
+      const threadId = ThreadId.make("production-temporary-launch");
+      yield* projects.create({
+        commandId: CommandId.make("production-temporary-project-create"),
+        projectId,
+        title: "Temporary launch",
+        workspaceRoot: "/work/production-temporary-test",
+      });
+      yield* launches.launch({
+        commandId: CommandId.make("production-temporary-launch-create"),
+        threadId,
+        projectId,
+        title: "Temporary preparation",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        workspaceStrategy: { type: "worktree", baseRef: "main", branch: "temporary-test" },
+        createdBy: "user",
+        creationSource: "web",
+        temporary: true,
+      });
+      yield* Deferred.await(entered);
+      const identity = { sessionId: "runtime-session", clientId: "runtime-client" };
+      yield* lifecycle.updateViews(identity, {
+        viewId: "runtime-view",
+        generation: 1,
+        threadIds: [threadId],
+        background: false,
+      });
+      yield* lifecycle.updateViews(identity, {
+        viewId: "runtime-view",
+        generation: 2,
+        threadIds: [],
+        background: false,
+      });
+      assert.isTrue(yield* Deferred.isDone(interrupted));
+      assert.isTrue(yield* storage.isDiscarded(threadId));
+      assert.isNull(yield* stores.durable.projectionStore.getThreadShell(threadId));
+    }).pipe(Effect.provide(production));
+  }),
 );
 
 it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
@@ -6606,10 +6719,8 @@ const queueResumeDisabledInstanceProjectId = ProjectId.make(
 
 const layerQueueResumeDisabledInstanceTest = Layer.mergeAll(
   RuntimeLayer.layer,
-  RuntimeLayer.layerEventSink,
+  RuntimeLayer.layerStorage,
   ProjectStore.layer,
-  ProjectionStore.layer,
-  EffectOutbox.layer,
   ThreadCommandExecutor.layer,
 ).pipe(
   Layer.provide(McpSessionRegistryTestkit.layer),

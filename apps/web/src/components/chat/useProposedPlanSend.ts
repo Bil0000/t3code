@@ -1,3 +1,4 @@
+import { isTemporaryThread } from "@t3tools/client-runtime/temporary-threads";
 import {
   AuthOrchestrationOperateScope,
   type EnvironmentId,
@@ -291,6 +292,13 @@ export function useImplementPlanInNewThread(input: ImplementPlanInNewThreadInput
       return;
     }
 
+    if (isTemporaryThread(environmentId, activeThread.id)) {
+      toastManager.add({
+        type: "info",
+        title: "Keep this thread before starting a plan in a new thread.",
+      });
+      return;
+    }
     const createdAt = new Date().toISOString();
     const nextThreadId = newThreadId();
     const planMarkdown = activeProposedPlan.planMarkdown;

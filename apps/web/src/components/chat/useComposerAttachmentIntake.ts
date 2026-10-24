@@ -57,6 +57,7 @@ import {
  * their inline chips, folds large pastes into text attachments, and confirms removing a referenced image.
  */
 export function useComposerAttachmentIntake(input: {
+  readonly temporary: boolean;
   readonly activeThreadId: ChatComposerProps["activeThreadId"];
   readonly activePendingProgress: ChatComposerProps["activePendingProgress"];
   readonly activePendingIsResponding: boolean;
@@ -85,6 +86,7 @@ export function useComposerAttachmentIntake(input: {
   ) => boolean;
 }) {
   const {
+    temporary,
     activeThreadId,
     activePendingProgress,
     activePendingIsResponding,
@@ -122,6 +124,10 @@ export function useComposerAttachmentIntake(input: {
       readonly skipImageInlineChip?: boolean;
     },
   ): Promise<boolean> => {
+    if (temporary) {
+      toastManager.add({ type: "info", title: "Keep this thread before attaching files." });
+      return false;
+    }
     if (!activeThreadId || files.length === 0 || isRevertingCheckpointRef.current) return false;
     if (
       pendingUserInputs.length > 0 &&
@@ -367,7 +373,7 @@ export function useComposerAttachmentIntake(input: {
     bypassAutoAttachment: boolean,
     selectionOverride?: { start: number; end: number },
   ): boolean => {
-    if (isLiteralPendingAnswer) return false;
+    if (temporary || isLiteralPendingAnswer) return false;
     const questionCanAttach =
       pendingUserInputs.length === 0 ||
       (supportsQuestionAttachments &&

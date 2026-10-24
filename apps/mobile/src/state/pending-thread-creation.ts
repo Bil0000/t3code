@@ -21,10 +21,21 @@ export type PendingThreadCreation = {
   readonly outcome: PendingThreadCreationOutcome | null;
 };
 
+export function threadCreationHasStopped(status: string | null | undefined): boolean {
+  return (
+    status === "failed" ||
+    status === "error" ||
+    status === "cancelled" ||
+    status === "stopped" ||
+    status === "interrupted"
+  );
+}
+
 export function resolvePendingThreadCreation(input: {
   readonly threadKey: string | null;
   readonly pending: PendingThreadCreation | null;
   readonly previous: PendingThreadCreation | null;
+  readonly shellStatus?: string | null;
   readonly detail: {
     readonly messages: ReadonlyArray<{ readonly id: string }>;
     readonly runs?: ReadonlyArray<{ readonly status: string }>;
@@ -43,13 +54,7 @@ export function resolvePendingThreadCreation(input: {
   const detail = input.detail;
   const latestRun = detail?.runs?.at(-1);
   const terminalStatus = latestRun?.status ?? detail?.session?.status;
-  if (
-    terminalStatus === "failed" ||
-    terminalStatus === "error" ||
-    terminalStatus === "cancelled" ||
-    terminalStatus === "stopped" ||
-    terminalStatus === "interrupted"
-  )
+  if (threadCreationHasStopped(input.shellStatus) || threadCreationHasStopped(terminalStatus))
     return null;
   // Message delivery and turn startup are separate events. The prompt alone
   // cannot replace the preparing pill; wait for the turn's timing too.
@@ -126,6 +131,7 @@ export function pendingThreadCreationShell(
   const timestamp = DateTime.makeUnsafe(message.createdAt);
   return presentThreadShell(message.environmentId, {
     id: message.threadId,
+    temporary: message.temporary,
     projectId: creation.projectId,
     title: deriveThreadTitleFromPrompt(message.text),
     providerInstanceId: message.modelSelection.instanceId,

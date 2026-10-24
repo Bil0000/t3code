@@ -31,6 +31,8 @@ import * as DelegatedTaskQuestionReactor from "./DelegatedTaskQuestionReactor.ts
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
+import * as TemporaryThreadStorage from "./TemporaryThreadStorage.ts";
+import * as TemporaryThreadService from "./TemporaryThreadService.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
@@ -1366,4 +1368,267 @@ it.effect("explicit settle clears snooze atomically and stays idempotent after r
     assert.deepInclude(yield* projections.getThreadShell(threadId), active);
     assert.deepInclude((yield* projections.getThreadProjection(threadId)).thread, active);
   }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect(
+  "registers temporary roots before engine receipts and preserves the temporary flag",
+  () => {
+    const threadId = ThreadId.make("thread:temporary-root");
+    const owned = new Set<ThreadId>();
+    const storageLayer = Layer.mock(TemporaryThreadStorage.TemporaryThreadStorage)({
+      register: ({ threadId: id }) =>
+        Effect.sync(() => {
+          owned.add(id);
+        }),
+      isTemporary: (id) => Effect.sync(() => owned.has(id)),
+      isDiscarded: () => Effect.succeed(false),
+      family: (id) => Effect.succeed([id]),
+    });
+    return Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        temporary: true,
+        threadId,
+        commandId: CommandId.make("temporary-root-create"),
+        projectId: ProjectId.make("project:temporary"),
+        title: "Temporary",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "user",
+        creationSource: "web",
+      });
+      assert.isTrue(owned.has(threadId));
+      assert.isTrue((yield* orchestrator.getThreadRecords(threadId, [])).thread.temporary);
+    }).pipe(Effect.provide(layerTest.pipe(Layer.provide(storageLayer))));
+  },
+);
+
+it.effect(
+  "temporary child creation inherits storage ownership and closed families reject new work",
+  () => {
+    const parentThreadId = ThreadId.make("thread:temporary-parent");
+    const owners = new Map<ThreadId, ThreadId>();
+    const storageLayer = Layer.mock(TemporaryThreadStorage.TemporaryThreadStorage)({
+      register: ({ threadId, parentThreadId: parent }) =>
+        Effect.sync(() => {
+          owners.set(threadId, parent ?? threadId);
+        }),
+      isTemporary: (id) => Effect.sync(() => owners.has(id)),
+      isDiscarded: () => Effect.succeed(false),
+      family: (id) =>
+        Effect.sync(() => [...owners.keys()].filter((key) => owners.get(key) === owners.get(id))),
+    });
+    return Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const state = yield* TemporaryThreadService.TemporaryThreadLifecycleState;
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        temporary: true,
+        threadId: parentThreadId,
+        commandId: CommandId.make("temporary-parent-create"),
+        projectId: ProjectId.make("project:temporary-parent"),
+        title: "Temporary parent",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "user",
+        creationSource: "web",
+      });
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("temporary-parent-start"),
+        threadId: parentThreadId,
+        messageId: MessageId.make("temporary-parent-message"),
+        text: "Run a child",
+        attachments: [],
+        dispatchMode: { type: "start_immediately" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      const parent = yield* orchestrator.getThreadRecords(parentThreadId, ["runs"]);
+      const run = parent.runs[0]!;
+      yield* orchestrator.dispatch({
+        type: "delegated_task.request",
+        commandId: CommandId.make("temporary-parent-delegate"),
+        parentThreadId,
+        parentRunId: run.id,
+        parentNodeId: run.rootNodeId!,
+        task: "Child task",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        createdBy: "agent",
+        creationSource: "mcp",
+      });
+      const updated = yield* orchestrator.getThreadRecords(parentThreadId, ["subagents"]);
+      const childId = updated.subagents[0]!.childThreadId!;
+      assert.equal(owners.get(childId), parentThreadId);
+      assert.isTrue((yield* orchestrator.getThreadRecords(childId, [])).thread.temporary);
+      state.discarding.add(parentThreadId);
+      const rejected = yield* Effect.result(
+        orchestrator.dispatch({
+          type: "thread.metadata.update",
+          commandId: CommandId.make("temporary-late-update"),
+          threadId: childId,
+          title: "Late work",
+        }),
+      );
+      assert.isTrue(Result.isFailure(rejected));
+      assert.notEqual(
+        (yield* orchestrator.getThreadRecords(childId, [])).thread.title,
+        "Late work",
+      );
+    }).pipe(
+      Effect.provide(
+        layerTest.pipe(
+          Layer.provide(storageLayer),
+          Layer.provideMerge(TemporaryThreadService.layerState),
+        ),
+      ),
+    );
+  },
+);
+
+it.effect.each([
+  ["selection", "other-codex", true, true],
+  ["message", "other-codex", true, true],
+  ["switch", "other-codex", true, true],
+  ["selection", "other-claude", true, true],
+  ["message", "other-claude", true, true],
+  ["switch", "other-claude", true, true],
+  ["switch", "codex", true, false],
+  ["switch", "other-codex", false, false],
+] as const)(
+  "%s to %s with temporary=%s rejects=%s before changing a live session",
+  ([operation, target, temporary, rejects]) => {
+    const threadId = ThreadId.make("thread:temporary-provider-switch");
+    const otherSelection = { instanceId: ProviderInstanceId.make(target), model: "test" };
+    const owned = new Set<ThreadId>();
+    const storageLayer = Layer.mock(TemporaryThreadStorage.TemporaryThreadStorage)({
+      register: ({ threadId: id }) =>
+        Effect.sync(() => {
+          owned.add(id);
+        }),
+      isTemporary: (id) => Effect.sync(() => owned.has(id)),
+      isDiscarded: () => Effect.succeed(false),
+      family: (id) => Effect.succeed([id]),
+    });
+    const engineLayer = ProviderReplayHarness.layerWithRegistry(
+      { name: "temporary-provider-switch" },
+      ProviderAdapterRegistry.layerFromAdapters([
+        adapter,
+        { ...adapter, instanceId: ProviderInstanceId.make("other-codex") },
+        {
+          ...adapter,
+          instanceId: ProviderInstanceId.make("other-claude"),
+          driver: ProviderDriverKind.make("claude"),
+        },
+      ]),
+      { databaseLayer: layerDatabase, runEffectWorker: false },
+    ).pipe(Layer.provide(storageLayer));
+    const storesLayer = Layer.mergeAll(ProjectionStore.layer, EffectOutbox.layer).pipe(
+      Layer.provide(layerDatabase),
+    );
+    return Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const eventSink = yield* EventSink.EventSinkV2;
+      const outbox = yield* EffectOutbox.EffectOutboxV2;
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        temporary,
+        threadId,
+        commandId: CommandId.make("temporary-switch-create"),
+        projectId: ProjectId.make("project:temporary-switch"),
+        title: "Temporary",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "user",
+        creationSource: "web",
+      });
+      const now = yield* DateTime.now;
+      const sessionId = ProviderSessionId.make("temporary-switch-session");
+      yield* eventSink.write({
+        events: [
+          {
+            id: EventId.make("temporary-switch-session-attached"),
+            type: "provider-session.attached",
+            threadId,
+            occurredAt: now,
+            payload: {
+              id: sessionId,
+              driver: adapter.driver,
+              providerInstanceId: instanceId,
+              status: "ready",
+              cwd: "/repo",
+              model: modelSelection.model,
+              capabilities: {
+                ...CodexProviderCapabilitiesV2,
+                sessions: {
+                  ...CodexProviderCapabilitiesV2.sessions,
+                  supportsProviderSwitchingViaHandoff: false,
+                },
+              },
+              createdAt: now,
+              updatedAt: now,
+              lastError: null,
+            },
+          },
+        ],
+      });
+      const before = yield* projections.getThreadProviderContext(threadId);
+      const sequence = yield* orchestrator.getThreadEventSequence(threadId);
+      const commandId = CommandId.make("temporary-switch");
+      const refused = yield* Effect.result(
+        orchestrator.dispatch(
+          operation !== "message"
+            ? {
+                type: operation === "selection" ? "thread.model-selection.set" : "provider.switch",
+                commandId,
+                threadId,
+                modelSelection: otherSelection,
+              }
+            : {
+                type: "message.dispatch",
+                commandId,
+                threadId,
+                modelSelection: otherSelection,
+                messageId: MessageId.make("temporary-switch-message"),
+                text: "Switch provider",
+                attachments: [],
+                dispatchMode: { type: "start_immediately" },
+                createdBy: "user",
+                creationSource: "web",
+              },
+        ),
+      );
+      assert.equal(Result.isFailure(refused), rejects);
+      const projection = yield* orchestrator.getThreadRecords(threadId, ["runs"]);
+      assert.isEmpty(projection.runs);
+      if (rejects) {
+        assert.deepEqual(yield* projections.getThreadProviderContext(threadId), before);
+        assert.equal(yield* orchestrator.getThreadEventSequence(threadId), sequence);
+        assert.isEmpty(yield* eventSink.readByCommandId({ commandId }).pipe(Stream.runCollect));
+        assert.isEmpty(yield* outbox.listByCommandId(commandId));
+      } else {
+        assert.deepEqual(projection.thread.modelSelection, otherSelection);
+        if (temporary) {
+          assert.equal(
+            (yield* projections.getThreadProviderContext(threadId)).providerSessions[0]?.id,
+            sessionId,
+          );
+          assert.isEmpty(yield* outbox.listByCommandId(commandId));
+        }
+      }
+    }).pipe(Effect.provide(Layer.merge(engineLayer, storesLayer)));
+  },
 );

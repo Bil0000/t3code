@@ -14,8 +14,13 @@ import {
   withOrchestrationProtocolHeader,
 } from "./environmentHttpAuth.ts";
 import * as ThreadSnapshotLoader from "./threadSnapshotHttp.ts";
+import { isTemporaryThread } from "../temporaryThreads.ts";
 
 const DEFAULT_BOUNDED_THREAD_SNAPSHOT_TIMEOUT_MS = 6_000;
+
+export const layerSocket = Layer.succeed(ThreadSnapshotLoader.ThreadSnapshotLoader, {
+  load: () => Effect.succeed({ _tag: "unavailable" }),
+});
 
 export const fetchEnvironmentBoundedThreadSnapshot = Effect.fn(
   "clientRuntime.state.fetchEnvironmentBoundedThreadSnapshot",
@@ -51,11 +56,6 @@ export const fetchEnvironmentBoundedThreadSnapshot = Effect.fn(
   );
 });
 
-/**
- * Older servers that lack the bounded route (plain/generic 404) fall back to
- * the existing full HTTP thread snapshot. Structured
- * EnvironmentResourceNotFoundError from either endpoint still means missing.
- */
 export const layer: Layer.Layer<
   ThreadSnapshotLoader.ThreadSnapshotLoader,
   never,
@@ -84,11 +84,11 @@ export const layer: Layer.Layer<
           Effect.catchTags({
             EnvironmentResourceNotFoundError: () =>
               Effect.logDebug(
-                "Full thread snapshot not found over HTTP after bounded fallback; treating the thread as deleted.",
+                "Full thread snapshot not found over HTTP after bounded fallback; using the socket to include temporary threads.",
               ).pipe(
                 Effect.annotateLogs({ threadId }),
                 Effect.as({
-                  _tag: "missing",
+                  _tag: "unavailable",
                 } satisfies ThreadSnapshotLoader.ThreadSnapshotLoadResult),
               ),
           }),
@@ -104,7 +104,7 @@ export const layer: Layer.Layer<
           ),
         );
 
-        return fetchEnvironmentBoundedThreadSnapshot({
+        const loadBounded = fetchEnvironmentBoundedThreadSnapshot({
           prepared,
           threadId,
           signer,
@@ -127,11 +127,11 @@ export const layer: Layer.Layer<
           Effect.catchTags({
             EnvironmentResourceNotFoundError: () =>
               Effect.logDebug(
-                "Bounded thread snapshot not found over HTTP; treating the thread as deleted.",
+                "Bounded thread snapshot not found over HTTP; using the socket to include temporary threads.",
               ).pipe(
                 Effect.annotateLogs({ threadId }),
                 Effect.as({
-                  _tag: "missing",
+                  _tag: "unavailable",
                 } satisfies ThreadSnapshotLoader.ThreadSnapshotLoadResult),
               ),
             RemoteEnvironmentAuthInvalidJsonError: (error) =>
@@ -158,6 +158,11 @@ export const layer: Layer.Layer<
               } satisfies ThreadSnapshotLoader.ThreadSnapshotLoadResult),
             ),
           ),
+        );
+        return Effect.suspend(() =>
+          isTemporaryThread(prepared.environmentId, threadId)
+            ? Effect.succeed({ _tag: "unavailable" as const })
+            : loadBounded,
         );
       },
     });

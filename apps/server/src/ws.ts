@@ -1,3 +1,15 @@
+import {
+  type OrchestrationV2SubscribeThreadInput,
+  type OrchestrationV2ThreadShellSnapshot,
+  type OrchestrationV2ThreadStreamItem,
+  OrchestrationV2TemporaryThreadError,
+  OrchestrationV2CommandOutputError,
+  OrchestrationGetWorkflowScriptError,
+} from "@t3tools/contracts";
+import * as TemporaryThreadStorage from "./orchestration-v2/TemporaryThreadStorage.ts";
+import * as TemporaryThreadService from "./orchestration-v2/TemporaryThreadService.ts";
+import * as TemporaryThreadTransport from "./orchestration-v2/TemporaryThreadTransport.ts";
+import * as TemporaryResourcePolicy from "./orchestration-v2/TemporaryResourcePolicy.ts";
 import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -125,6 +137,8 @@ import {
   archivedShellStreamItemFromThreadShell,
   buildActiveShellSnapshot,
   bufferShellLiveStream,
+  streamLiveStoredEvents,
+  temporaryShellOverlay,
   coalesceShellApplicationEvents,
   coalesceStoredThreadEvents,
   composeShellStreamWithEnrichment,
@@ -139,7 +153,11 @@ import {
   toShellApplicationEvent,
   type ShellApplicationEvent,
 } from "./orchestration-v2/ShellStream.ts";
-import { ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION } from "./orchestration-v2/ProjectionStore.ts";
+import {
+  ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION,
+  ProjectionStoreThreadNotFoundError,
+  type ProjectionStoreV2Error,
+} from "./orchestration-v2/ProjectionStore.ts";
 import { bufferLiveStream } from "./orchestration-v2/LiveStreamBudget.ts";
 import { coalesceThreadLiveStream } from "./orchestration-v2/ThreadLiveEventCoalescer.ts";
 import {
@@ -263,6 +281,7 @@ import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
 const isProviderUploadFeedbackError = Schema.is(ProviderUploadFeedbackError);
+const isProjectionStoreThreadNotFoundError = Schema.is(ProjectionStoreThreadNotFoundError);
 
 const resolveDiscoveryForConfig = <A, E, R>(
   discovery: Effect.Effect<A, E, R>,
@@ -363,75 +382,85 @@ function unexpectedCompatibilityError(error: never): never {
   throw new Error(`Unhandled compatibility error: ${String(error)}`);
 }
 
-const persistChatAttachments = Effect.fn("ws.assets.persistChatAttachments")(function* (input: {
-  readonly threadId: ThreadId;
-  readonly messageId: MessageId;
-  readonly attachments: ReadonlyArray<{
-    readonly type: "image";
-    readonly name: string;
-    readonly mimeType: string;
-    readonly sizeBytes: number;
-    readonly dataUrl: string;
-  }>;
-}) {
-  const config = yield* ServerConfig.ServerConfig;
-  const fileSystem = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  return yield* Effect.forEach(
-    input.attachments.map((attachment, index) => ({ attachment, index })),
-    Effect.fn("ws.assets.persistChatAttachment")(function* ({ attachment, index }) {
-      const parsed = parseBase64DataUrl(attachment.dataUrl);
-      if (parsed === null || parsed.mimeType !== attachment.mimeType.toLowerCase()) {
-        return yield* new PersistChatAttachmentsError({
-          message: `Attachment ${attachment.name} has an invalid image payload.`,
-        });
-      }
-      const bytes = yield* Effect.fromResult(Base64.decode(parsed.base64)).pipe(
+export const persistChatAttachments = Effect.fn("ws.assets.persistChatAttachments")(
+  function* (input: {
+    readonly threadId: ThreadId;
+    readonly messageId: MessageId;
+    readonly attachments: ReadonlyArray<{
+      readonly type: "image";
+      readonly name: string;
+      readonly mimeType: string;
+      readonly sizeBytes: number;
+      readonly dataUrl: string;
+    }>;
+  }) {
+    const policy = yield* TemporaryResourcePolicy.make;
+    yield* policy
+      .assertDurable(input.threadId, "image attachments")
+      .pipe(
         Effect.mapError(
-          (cause) =>
-            new PersistChatAttachmentsError({
-              message: `Attachment ${attachment.name} is not valid base64.`,
-              cause,
-            }),
+          (cause) => new PersistChatAttachmentsError({ message: cause.message, cause }),
         ),
       );
-      if (bytes.byteLength !== attachment.sizeBytes) {
-        return yield* new PersistChatAttachmentsError({
-          message: `Attachment ${attachment.name} size does not match its payload.`,
-        });
-      }
-      const rawId = createDeterministicAttachmentId(
-        input.threadId,
-        chatAttachmentStableKey(input.messageId, index, bytes),
-      );
-      if (rawId === null) {
-        return yield* new PersistChatAttachmentsError({
-          message: "Could not allocate an attachment identifier.",
-        });
-      }
-      const persisted = {
-        type: "image" as const,
-        id: ChatAttachmentId.make(rawId),
-        name: attachment.name,
-        mimeType: attachment.mimeType,
-        sizeBytes: attachment.sizeBytes,
-      };
-      yield* fileSystem
-        .writeFile(path.join(config.attachmentsDir, attachmentRelativePath(persisted)!), bytes)
-        .pipe(
+    const config = yield* ServerConfig.ServerConfig;
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    return yield* Effect.forEach(
+      input.attachments.map((attachment, index) => ({ attachment, index })),
+      Effect.fn("ws.assets.persistChatAttachment")(function* ({ attachment, index }) {
+        const parsed = parseBase64DataUrl(attachment.dataUrl);
+        if (parsed === null || parsed.mimeType !== attachment.mimeType.toLowerCase()) {
+          return yield* new PersistChatAttachmentsError({
+            message: `Attachment ${attachment.name} has an invalid image payload.`,
+          });
+        }
+        const bytes = yield* Effect.fromResult(Base64.decode(parsed.base64)).pipe(
           Effect.mapError(
             (cause) =>
               new PersistChatAttachmentsError({
-                message: `Could not persist attachment ${attachment.name}.`,
+                message: `Attachment ${attachment.name} is not valid base64.`,
                 cause,
               }),
           ),
         );
-      return persisted;
-    }),
-    { concurrency: 2 },
-  );
-});
+        if (bytes.byteLength !== attachment.sizeBytes) {
+          return yield* new PersistChatAttachmentsError({
+            message: `Attachment ${attachment.name} size does not match its payload.`,
+          });
+        }
+        const rawId = createDeterministicAttachmentId(
+          input.threadId,
+          chatAttachmentStableKey(input.messageId, index, bytes),
+        );
+        if (rawId === null) {
+          return yield* new PersistChatAttachmentsError({
+            message: "Could not allocate an attachment identifier.",
+          });
+        }
+        const persisted = {
+          type: "image" as const,
+          id: ChatAttachmentId.make(rawId),
+          name: attachment.name,
+          mimeType: attachment.mimeType,
+          sizeBytes: attachment.sizeBytes,
+        };
+        yield* fileSystem
+          .writeFile(path.join(config.attachmentsDir, attachmentRelativePath(persisted)!), bytes)
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new PersistChatAttachmentsError({
+                  message: `Could not persist attachment ${attachment.name}.`,
+                  cause,
+                }),
+            ),
+          );
+        return persisted;
+      }),
+      { concurrency: 2 },
+    );
+  },
+);
 
 function projectEntriesFailureContext(error: WorkspaceEntries.WorkspaceEntriesError): {
   readonly failure: ProjectEntriesFailure;
@@ -780,209 +809,313 @@ const enrichProjectShells = Effect.fn("ws.orchestrationV2.enrichProjectShells")(
 );
 
 export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subscribeThread")(
-  function* (input: {
-    readonly threadId: ThreadId;
-    readonly afterSequence?: number;
-    readonly requestCompletionMarker?: boolean;
-    readonly acceptBoundedSnapshot?: boolean;
-    readonly acceptCompactTurnItems?: boolean;
-  }) {
-    const threadManagement = yield* ThreadManagementService.ThreadManagementService;
-    const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
+  function* (
+    input: OrchestrationV2SubscribeThreadInput,
+  ): Effect.fn.Return<
+    Stream.Stream<
+      OrchestrationV2ThreadStreamItem,
+      OrchestrationV2GetThreadProjectionError,
+      | ThreadManagementService.ThreadManagementService
+      | OrchestrationEventStore.OrchestrationEventStore
+    >,
+    OrchestrationV2GetThreadProjectionError,
+    | ThreadManagementService.ThreadManagementService
+    | OrchestrationEventStore.OrchestrationEventStore
+  > {
+    const state = yield* TemporaryThreadTransport.getReadState(
+      input.threadId,
+      input.acceptTemporaryThreads,
+    );
+    if (!state.allowed)
+      return yield* new OrchestrationV2GetThreadProjectionError({
+        threadId: input.threadId,
+        message: "Thread is unavailable to this client.",
+      });
+    const storage = yield* Effect.serviceOption(TemporaryThreadStorage.TemporaryThreadStorage);
+    if (Option.isNone(storage)) return yield* subscribeOrchestrationV2ThreadGeneration(input);
+    return Stream.unwrap(
+      Effect.gen(function* () {
+        const changes = yield* Stream.toPull(storage.value.changes);
+        const generation = yield* storage.value.generation(input.threadId);
+        return Stream.concat(
+          Stream.make(generation),
+          Stream.fromPull(Effect.succeed(changes)).pipe(
+            Stream.filter(
+              (change) =>
+                (change.type === "kept" || change.type === "discarded") &&
+                change.threadIds.includes(input.threadId),
+            ),
+            Stream.map((change) => change.generation),
+          ),
+        ).pipe(
+          Stream.changes,
+          Stream.switchMap((currentGeneration) =>
+            Stream.unwrap(
+              Effect.gen(function* () {
+                const current = yield* TemporaryThreadTransport.getReadState(
+                  input.threadId,
+                  input.acceptTemporaryThreads,
+                );
+                if (!current.allowed)
+                  return yield* new OrchestrationV2GetThreadProjectionError({
+                    threadId: input.threadId,
+                    message: "Thread is unavailable to this client.",
+                  });
+                const { afterSequence, ...rest } = input;
+                const canResume =
+                  input.storageGeneration === currentGeneration ||
+                  (input.storageGeneration === undefined && currentGeneration === "durable");
+                const stream = yield* subscribeOrchestrationV2ThreadGeneration({
+                  ...rest,
+                  ...(current.temporary
+                    ? { acceptBoundedSnapshot: false, acceptCompactTurnItems: false }
+                    : {}),
+                  ...(canResume && afterSequence !== undefined ? { afterSequence } : {}),
+                });
+                return stream.pipe(
+                  Stream.map((item) =>
+                    item.kind === "snapshot"
+                      ? { ...item, storageGeneration: currentGeneration }
+                      : item,
+                  ),
+                );
+              }),
+            ),
+          ),
+        );
+      }),
+    );
+  },
+);
 
-    yield* Effect.annotateCurrentSpan({
-      "orchestration_v2.thread_id": input.threadId,
-    });
-    yield* threadManagement.ensureLegacyTranscript(input.threadId).pipe(
+const subscribeOrchestrationV2ThreadGeneration = Effect.fn(
+  "ws.orchestrationV2.subscribeThreadGeneration",
+)(function* (input: {
+  readonly threadId: ThreadId;
+  readonly afterSequence?: number;
+  readonly requestCompletionMarker?: boolean;
+  readonly acceptBoundedSnapshot?: boolean;
+  readonly acceptCompactTurnItems?: boolean;
+}) {
+  const threadManagement = yield* ThreadManagementService.ThreadManagementService;
+  const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
+
+  yield* Effect.annotateCurrentSpan({
+    "orchestration_v2.thread_id": input.threadId,
+  });
+  yield* threadManagement.ensureLegacyTranscript(input.threadId).pipe(
+    Effect.mapError(
+      (cause) =>
+        new OrchestrationV2GetThreadProjectionError({
+          threadId: input.threadId,
+          message: `Failed to hydrate migrated thread ${input.threadId}`,
+          cause,
+        }),
+    ),
+  );
+
+  const eventStreamFrom = (afterSequence: number) =>
+    threadManagement
+      .streamStoredEventsFrom({
+        threadId: input.threadId,
+        afterSequence,
+      })
+      .pipe(
+        Stream.map((stored) => ({
+          kind: "event" as const,
+          sequence: stored.sequence,
+          event: projectDomainEventForWire(stored.event),
+        })),
+        coalesceThreadLiveStream,
+        Stream.mapError(
+          (cause) =>
+            new OrchestrationV2GetThreadProjectionError({
+              threadId: input.threadId,
+              message: `Failed while streaming orchestration V2 thread ${input.threadId}`,
+              cause,
+            }),
+        ),
+      );
+
+  const loadReplayThrough = (afterSequence: number, throughSequence: number) =>
+    applicationEvents
+      .readAgentEvents({
+        threadId: input.threadId,
+        afterSequence,
+        throughSequence,
+        limit: THREAD_RESUME_MAX_REPLAY_EVENTS + 1,
+        // A row a newer build wrote (e.g. after a downgrade) must not fail
+        // every resubscribe. The live tail resumes from `highWater`, so a
+        // dropped row never hides later events.
+        skipUnknownEventTypes: true,
+      })
+      .pipe(
+        Stream.map((stored) => ({
+          kind: "event" as const,
+          sequence: stored.sequence,
+          event: projectDomainEventForWire(stored.event),
+        })),
+        Stream.runCollect,
+        Effect.map((items) => Array.from(items)),
+        Effect.mapError(
+          (cause) =>
+            new OrchestrationV2GetThreadProjectionError({
+              threadId: input.threadId,
+              message: `Failed while replaying orchestration V2 thread ${input.threadId}`,
+              cause,
+            }),
+        ),
+      );
+
+  const completionMarker =
+    input.requestCompletionMarker === true
+      ? Stream.make({ kind: "synchronized" as const })
+      : Stream.empty;
+
+  const snapshotThenLive = Effect.fn("ws.orchestrationV2.threadSnapshotThenLive")(function* () {
+    const useBoundedSnapshot = shouldUseBoundedThreadSnapshot(input);
+    const snapshot = yield* (
+      useBoundedSnapshot
+        ? threadManagement.getThreadSnapshotWindow(input.threadId, {
+            rowLimit: THREAD_HISTORY_SNAPSHOT_ROW_LIMIT,
+            userTurnLimit: THREAD_HISTORY_PAGE_POLICY.maxUserTurns,
+          })
+        : threadManagement.getThreadSnapshot(input.threadId)
+    ).pipe(
       Effect.mapError(
         (cause) =>
           new OrchestrationV2GetThreadProjectionError({
             threadId: input.threadId,
-            message: `Failed to hydrate migrated thread ${input.threadId}`,
+            message: `Failed to load orchestration V2 thread ${input.threadId}`,
+            ...(cause._tag === "OrchestratorProjectionError" &&
+            isProjectionStoreThreadNotFoundError(cause.cause) &&
+            cause.cause.threadId === input.threadId
+              ? { reason: "thread_not_found" as const }
+              : {}),
             cause,
           }),
       ),
     );
-
-    const eventStreamFrom = (afterSequence: number) =>
-      threadManagement
-        .streamStoredEventsFrom({
-          threadId: input.threadId,
-          afterSequence,
+    const { snapshotSequence } = snapshot;
+    const snapshotItem = useBoundedSnapshot
+      ? buildBoundedThreadStreamSnapshot({
+          ...snapshot,
+          compactTurnItems: input.acceptCompactTurnItems === true,
         })
-        .pipe(
-          Stream.map((stored) => ({
-            kind: "event" as const,
-            sequence: stored.sequence,
-            event: projectDomainEventForWire(stored.event),
-          })),
-          coalesceThreadLiveStream,
-          Stream.mapError(
-            (cause) =>
-              new OrchestrationV2GetThreadProjectionError({
-                threadId: input.threadId,
-                message: `Failed while streaming orchestration V2 thread ${input.threadId}`,
-                cause,
-              }),
-          ),
-        );
+      : {
+          kind: "snapshot" as const,
+          snapshotSequence,
+          projection: projectThreadProjectionForWire(snapshot.projection),
+        };
+    return Stream.concat(
+      Stream.concat(rpcInitialItems([snapshotItem]), completionMarker),
+      eventStreamFrom(snapshotSequence),
+    );
+  });
 
-    const loadReplayThrough = (afterSequence: number, throughSequence: number) =>
-      applicationEvents
-        .readAgentEvents({
-          threadId: input.threadId,
-          afterSequence,
-          throughSequence,
-          limit: THREAD_RESUME_MAX_REPLAY_EVENTS + 1,
-          // A row a newer build wrote (e.g. after a downgrade) must not fail
-          // every resubscribe. The live tail resumes from `highWater`, so a
-          // dropped row never hides later events.
-          skipUnknownEventTypes: true,
-        })
-        .pipe(
-          Stream.map((stored) => ({
-            kind: "event" as const,
-            sequence: stored.sequence,
-            event: projectDomainEventForWire(stored.event),
-          })),
-          Stream.runCollect,
-          Effect.map((items) => Array.from(items)),
-          Effect.mapError(
-            (cause) =>
-              new OrchestrationV2GetThreadProjectionError({
-                threadId: input.threadId,
-                message: `Failed while replaying orchestration V2 thread ${input.threadId}`,
-                cause,
-              }),
-          ),
-        );
-
-    const completionMarker =
-      input.requestCompletionMarker === true
-        ? Stream.make({ kind: "synchronized" as const })
-        : Stream.empty;
-
-    const snapshotThenLive = Effect.fn("ws.orchestrationV2.threadSnapshotThenLive")(function* () {
-      const useBoundedSnapshot = shouldUseBoundedThreadSnapshot(input);
-      const snapshot = yield* (
-        useBoundedSnapshot
-          ? threadManagement.getThreadSnapshotWindow(input.threadId, {
-              rowLimit: THREAD_HISTORY_SNAPSHOT_ROW_LIMIT,
-              userTurnLimit: THREAD_HISTORY_PAGE_POLICY.maxUserTurns,
-            })
-          : threadManagement.getThreadSnapshot(input.threadId)
-      ).pipe(
-        Effect.mapError(
-          (cause) =>
-            new OrchestrationV2GetThreadProjectionError({
-              threadId: input.threadId,
-              message: `Failed to load orchestration V2 thread ${input.threadId}`,
-              cause,
-            }),
-        ),
-      );
-      const { snapshotSequence } = snapshot;
-      const snapshotItem = useBoundedSnapshot
-        ? buildBoundedThreadStreamSnapshot({
-            ...snapshot,
-            compactTurnItems: input.acceptCompactTurnItems === true,
-          })
-        : {
-            kind: "snapshot" as const,
-            snapshotSequence,
-            projection: projectThreadProjectionForWire(snapshot.projection),
-          };
-      return Stream.concat(
-        Stream.concat(rpcInitialItems([snapshotItem]), completionMarker),
-        eventStreamFrom(snapshotSequence),
-      );
-    });
-
-    // The event sink subscribes to live events before reading the persisted
-    // tail, so no event published during the replay window is lost; overlapping
-    // events are deduped by sequence on the client.
-    if (input.afterSequence !== undefined) {
-      const highWater = yield* applicationEvents.latestAgentSequence(input.threadId).pipe(
-        Effect.mapError(
-          (cause) =>
-            new OrchestrationV2GetThreadProjectionError({
-              threadId: input.threadId,
-              message: `Failed to prepare orchestration V2 thread ${input.threadId} replay`,
-              cause,
-            }),
-        ),
-      );
-      if (input.afterSequence > highWater) {
-        return yield* snapshotThenLive();
-      }
-      const stats = yield* applicationEvents
-        .getAgentReplayStats({
-          threadId: input.threadId,
-          afterSequence: input.afterSequence,
-          throughSequence: highWater,
-          maxEvents: THREAD_RESUME_MAX_REPLAY_EVENTS,
-        })
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new OrchestrationV2GetThreadProjectionError({
-                threadId: input.threadId,
-                message: `Failed to measure orchestration V2 thread ${input.threadId} replay`,
-                cause,
-              }),
-          ),
-        );
-      // Bound stored JSON before decoding, then check projected event
-      // size separately. Neither byte count is a bound on process memory.
-      if (
-        stats.eventCount > THREAD_RESUME_MAX_REPLAY_EVENTS ||
-        !isThreadReplayRawPayloadSafe(stats.rawPayloadBytes)
-      ) {
-        return yield* snapshotThenLive();
-      }
-      if (stats.hasCreateEvent) {
-        const shell = yield* threadManagement.getThreadShell(input.threadId).pipe(
-          Effect.mapError(
-            (cause) =>
-              new OrchestrationV2GetThreadProjectionError({
-                threadId: input.threadId,
-                message: `Failed to locate recreated orchestration V2 thread ${input.threadId}`,
-                cause,
-              }),
-          ),
-        );
-        // A retained creation can belong to a thread already deleted.
-        // Only replace its bounded replay when a snapshot can exist.
-        if (shell !== null) return yield* snapshotThenLive();
-      }
-      const replay = yield* loadReplayThrough(input.afterSequence, highWater);
-      const plan = decideThreadResume({
-        afterSequence: input.afterSequence,
-        highWater,
-        replayEventCount: replay.length,
-        replayEncodedBytes: threadReplayEncodedBytes(replay),
-      });
-      if (plan.mode === "snapshot") {
-        return yield* snapshotThenLive();
-      }
-      return Stream.concat(
-        Stream.concat(rpcInitialItems(replay), completionMarker),
-        eventStreamFrom(highWater),
-      );
+  // The event sink subscribes to live events before reading the persisted
+  // tail, so no event published during the replay window is lost; overlapping
+  // events are deduped by sequence on the client.
+  if (input.afterSequence !== undefined) {
+    const highWater = yield* applicationEvents.latestAgentSequence(input.threadId).pipe(
+      Effect.mapError(
+        (cause) =>
+          new OrchestrationV2GetThreadProjectionError({
+            threadId: input.threadId,
+            message: `Failed to prepare orchestration V2 thread ${input.threadId} replay`,
+            cause,
+          }),
+      ),
+    );
+    if (input.afterSequence > highWater) {
+      return yield* snapshotThenLive();
     }
+    const stats = yield* applicationEvents
+      .getAgentReplayStats({
+        threadId: input.threadId,
+        afterSequence: input.afterSequence,
+        throughSequence: highWater,
+        maxEvents: THREAD_RESUME_MAX_REPLAY_EVENTS,
+      })
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new OrchestrationV2GetThreadProjectionError({
+              threadId: input.threadId,
+              message: `Failed to measure orchestration V2 thread ${input.threadId} replay`,
+              cause,
+            }),
+        ),
+      );
+    // Bound stored JSON before decoding, then check projected event
+    // size separately. Neither byte count is a bound on process memory.
+    if (
+      stats.eventCount > THREAD_RESUME_MAX_REPLAY_EVENTS ||
+      !isThreadReplayRawPayloadSafe(stats.rawPayloadBytes)
+    ) {
+      return yield* snapshotThenLive();
+    }
+    if (stats.hasCreateEvent) {
+      const shell = yield* threadManagement.getThreadShell(input.threadId).pipe(
+        Effect.mapError(
+          (cause) =>
+            new OrchestrationV2GetThreadProjectionError({
+              threadId: input.threadId,
+              message: `Failed to locate recreated orchestration V2 thread ${input.threadId}`,
+              cause,
+            }),
+        ),
+      );
+      // A retained creation can belong to a thread already deleted.
+      // Only replace its bounded replay when a snapshot can exist.
+      if (shell !== null) return yield* snapshotThenLive();
+    }
+    const replay = yield* loadReplayThrough(input.afterSequence, highWater);
+    const plan = decideThreadResume({
+      afterSequence: input.afterSequence,
+      highWater,
+      replayEventCount: replay.length,
+      replayEncodedBytes: threadReplayEncodedBytes(replay),
+    });
+    if (plan.mode === "snapshot") {
+      return yield* snapshotThenLive();
+    }
+    return Stream.concat(
+      Stream.concat(rpcInitialItems(replay), completionMarker),
+      eventStreamFrom(highWater),
+    );
+  }
 
-    return yield* snapshotThenLive();
-  },
-);
+  return yield* snapshotThenLive();
+});
 
 export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subscribeShell")(
   function* (input: {
     readonly afterSequence?: number;
     readonly requestCompletionMarker?: boolean;
+    readonly acceptTemporaryThreads?: boolean;
   }) {
     const sql = yield* SqlClient.SqlClient;
     const threadManagement = yield* ThreadManagementService.ThreadManagementService;
-    const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
+    const rawStores = yield* Effect.serviceOption(TemporaryThreadStorage.TemporaryThreadStores);
+    const storage = yield* Effect.serviceOption(TemporaryThreadStorage.TemporaryThreadStorage);
+    const applicationEvents = Option.isSome(rawStores)
+      ? rawStores.value.durable.applicationEvents
+      : yield* OrchestrationEventStore.OrchestrationEventStore;
+    const readThreads: (options: {
+      readonly location: "active" | "archive";
+    }) => Effect.Effect<
+      Effect.Effect<
+        OrchestrationV2ThreadShellSnapshot,
+        ProjectionStoreV2Error | Orchestrator.OrchestratorV2Error
+      >,
+      ProjectionStoreV2Error | Orchestrator.OrchestratorV2Error
+    > = Option.isSome(rawStores)
+      ? rawStores.value.durable.projectionStore.readShellSnapshot
+      : threadManagement.readShellSnapshot;
+    const getThreadShell = Option.isSome(rawStores)
+      ? rawStores.value.durable.projectionStore.getThreadShell
+      : threadManagement.getThreadShell;
     const projects = yield* ProjectStore.ProjectStoreV2;
     const projectService = yield* ProjectService.ProjectService;
     const projectEnrichment = yield* ProjectEnrichmentService.ProjectEnrichmentService;
@@ -1010,7 +1143,7 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
       const base = buildActiveShellSnapshot(
         yield* loadShellSnapshotParts({
           sql,
-          readThreads: threadManagement.readShellSnapshot({ location: "active" }),
+          readThreads: readThreads({ location: "active" }),
           listProjects: projects.listShells(),
           latestSequence: applicationEvents.latestApplicationSequence,
         }),
@@ -1061,7 +1194,7 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
             if ("aggregateKind" in stored) {
               return yield* projectItem(stored);
             }
-            const shell = yield* threadManagement.getThreadShell(stored.event.threadId);
+            const shell = yield* getThreadShell(stored.event.threadId);
             return shellStreamItemFromThreadShell({ stored, shell });
           }),
         { concurrency: 8 },
@@ -1153,65 +1286,121 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
     const completionThenLive = (afterSequence: number) =>
       Stream.concat(completionMarker, liveFrom(afterSequence));
 
-    const stream = yield* Effect.gen(function* () {
-      if (input.afterSequence === undefined) {
-        const loaded = yield* loadSnapshot();
+    const stream = Stream.unwrap(
+      Effect.gen(function* () {
+        if (input.afterSequence === undefined) {
+          const loaded = yield* loadSnapshot();
+          return composeShellStreamWithEnrichment({
+            initial: initialSnapshotItems(loaded),
+            tail: completionThenLive(loaded.snapshot.snapshotSequence),
+            enrichment: enrichmentRefreshes,
+          });
+        }
+
+        const highWater = yield* applicationEvents.latestApplicationSequence;
+        if (
+          !(yield* canReplayPersistedRange(input.afterSequence, highWater, SHELL_RESUME_MAX_GAP))
+        ) {
+          const loaded = yield* loadSnapshot();
+          return composeShellStreamWithEnrichment({
+            initial: initialSnapshotItems(loaded),
+            tail: completionThenLive(loaded.snapshot.snapshotSequence),
+            enrichment: enrichmentRefreshes,
+          });
+        }
+
+        subagentThreadIds = new Set(
+          yield* Option.isSome(rawStores)
+            ? rawStores.value.durable.projectionStore.listActiveSubagentThreadIds()
+            : threadManagement.listActiveSubagentThreadIds(),
+        );
+
+        const loaded = yield* loadProjectMetadataSnapshot(highWater);
+        const replay = toShellStream(
+          applicationEvents
+            .readApplicationEvents({
+              afterSequence: input.afterSequence,
+              throughSequence: highWater,
+              // A row a newer build wrote (e.g. after a downgrade) must not fail
+              // every shell resubscribe. The live tail below resumes from
+              // highWater, so a dropped row never hides later events.
+              skipUnknownEventTypes: true,
+            })
+            .pipe(Stream.filter(filterSubagentTranscript)),
+        );
         return composeShellStreamWithEnrichment({
-          initial: initialSnapshotItems(loaded),
-          tail: completionThenLive(loaded.snapshot.snapshotSequence),
+          initial: initialEnrichmentItems(loaded),
+          tail: Stream.concat(Stream.concat(replay, completionMarker), liveFrom(highWater)),
           enrichment: enrichmentRefreshes,
         });
-      }
-
-      const highWater = yield* applicationEvents.latestApplicationSequence;
-      if (!(yield* canReplayPersistedRange(input.afterSequence, highWater, SHELL_RESUME_MAX_GAP))) {
-        const loaded = yield* loadSnapshot();
-        return composeShellStreamWithEnrichment({
-          initial: initialSnapshotItems(loaded),
-          tail: completionThenLive(loaded.snapshot.snapshotSequence),
-          enrichment: enrichmentRefreshes,
-        });
-      }
-
-      subagentThreadIds = new Set(yield* threadManagement.listActiveSubagentThreadIds());
-
-      const loaded = yield* loadProjectMetadataSnapshot(highWater);
-      const replay = toShellStream(
-        applicationEvents
-          .readApplicationEvents({
-            afterSequence: input.afterSequence,
-            throughSequence: highWater,
-            // A row a newer build wrote (e.g. after a downgrade) must not fail
-            // every shell resubscribe. The live tail below resumes from
-            // highWater, so a dropped row never hides later events.
-            skipUnknownEventTypes: true,
-          })
-          .pipe(Stream.filter(filterSubagentTranscript)),
-      );
-      return composeShellStreamWithEnrichment({
-        initial: initialEnrichmentItems(loaded),
-        tail: Stream.concat(Stream.concat(replay, completionMarker), liveFrom(highWater)),
-        enrichment: enrichmentRefreshes,
-      });
-    }).pipe(
-      Effect.mapError(
-        (cause) =>
-          new OrchestrationV2GetShellSnapshotError({
-            message: "Failed to prepare the application shell stream",
-            cause,
-          }),
+      }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new OrchestrationV2GetShellSnapshotError({
+              message: "Failed to prepare the application shell stream",
+              cause,
+            }),
+        ),
       ),
     );
 
-    return stream.pipe(
-      dedupeShellEnrichment,
-      Stream.mapError(
-        (cause) =>
-          new OrchestrationV2GetShellSnapshotError({
-            message: "Failed while streaming the application shell",
-            cause,
-          }),
-      ),
+    return Stream.unwrap(
+      Effect.gen(function* () {
+        const changes = Option.isSome(storage)
+          ? Stream.fromPull(Effect.succeed(yield* Stream.toPull(storage.value.changes)))
+          : Stream.empty;
+        const keptSnapshots = changes.pipe(
+          Stream.filter((change) => change.type === "kept"),
+          Stream.mapEffect(() => loadSnapshot()),
+          Stream.flatMap((loaded) => initialSnapshotItems(loaded)),
+        );
+        const epoch = yield* (yield* Crypto.Crypto).randomUUIDv4().pipe(Effect.orDie);
+        const overlay =
+          input.acceptTemporaryThreads === true &&
+          Option.isSome(storage) &&
+          Option.isSome(rawStores)
+            ? temporaryShellOverlay({
+                epoch,
+                changes: Stream.merge(
+                  storage.value.changes.pipe(Stream.as(undefined)),
+                  streamLiveStoredEvents([rawStores.value.volatile.eventSink]).pipe(
+                    Stream.as(undefined),
+                  ),
+                ).pipe(
+                  Stream.buffer({ capacity: 1, strategy: "sliding" }),
+                  Stream.groupedWithin(512, Duration.millis(50)),
+                ),
+                loadThreads: Effect.all([
+                  rawStores.value.volatile.projectionStore.getShellSnapshot({ location: "active" }),
+                  rawStores.value.volatile.projectionStore.getShellSnapshot({
+                    location: "archive",
+                  }),
+                ]).pipe(
+                  Effect.flatMap(([active, archived]) =>
+                    Effect.filter([...active.threads, ...archived.archivedThreads], (thread) =>
+                      storage.value.isTemporary(thread.id),
+                    ),
+                  ),
+                  Effect.map((threads) =>
+                    threads.map((thread) => ({
+                      ...thread,
+                      temporary: true,
+                    })),
+                  ),
+                ),
+              })
+            : Stream.empty;
+        return Stream.merge(Stream.merge(stream, keptSnapshots), overlay).pipe(
+          dedupeShellEnrichment,
+          Stream.mapError(
+            (cause) =>
+              new OrchestrationV2GetShellSnapshotError({
+                message: "Failed while streaming the application shell",
+                cause,
+              }),
+          ),
+        );
+      }),
     );
   },
 );
@@ -1235,12 +1424,32 @@ export const layerWsRpc = (
         | ServerConfig.ServerConfig
         | ServerSettings.ServerSettingsService
       >();
-      const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
+      const rawStores = yield* TemporaryThreadStorage.TemporaryThreadStores;
+      const applicationEvents = rawStores.durable.applicationEvents;
       const projectStore = yield* ProjectStore.ProjectStoreV2;
       const projectService = yield* ProjectService.ProjectService;
       const managedFolders = yield* ManagedProjectFolders.ManagedProjectFolders;
       const eventLoopMonitor = yield* EventLoopMonitor.EventLoopMonitor;
       const threadSearch = yield* ThreadSearch.ThreadSearch;
+      const temporaryThreads = yield* TemporaryThreadService.TemporaryThreadService;
+      const temporaryThreadsChanges = (yield* TemporaryThreadStorage.TemporaryThreadStorage)
+        .changes;
+      const requireThreadRead = Effect.fn("ws.orchestrationV2.requireThreadRead")(
+        function* (input: {
+          readonly threadId: ThreadId;
+          readonly acceptTemporaryThreads?: boolean;
+        }) {
+          const state = yield* TemporaryThreadTransport.getReadState(
+            input.threadId,
+            input.acceptTemporaryThreads,
+          );
+          if (!state.allowed)
+            return yield* new OrchestrationV2GetThreadProjectionError({
+              threadId: input.threadId,
+              message: "Thread is unavailable to this client.",
+            });
+        },
+      );
 
       const providerSessionsV2 = yield* ProviderSessionManager.ProviderSessionManagerV2;
       const mcpAppRequests = yield* McpAppRequests.McpAppRequests;
@@ -1267,6 +1476,11 @@ export const layerWsRpc = (
         yield* Effect.context<Effect.Services<ReturnType<typeof remoteSshDeviceHosts>>>();
       const orchestrationEngine = yield* Orchestrator.OrchestratorV2;
       const crypto = yield* Crypto.Crypto;
+      const temporaryConnectionId = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+      const temporaryClientIdentity = (clientId: string | number) => ({
+        sessionId: currentSessionId,
+        clientId: `${temporaryConnectionId}:${clientId}`,
+      });
       const serverCommandId = (tag: string) =>
         crypto.randomUUIDv4().pipe(
           Effect.orDie,
@@ -1331,7 +1545,14 @@ export const layerWsRpc = (
           Effect.flatMap((clientIds) =>
             Effect.forEach(
               clientIds,
-              (clientId) => backgroundPolicy.removeRpcClient(currentSessionId, clientId),
+              (clientId) =>
+                Effect.all(
+                  [
+                    backgroundPolicy.removeRpcClient(currentSessionId, clientId),
+                    temporaryThreads.disconnectClient(temporaryClientIdentity(clientId)),
+                  ],
+                  { discard: true },
+                ),
               {
                 discard: true,
               },
@@ -1787,7 +2008,7 @@ export const layerWsRpc = (
       const getOrchestrationV2ArchivedShellSnapshot = Effect.gen(function* () {
         const { threads, projects, snapshotSequence } = yield* loadShellSnapshotParts({
           sql,
-          readThreads: threadManagement.readShellSnapshot({ location: "archive" }),
+          readThreads: rawStores.durable.projectionStore.readShellSnapshot({ location: "archive" }),
           listProjects: projectStore.listShells(),
           latestSequence: applicationEvents.latestApplicationSequence,
         });
@@ -1815,16 +2036,17 @@ export const layerWsRpc = (
       const subscribeOrchestrationV2ArchivedShell = Effect.fn(
         "ws.orchestrationV2.subscribeArchivedShell",
       )(function* () {
+        const changes = yield* Stream.toPull(temporaryThreadsChanges);
         const snapshot = yield* getOrchestrationV2ArchivedShellSnapshot;
-        const live = threadManagement
-          .streamStoredEventsFrom({ afterSequence: snapshot.snapshotSequence })
+        const live = rawStores.durable.eventSink
+          .stream({ afterSequence: snapshot.snapshotSequence })
           .pipe(
             Stream.groupedWithin(512, Duration.millis(50)),
             Stream.mapEffect((events) =>
               Effect.forEach(
                 coalesceStoredThreadEvents(Array.from(events)),
                 (stored) =>
-                  threadManagement
+                  rawStores.durable.projectionStore
                     .getThreadShell(stored.event.threadId)
                     .pipe(
                       Effect.map((shell) =>
@@ -1845,7 +2067,15 @@ export const layerWsRpc = (
                 }),
             ),
           );
-        return Stream.concat(rpcInitialItems([{ kind: "snapshot" as const, snapshot }]), live);
+        const keptSnapshots = Stream.fromPull(Effect.succeed(changes)).pipe(
+          Stream.filter((change) => change.type === "kept"),
+          Stream.mapEffect(() => getOrchestrationV2ArchivedShellSnapshot),
+          Stream.map((snapshot) => ({ kind: "snapshot" as const, snapshot })),
+        );
+        return Stream.concat(
+          rpcInitialItems([{ kind: "snapshot" as const, snapshot }]),
+          Stream.merge(live, keptSnapshots),
+        );
       });
 
       const mutateProject = Effect.fn("ws.projects.mutate")(function* (mutation: ProjectMutation) {
@@ -1906,9 +2136,20 @@ export const layerWsRpc = (
           ),
         [ORCHESTRATION_V2_WS_METHODS.stopWorkflow]: (input) => threadManagement.stopWorkflow(input),
         [ORCHESTRATION_V2_WS_METHODS.getWorkflowScript]: (input) =>
-          readWorkflowScript({ scriptPath: input.scriptPath }),
+          requireThreadRead(input).pipe(
+            Effect.mapError(
+              (cause) =>
+                new OrchestrationGetWorkflowScriptError({
+                  reason: "root-unavailable",
+                  scriptPath: input.scriptPath,
+                  cause,
+                }),
+            ),
+            Effect.andThen(readWorkflowScript({ scriptPath: input.scriptPath })),
+          ),
         [ORCHESTRATION_V2_WS_METHODS.getTurnItem]: (input) =>
-          threadManagement.getTurnItem(input).pipe(
+          requireThreadRead(input).pipe(
+            Effect.andThen(threadManagement.getTurnItem(input)),
             Effect.mapError(
               (cause) =>
                 new OrchestrationV2GetThreadProjectionError({
@@ -1939,13 +2180,23 @@ export const layerWsRpc = (
             ),
           ),
         [ORCHESTRATION_V2_WS_METHODS.searchThread]: (input) =>
-          threadManagement
-            .searchThread(input)
-            .pipe(Effect.mapError((cause) => new OrchestrationV2SearchThreadError({ cause }))),
+          requireThreadRead(input).pipe(
+            Effect.andThen(threadManagement.searchThread(input)),
+            Effect.mapError((cause) => new OrchestrationV2SearchThreadError({ cause })),
+          ),
         [ORCHESTRATION_V2_WS_METHODS.searchThreadStream]: (input) =>
-          threadManagement
-            .searchThreadStream(input)
-            .pipe(Stream.mapError((cause) => new OrchestrationV2SearchThreadError({ cause }))),
+          Stream.unwrap(
+            requireThreadRead(input).pipe(
+              Effect.mapError((cause) => new OrchestrationV2SearchThreadError({ cause })),
+              Effect.as(
+                threadManagement
+                  .searchThreadStream(input)
+                  .pipe(
+                    Stream.mapError((cause) => new OrchestrationV2SearchThreadError({ cause })),
+                  ),
+              ),
+            ),
+          ),
         [ORCHESTRATION_V2_WS_METHODS.searchThreads]: (input) =>
           threadSearch.search(input).pipe(
             Effect.mapError(
@@ -1959,32 +2210,62 @@ export const layerWsRpc = (
         [ORCHESTRATION_V2_WS_METHODS.getArchivedShellSnapshot]: (_input) =>
           getOrchestrationV2ArchivedShellSnapshot,
         [ORCHESTRATION_V2_WS_METHODS.getThreadProjection]: (input) =>
-          Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
+          requireThreadRead(input).pipe(
             Effect.andThen(
-              // Pre-pagination clients still call this compatibility endpoint.
-              // Keep stale clients from materializing an unbounded transcript.
-              threadManagement
-                .getThreadSnapshotWindow(input.threadId, {
-                  rowLimit: THREAD_HISTORY_SNAPSHOT_ROW_LIMIT,
-                })
-                .pipe(
-                  Effect.map((snapshot) =>
-                    projectThreadProjectionForWire(
-                      buildBoundedThreadProjection({
-                        projection: snapshot.projection,
-                        snapshotSequence: snapshot.snapshotSequence,
-                      }).projection,
+              Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
+                Effect.andThen(
+                  // Pre-pagination clients still call this compatibility endpoint.
+                  // Keep stale clients from materializing an unbounded transcript.
+                  threadManagement
+                    .getThreadSnapshotWindow(input.threadId, {
+                      rowLimit: THREAD_HISTORY_SNAPSHOT_ROW_LIMIT,
+                    })
+                    .pipe(
+                      Effect.map((snapshot) =>
+                        projectThreadProjectionForWire(
+                          buildBoundedThreadProjection({
+                            projection: snapshot.projection,
+                            snapshotSequence: snapshot.snapshotSequence,
+                          }).projection,
+                        ),
+                      ),
+                      Effect.mapError(
+                        (cause) =>
+                          new OrchestrationV2GetThreadProjectionError({
+                            threadId: input.threadId,
+                            message: `Failed to load orchestration V2 thread ${input.threadId}`,
+                            cause,
+                          }),
+                      ),
                     ),
-                  ),
-                  Effect.mapError(
-                    (cause) =>
-                      new OrchestrationV2GetThreadProjectionError({
-                        threadId: input.threadId,
-                        message: `Failed to load orchestration V2 thread ${input.threadId}`,
-                        cause,
-                      }),
-                  ),
                 ),
+              ),
+            ),
+          ),
+        [ORCHESTRATION_V2_WS_METHODS.keepThread]: (input) =>
+          temporaryThreads.keep(input).pipe(
+            Effect.mapError(
+              (cause) =>
+                new OrchestrationV2TemporaryThreadError({
+                  message: "Failed to keep the temporary thread.",
+                  cause,
+                }),
+            ),
+          ),
+        [ORCHESTRATION_V2_WS_METHODS.updateTemporaryThreadViews]: (input, metadata) =>
+          Ref.update(
+            rpcClientIds,
+            (clientIds) => new Set([...clientIds, RpcClientId.make(metadata.client.id)]),
+          ).pipe(
+            Effect.andThen(
+              temporaryThreads.updateViews(temporaryClientIdentity(metadata.client.id), input),
+            ),
+            Effect.mapError(
+              (cause) =>
+                new OrchestrationV2TemporaryThreadError({
+                  message: "Failed to update temporary thread views.",
+                  cause,
+                }),
             ),
           ),
         [ORCHESTRATION_V2_WS_METHODS.launchThread]: (input) =>
@@ -2002,6 +2283,7 @@ export const layerWsRpc = (
                       ? {}
                       : { reuseExistingThread: input.reuseExistingThread }),
                     projectId: input.projectId,
+                    ...(input.temporary === undefined ? {} : { temporary: input.temporary }),
                     title: input.title,
                     ...(input.generateTitle === undefined
                       ? {}
@@ -2091,6 +2373,18 @@ export const layerWsRpc = (
         [ORCHESTRATION_V2_WS_METHODS.subscribeCommandOutput]: (input) =>
           Stream.unwrap(
             Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
+              Effect.andThen(
+                requireThreadRead(input).pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new OrchestrationV2CommandOutputError({
+                        threadId: input.threadId,
+                        message: cause.message,
+                        cause,
+                      }),
+                  ),
+                ),
+              ),
               Effect.as(commandOutputHub.subscribe(input)),
             ),
           ),
@@ -2760,7 +3054,13 @@ export const layerWsRpc = (
                 }),
             ),
           ),
-        [WS_METHODS.attachmentsCreateUploadUrl]: (input) => issueAttachmentUploadUrl(input),
+        [WS_METHODS.attachmentsCreateUploadUrl]: (input) =>
+          issueAttachmentUploadUrl(input).pipe(
+            Effect.catchTags({
+              TemporaryResourceError: (cause) =>
+                new OrchestrationV2TemporaryThreadError({ message: cause.message, cause }),
+            }),
+          ),
         [WS_METHODS.attachmentsDelete]: (input) => deletePendingAttachment(input.attachmentId),
         [WS_METHODS.agentSessionsScan]: () => agentSessionScanner.scan,
         [WS_METHODS.agentSessionsImport]: (input) =>

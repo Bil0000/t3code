@@ -1,3 +1,4 @@
+import { isTemporaryComposerDraft } from "../../state/use-composer-drafts";
 import { useSidebarWorkspaceTabs } from "../workspace/useSystemWorkspaceTabBar";
 import { Button } from "../../components/ui/Button";
 import * as Dialog from "../../components/ui/Dialog";
@@ -582,6 +583,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
       usageLimitsOffered && draftAttachments.length === 0 ? openUsageLimits : undefined,
   });
   const voiceInput = useVoiceInputController({
+    disabled: isTemporaryComposerDraft(composerDraftKey),
     ownerKey: composerDraftKey,
     label: props.selectedThread.title || "Untitled thread",
     readDraftMessage: () => getComposerDraftSnapshot(composerDraftKey).text,
@@ -686,6 +688,8 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     const threadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
     if (inFlightThreadIdsRef.current.has(threadKey)) return;
     inFlightThreadIdsRef.current.add(threadKey);
+    const temporaryAtSend =
+      props.selectedThread.temporary === true || isTemporaryComposerDraft(composerDraftKey);
     const draftAtSend = getComposerDraftSnapshot(composerDraftKey);
     const stillSendable = () => {
       const draft = getComposerDraftSnapshot(composerDraftKey);
@@ -703,17 +707,18 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     inFlightThreadIdsRef.current.delete(threadKey);
     if (AsyncResult.isFailure(sent)) {
       // The composer state already surfaces send errors; only the lock needed releasing.
-      console.error("[composer] send failed", squashAtomCommandFailure(sent));
+      if (!temporaryAtSend) console.error("[composer] send failed", squashAtomCommandFailure(sent));
       return;
     }
     if (sent.value === null) return;
     // Armed after the send so its preference read and native Activity start don't contend
     // with the queued-message feedback on the tap frame.
-    armAgentAwarenessLiveActivityForLocalWork({
-      environmentId: props.environmentId,
-      threadTitle: props.selectedThread.title,
-      projectTitle: props.environmentLabel ?? "T3 Code",
-    });
+    if (!temporaryAtSend)
+      armAgentAwarenessLiveActivityForLocalWork({
+        environmentId: props.environmentId,
+        threadTitle: props.selectedThread.title,
+        projectTitle: props.environmentLabel ?? "T3 Code",
+      });
   };
 
   const lockedProviderInstanceId = props.canSwitchProvider

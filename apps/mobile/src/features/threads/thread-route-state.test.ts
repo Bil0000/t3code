@@ -2,6 +2,8 @@ import * as NodeModule from "node:module";
 import { describe, expect, it } from "vite-plus/test";
 import {
   draftRouteIdentity,
+  openThreadView,
+  hasOpenThreadDraft,
   isDraftThreadRoute,
   submittedThreadParams,
 } from "./thread-route-state";
@@ -113,4 +115,70 @@ it("starts a fresh controller for repeated new-task requests in the same project
   expect(draftRouteIdentity({ ...project, requestId: "first" })).not.toBe(
     draftRouteIdentity({ ...project, requestId: "second" }),
   );
+});
+
+describe("temporary chat navigation ownership", () => {
+  it.each(["Connections", "ConnectionsNew", "ConnectOnboarding"])(
+    "retains the iOS chat and draft beneath %s",
+    (name) => {
+      const sheet = { name };
+      const chat = { name: "Thread", params: { environmentId: "env", threadId: "temp" } };
+      const draft = { name: "Thread", params: { draft: { draftId: "draft" } } };
+      expect(openThreadView({ index: 1, routes: [chat, sheet] }, "ios")).toEqual({
+        environmentId: "env",
+        threadId: "temp",
+      });
+      expect(hasOpenThreadDraft({ index: 1, routes: [draft, sheet] }, "ios")).toBe(true);
+    },
+  );
+
+  it("retains stacked iOS connection sheets but leaves for Android connection pages", () => {
+    const chat = { name: "Thread", params: { environmentId: "env", threadId: "temp" } };
+    const routes = [chat, { name: "Connections" }, { name: "ConnectionsNew" }];
+    expect(openThreadView({ index: 2, routes }, "ios")).toEqual({
+      environmentId: "env",
+      threadId: "temp",
+    });
+    expect(openThreadView({ index: 2, routes }, "android")).toBeNull();
+    expect(
+      hasOpenThreadDraft(
+        { index: 1, routes: [{ name: "Thread", params: { draft: {} } }, routes[1]!] },
+        "android",
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps a chat open under its inspector and leaves it when Home is selected", () => {
+    const thread = { name: "Thread", params: { environmentId: "env", threadId: "temp" } };
+    const inspector = { name: "ThreadFiles", params: { environmentId: "env", threadId: "temp" } };
+    expect(openThreadView({ index: 2, routes: [{ name: "Home" }, thread, inspector] })).toEqual({
+      environmentId: "env",
+      threadId: "temp",
+    });
+    expect(
+      openThreadView({ index: 2, routes: [{ name: "Home" }, thread, { name: "Home" }] }),
+    ).toBeNull();
+    expect(
+      openThreadView({
+        index: 2,
+        routes: [
+          { name: "Home" },
+          thread,
+          { name: "Thread", params: { environmentId: "env", threadId: "next" } },
+        ],
+      }),
+    ).toEqual({ environmentId: "env", threadId: "next" });
+  });
+});
+
+it("retains a draft under its picker but closes it when another chat is selected", () => {
+  const draft = { name: "Thread", params: { draft: { draftId: "draft" } } };
+  expect(hasOpenThreadDraft({ index: 1, routes: [draft, { name: "NewTaskBranch" }] })).toBe(true);
+  expect(hasOpenThreadDraft({ index: 1, routes: [draft, { name: "Home" }] })).toBe(false);
+  expect(
+    hasOpenThreadDraft({
+      index: 1,
+      routes: [draft, { name: "Thread", params: { environmentId: "env", threadId: "live" } }],
+    }),
+  ).toBe(false);
 });

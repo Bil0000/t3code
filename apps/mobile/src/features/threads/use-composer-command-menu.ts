@@ -498,7 +498,7 @@ export function useComposerCommandMenu({
     if (trigger.kind === "path") {
       const threadItems = environmentId
         ? matchComposerThreadItems({
-            shells: threadShells,
+            shells: threadShells.filter((thread) => !thread.temporary),
             environmentId,
             excludeThreadId: currentThreadId,
             query: trigger.query,
@@ -533,7 +533,7 @@ export function useComposerCommandMenu({
           candidate.environmentId === item.thread.environmentId &&
           candidate.id === item.thread.threadId,
       );
-      if (!shell) return;
+      if (!shell || shell.temporary) return;
       const record = threadComposerContext(item.thread, shell.title);
       const existing = getComposerDraftSnapshot(ownerKey).context?.records ?? [];
       const alreadyAttached = existing.some((entry) => entry.contextId === record.contextId);

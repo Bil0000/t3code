@@ -23,6 +23,8 @@ import * as HtmlRender from "./HtmlRender.ts";
 import { HtmlRenderBrowserError } from "./headlessChrome.ts";
 import * as PreviewBrowser from "../preview/PreviewBrowser.ts";
 
+import { temporaryResourceStorage } from "../orchestration-v2/testkit/TemporaryResourceStorage.ts";
+
 const TEST_BROWSER_ENV = "T3CODE_TEST_HEADLESS_SHELL";
 
 const layerHtmlRender = (
@@ -421,3 +423,23 @@ describe("HtmlRender", () => {
     }).pipe(Effect.scoped),
   );
 });
+
+it.effect("temporary HTML publish fails before writing an artifact", () =>
+  Effect.gen(function* () {
+    const renderer = yield* HtmlRender.HtmlRender;
+    const fs = yield* FileSystem.FileSystem;
+    const config = yield* ServerConfig.ServerConfig;
+    const before = yield* fs.readDirectory(config.attachmentsDir);
+    const result = yield* Effect.result(
+      renderer.publish({
+        threadId: ThreadId.make("private-html"),
+        html: "<p>temporary-sentinel</p>",
+        title: "private",
+        height: 100,
+      }),
+    );
+    assert.equal(result._tag, "Failure");
+    if (result._tag === "Failure") assert.include(result.failure.message, "Keep this thread");
+    assert.deepEqual(yield* fs.readDirectory(config.attachmentsDir), before);
+  }).pipe(Effect.provide(layerHtmlRender().pipe(Layer.provide(temporaryResourceStorage)))),
+);

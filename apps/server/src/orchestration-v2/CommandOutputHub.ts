@@ -4,6 +4,7 @@ import {
   type OrchestrationV2CommandOutputFrame,
   type OrchestrationV2SubscribeCommandOutputInput,
   type OrchestrationV2TurnItem,
+  type ThreadId,
 } from "@t3tools/contracts";
 import {
   appendTerminalOutput,
@@ -68,6 +69,7 @@ export interface CommandOutputHubShape {
    * output (an interrupt); otherwise the persisted output is what rows show.
    */
   readonly finish: (input: CommandOutputTarget) => Effect.Effect<void>;
+  readonly purgeThread: (threadId: ThreadId) => Effect.Effect<void>;
   /** Frames for one row until its command settles; see `OrchestrationV2CommandOutputFrame`. */
   readonly subscribe: (
     input: CommandOutputTarget,
@@ -143,6 +145,7 @@ export const make = Effect.gen(function* () {
   const tails = new Map<string, TerminalOutputState>();
   const finished = new Map<string, TerminalOutputState>();
   const subscribers = new Map<string, Set<Subscriber>>();
+  const discarded = new Set<ThreadId>();
 
   const wakeAll = (key: string, chunk: string) =>
     Effect.forEach(
@@ -163,7 +166,7 @@ export const make = Effect.gen(function* () {
 
   const append: CommandOutputHubShape["append"] = ({ chunk, ...target }) =>
     Effect.suspend(() => {
-      if (chunk.length === 0) return Effect.void;
+      if (chunk.length === 0 || discarded.has(target.threadId)) return Effect.void;
       const key = commandKey(target);
       const tail = appendTerminalOutput(tails.get(key) ?? EMPTY_TERMINAL_OUTPUT, chunk);
       setBounded(tails, key, tail, MAX_LIVE_COMMANDS, (oldest) => {
@@ -188,6 +191,11 @@ export const make = Effect.gen(function* () {
   const subscribe: CommandOutputHubShape["subscribe"] = (target) =>
     Stream.unwrap(
       Effect.gen(function* () {
+        if (discarded.has(target.threadId))
+          return yield* new OrchestrationV2CommandOutputError({
+            threadId: target.threadId,
+            message: "Thread was discarded.",
+          });
         const key = commandKey(target);
         const wake = yield* Queue.sliding<void>(1);
         const subscriber: Subscriber = {
@@ -267,6 +275,8 @@ export const make = Effect.gen(function* () {
           OrchestrationV2CommandOutputError
         > {
           yield* Queue.take(wake);
+          if (discarded.has(target.threadId))
+            return { kind: "replace", text: "", truncated: false, running: false };
           if (lost !== undefined) {
             return yield* new OrchestrationV2CommandOutputError({
               threadId: target.threadId,
@@ -332,7 +342,22 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  return CommandOutputHub.of({ append, finish, subscribe });
+  const purgeThread = Effect.fn("CommandOutputHub.purgeThread")(function* (threadId: ThreadId) {
+    discarded.add(threadId);
+    const prefix = `${threadId}\u0000`;
+    for (const map of [tails, finished]) {
+      for (const key of map.keys()) if (key.startsWith(prefix)) map.delete(key);
+    }
+    for (const [key, attached] of subscribers) {
+      if (!key.startsWith(prefix)) continue;
+      subscribers.delete(key);
+      for (const subscriber of attached) {
+        subscriber.pendingAppend = "";
+        yield* Queue.offer(subscriber.wake, undefined);
+      }
+    }
+  });
+  return CommandOutputHub.of({ append, finish, subscribe, purgeThread });
 });
 
 export const layer: Layer.Layer<

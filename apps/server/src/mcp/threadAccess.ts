@@ -11,6 +11,7 @@ import {
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 
+import * as TemporaryResourcePolicy from "../orchestration-v2/TemporaryResourcePolicy.ts";
 import type { OrchestratorV2Error } from "../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as OrchestrationMcp from "./OrchestratorMcpService.ts";
@@ -154,6 +155,15 @@ export const readThread = Effect.fn("mcp.readThread")(function* <
 >(threadId?: ThreadId, fields: ReadonlyArray<K> = []) {
   const context = yield* readCaller();
   const targetId = yield* resolveThreadId(context, threadId);
+  const policy = yield* TemporaryResourcePolicy.make;
+  yield* policy
+    .assertCopyTarget(targetId, context.scope.thread?.threadId)
+    .pipe(
+      Effect.mapError(
+        (error) =>
+          new OrchestratorMcpFailure({ code: "capability_denied", message: error.message }),
+      ),
+    );
   const shell = yield* context.threads.getThreadShell(targetId).pipe(Effect.mapError(unavailable));
   if (shell === null || shell.deletedAt !== null) {
     return yield* OrchestrationMcp.threadNotFound(

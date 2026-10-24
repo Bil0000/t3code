@@ -10,6 +10,7 @@ import { isFileBackedComposerAttachment } from "../lib/composerImages";
 import {
   composerAttachmentUploadKey,
   composerDraftEnvironmentId,
+  composerDraftUploadOwner,
   canUploadComposerAttachment,
   createComposerAttachmentUploadQueue,
   type ComposerAttachmentUploadState,
@@ -21,6 +22,7 @@ import { useThreadOutboxMessages } from "./use-thread-outbox";
 import {
   ComposerDraftPersistenceError,
   composerDraftsAtom,
+  isTemporaryComposerDraft,
   composerDraftUploadSourcesAtom,
   ensureComposerDraftsLoaded,
   flushComposerDrafts,
@@ -71,13 +73,14 @@ export function useComposerAttachmentUploadWorker() {
     ensureComposerDraftsLoaded();
     const queue = createComposerAttachmentUploadQueue({
       onChange: (states) => appAtomRegistry.set(composerAttachmentUploadsAtom, states),
-      upload: async ({ environmentId, attachment }, signal, onProgress) => {
+      upload: async ({ environmentId, attachment, owner }, signal, onProgress) => {
         const release = isFileBackedComposerAttachment(attachment)
           ? retainComposerAttachmentFileForPreview(attachment)
           : undefined;
         const prepared = await settlePromise(() =>
           prepareTurnAttachments({
             environmentId,
+            ...(owner === undefined ? {} : { owner }),
             attachments: [attachment],
             supportsImageUploads: true,
             signal,
@@ -131,6 +134,7 @@ export function useComposerAttachmentUploadWorker() {
         .map((environment) => environment.environmentId),
     );
     const requests = Object.entries(drafts).flatMap(([key, draft]) => {
+      if (isTemporaryComposerDraft(key, draft)) return [];
       const environmentId = composerDraftEnvironmentId(key, queued, draft);
       if (
         environmentId === null ||
@@ -142,7 +146,11 @@ export function useComposerAttachmentUploadWorker() {
         .filter((attachment) =>
           canUploadComposerAttachment(attachment, serverConfigs.get(environmentId)),
         )
-        .map((attachment) => ({ environmentId, attachment }));
+        .map((attachment) => ({
+          environmentId,
+          attachment,
+          owner: composerDraftUploadOwner(key, queued, environmentId, draft),
+        }));
     });
     queueRef.current?.sync(requests);
   }, [connectedEnvironments, drafts, operableEnvironments, queuedMessages, serverConfigs]);

@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off
+import { temporaryResourceStorage } from "../orchestration-v2/testkit/TemporaryResourceStorage.ts";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -12,6 +13,7 @@ import * as Deferred from "effect/Deferred";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Logger from "effect/Logger";
+import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 
@@ -525,3 +527,25 @@ it.layer(NodeServices.layer)("EventNdjsonLogger", (it) => {
       }),
   );
 });
+
+it.effect("does not serialize or queue temporary provider payloads", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-private-log-" });
+    const basePath = NodePath.join(directory, "native.log");
+    let serialized = false;
+    const logger = yield* makeEventNdjsonLogger(basePath, { stream: "native" });
+    assert.exists(logger);
+    if (!logger) return;
+    const payload = {
+      toJSON: () => {
+        serialized = true;
+        return { text: "temporary-sentinel" };
+      },
+    };
+    yield* logger.write(payload, ThreadId.make("private-thread"));
+    yield* logger.close();
+    assert.isFalse(serialized);
+    assert.deepEqual(yield* fs.readDirectory(directory), []);
+  }).pipe(Effect.provide(Layer.merge(temporaryResourceStorage, NodeServices.layer))),
+);

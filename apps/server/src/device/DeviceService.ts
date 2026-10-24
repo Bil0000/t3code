@@ -1,3 +1,4 @@
+import * as TemporaryResourcePolicy from "../orchestration-v2/TemporaryResourcePolicy.ts";
 import {
   type DeviceActionInput,
   type DeviceCloseInput,
@@ -185,6 +186,7 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
   installTool?: (tool: "hub" | "agent") => Effect.Effect<unknown, DeviceError>,
 ) {
   const settings = yield* ServerSettings.ServerSettingsService;
+  const policy = yield* TemporaryResourcePolicy.make;
   const crypto = yield* Crypto.Crypto;
   const lifecycleLock = yield* Semaphore.make(1);
   const readDeviceSettings = settings.getSettings.pipe(
@@ -585,6 +587,15 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
 
   const open: DeviceService["Service"]["open"] = Effect.fn("DeviceService.open")(
     function* (input, context) {
+      yield* policy.assertDurable(input.threadId, "device sessions").pipe(
+        Effect.mapError(
+          (error) =>
+            new DeviceHostUnavailableError({
+              hostId: input.hostId ?? LOCAL_DEVICE_HOST_ID,
+              reason: error.message,
+            }),
+        ),
+      );
       const host = yield* resolveHost(input.hostId);
       yield* ensurePlatform(host, input.platform);
       const ready = yield* readiness(host.id);
@@ -844,6 +855,14 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
           });
         const { configPath, agentDeviceId } = yield* lifecycleLock.withPermit(
           Effect.gen(function* () {
+            yield* policy
+              .assertDurable(input.threadId, "device sessions")
+              .pipe(
+                Effect.mapError(
+                  (error) =>
+                    new DeviceHostUnavailableError({ hostId: input.hostId, reason: error.message }),
+                ),
+              );
             if (hosts.get(host.id) !== host)
               return yield* new DeviceHostUnavailableError({
                 hostId: host.id,
