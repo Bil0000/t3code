@@ -28,6 +28,7 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
 import { rpcInitialItems } from "./rpcInitialItems.ts";
@@ -1411,6 +1412,7 @@ export const layerWsRpc = (
   clientAnalyticsProps: Readonly<Record<string, unknown>>,
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
   serverBrowser: ServerBrowser.ServerBrowser["Service"],
+  connectionScope: Scope.Scope,
 ) =>
   Layer.effectContext(
     Effect.gen(function* () {
@@ -1540,7 +1542,8 @@ export const layerWsRpc = (
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
       const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
       const rpcClientIds = yield* Ref.make(new Set<RpcClientId>());
-      yield* Effect.addFinalizer(() =>
+      yield* Scope.addFinalizer(
+        connectionScope,
         Ref.get(rpcClientIds).pipe(
           Effect.flatMap((clientIds) =>
             Effect.forEach(
@@ -3572,6 +3575,7 @@ export const layer = Layer.unwrap(
               clientAnalyticsProps,
               previewAutomationBroker,
               serverBrowser,
+              yield* Effect.scope,
             ).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               // Request fibers run in the handlers' context, so this reporter sees

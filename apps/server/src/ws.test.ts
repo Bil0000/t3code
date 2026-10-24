@@ -9,12 +9,16 @@ import {
   ThreadId,
   WS_METHODS,
   WsSubscribeServerConfigRpc,
+  ORCHESTRATION_V2_WS_METHODS,
+  OrchestrationV2RpcSchemas,
+  OrchestrationV2TemporaryThreadError,
   type OrchestrationV2StoredEvent,
   type OrchestrationProjectShell,
   type ServerConfig,
   type ServerConfigStreamEvent,
 } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
@@ -22,8 +26,11 @@ import * as PubSub from "effect/PubSub";
 import * as Result from "effect/Result";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
+import * as Scope from "effect/Scope";
+import * as Exit from "effect/Exit";
 import { Headers } from "effect/http";
-import { RpcGroup, RpcMessage, RpcServer } from "effect/rpc";
+import { Rpc, RpcGroup, RpcMessage, RpcServer } from "effect/rpc";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
@@ -42,6 +49,7 @@ import * as DeviceService from "./device/DeviceService.ts";
 import * as DirectEndpoints from "./environment/DirectEndpoints.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
+import * as EventLoopMonitor from "./observability/EventLoopMonitor.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
 import * as ManagedProjectFolders from "./project/ManagedProjectFolders.ts";
@@ -468,6 +476,136 @@ const layerConfigSources = Layer.mergeAll(
   Layer.provideMerge(NodeServices.layer),
 );
 
+it.effect.each([false, true])(
+  "expires a reloaded socket view after handler setup returns with another tab=%s",
+  (anotherTab) =>
+    Effect.gen(function* () {
+      const services = yield* Layer.build(
+        Layer.mergeAll(
+          layerUnusedConfigRpcServices,
+          Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({}),
+          Layer.mock(ServerBrowser.ServerBrowser)({}),
+        ).pipe(Layer.provideMerge(layerConfigSources)),
+      );
+      const storage = Context.get(services, TemporaryThreadStorage.TemporaryThreadStorage);
+      const lifecycle = yield* Layer.build(
+        TemporaryThreadService.layer.pipe(
+          Layer.provide(TemporaryThreadService.layerState),
+          Layer.provide(
+            Layer.succeed(TemporaryThreadService.TemporaryThreadCleanup, {
+              stopAndTeardown: () => Effect.void,
+            }),
+          ),
+          Layer.provide(Layer.succeedContext(services)),
+        ),
+      );
+      const temporaryThreads = Context.get(
+        lifecycle,
+        TemporaryThreadService.TemporaryThreadService,
+      );
+      const threadId = ThreadId.make("reloaded-socket");
+      const responses = yield* Queue.unbounded<Exit.Exit<unknown, unknown>>();
+      const socketScope = yield* Scope.fork(yield* Effect.scope);
+      const server = yield* RpcServer.makeNoSerialization(
+        RpcGroup.make(
+          Rpc.make(ORCHESTRATION_V2_WS_METHODS.updateTemporaryThreadViews, {
+            payload: OrchestrationV2RpcSchemas.updateTemporaryThreadViews.input,
+            error: OrchestrationV2TemporaryThreadError,
+          }),
+        ),
+        {
+          ...WS_RPC_SERVER_OPTIONS,
+          onFromServer: (response) =>
+            response._tag === "Exit"
+              ? Queue.offer(responses, response.exit).pipe(Effect.asVoid)
+              : Effect.void,
+        },
+      ).pipe(
+        Effect.provide(
+          layerWsRpc(
+            {
+              sessionId: AuthSessionId.make("reload-session"),
+              subject: "reload-session",
+              method: "browser-session-cookie",
+              scopes: [],
+            },
+            {},
+            {},
+            Context.get(services, PreviewAutomationBroker.PreviewAutomationBroker),
+            Context.get(services, ServerBrowser.ServerBrowser),
+            socketScope,
+          ).pipe(
+            Layer.provide(Layer.succeedContext(lifecycle)),
+            Layer.provide(
+              Layer.mergeAll(
+                Layer.mock(BackgroundPolicy.BackgroundPolicy)({
+                  removeRpcClient: () => Effect.void,
+                }),
+                Layer.mock(EventLoopMonitor.EventLoopMonitor)({}),
+                Layer.mock(ExternalLauncher.ExternalLauncher)({}),
+                Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({}),
+                Layer.mock(DirectEndpoints.DirectEndpoints)({}),
+                Layer.mock(ProviderRegistry.ProviderRegistry)({}),
+                Layer.mock(UsageLimitSources.UsageLimitSources)({}),
+                Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+                  namedProjectsRoot: process.cwd(),
+                }),
+                Layer.mock(ServerEnvironment.ServerEnvironment)({}),
+                Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
+              ),
+            ),
+            Layer.provide(Layer.succeedContext(services)),
+          ),
+        ),
+        Scope.provide(socketScope),
+      );
+      yield* server.write(0, {
+        _tag: "Request",
+        id: RpcMessage.RequestId("attach"),
+        tag: ORCHESTRATION_V2_WS_METHODS.updateTemporaryThreadViews,
+        payload: {
+          viewId: "old-document",
+          generation: 1,
+          threadIds: [threadId],
+          background: false,
+        },
+        headers: Headers.empty,
+      });
+      assert.isTrue(Exit.isSuccess(yield* Queue.take(responses)));
+      assert.isTrue(yield* storage.isTemporary(threadId));
+      const reloadIdentity = { sessionId: "reload-session", clientId: "new-socket" };
+      const reloadView = {
+        viewId: "new-document",
+        generation: 1,
+        threadIds: [threadId],
+        background: false,
+      };
+      yield* temporaryThreads.updateViews(reloadIdentity, reloadView);
+      if (anotherTab)
+        yield* temporaryThreads.updateViews(
+          { sessionId: "other-session", clientId: "other-socket" },
+          { ...reloadView, viewId: "other-tab" },
+        );
+      yield* Scope.close(socketScope, Exit.void);
+      yield* temporaryThreads.updateViews(reloadIdentity, {
+        ...reloadView,
+        generation: 2,
+        threadIds: [],
+      });
+      yield* TestClock.adjust("29 seconds");
+      assert.isTrue(yield* storage.isTemporary(threadId));
+      yield* TestClock.adjust("1 second");
+      assert.equal(yield* storage.isTemporary(threadId), anotherTab);
+      if (anotherTab) {
+        yield* temporaryThreads.updateViews(
+          { sessionId: "other-session", clientId: "other-socket" },
+          { ...reloadView, viewId: "other-tab", generation: 2, threadIds: [] },
+        );
+        assert.isFalse(yield* storage.isTemporary(threadId));
+      }
+    }).pipe(Effect.scoped),
+);
+
 it.effect(
   "preserves settings during discovery and keybindings during snapshot ACK at the config RPC boundary",
   () =>
@@ -564,6 +702,7 @@ it.effect(
             {},
             yield* PreviewAutomationBroker.PreviewAutomationBroker,
             yield* ServerBrowser.ServerBrowser,
+            yield* Effect.scope,
           ).pipe(Layer.provide(configRpcServices)),
         ),
       );
