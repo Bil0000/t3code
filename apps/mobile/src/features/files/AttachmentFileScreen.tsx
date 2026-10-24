@@ -1,6 +1,9 @@
 import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { formatAttachmentSize } from "@t3tools/client-runtime/state/attachments";
+import {
+  clampFileAttachmentUploadBytes,
+  formatAttachmentSize,
+} from "@t3tools/client-runtime/state/attachments";
 import { View } from "react-native";
 
 import type { FilePreviewSource } from "../../components/FilePreviewModal";
@@ -64,7 +67,11 @@ export function AttachmentFileScreen(props: AttachmentFileScreenProps) {
   const { busy, run } = useFileActions(params.name);
   const isZip = isZipAttachment(params);
   const serverConfig = useEnvironmentServerConfig(environmentId);
-  const maxAttachmentBytes = serverConfig?.environment.capabilities.fileAttachments?.maxUploadBytes;
+  const capabilities = serverConfig?.environment.capabilities;
+  const maxAttachmentBytes =
+    capabilities?.attachmentUploads === true && capabilities.fileAttachments
+      ? clampFileAttachmentUploadBytes(capabilities.fileAttachments.maxUploadBytes)
+      : undefined;
   const threadDraftKey =
     environmentId && threadId ? scopedThreadKey(environmentId, threadId) : null;
   const handleBack = () => {

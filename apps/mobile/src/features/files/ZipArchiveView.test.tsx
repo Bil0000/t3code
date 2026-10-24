@@ -1,11 +1,22 @@
 import { act, type ComponentProps, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, onTestFinished, vi } from "vite-plus/test";
+import { PROVIDER_SEND_TURN_MAX_FILE_BYTES, type ServerConfig } from "@t3tools/contracts";
+import { fileAttachmentTooLargeMessage } from "@t3tools/client-runtime/state/attachments";
 
 import type { ZipTreeRow } from "./zipTree";
 
 const files = vi.hoisted(() => new Map<string, Uint8Array>());
 const navigation = vi.hoisted(() => ({ remove: null as (() => void) | null }));
+const server = vi.hoisted(() => ({
+  capabilities: { repositoryIdentity: false } as ServerConfig["environment"]["capabilities"],
+  refresh: vi.fn(async () => "file:///first.zip"),
+}));
+
+vi.mock("../../state/entities", () => ({
+  useEnvironmentServerConfig: () => ({ environment: { capabilities: server.capabilities } }),
+}));
+vi.mock("../../state/assets", () => ({ useRefreshAssetUrl: () => server.refresh }));
 
 vi.mock("react-native", () => {
   const Slot = (props: { readonly children?: ReactNode }) => <div>{props.children}</div>;
@@ -61,8 +72,15 @@ vi.mock("@legendapp/list/react-native", () => ({
   ),
 }));
 vi.mock("expo-file-system", () => ({
+  Directory: class {
+    create() {}
+  },
+  Paths: { document: { uri: "file:///documents" } },
   File: class {
     constructor(private readonly uri: string) {}
+    get exists() {
+      return false;
+    }
     readableStream() {
       const bytes = files.get(this.uri);
       if (!bytes) throw new Error(`Missing ZIP fixture: ${this.uri}`);
@@ -78,7 +96,7 @@ vi.mock("expo-file-system", () => ({
 vi.mock("expo/fetch", () => ({ fetch: vi.fn() }));
 vi.mock("expo-crypto", () => ({ randomUUID: vi.fn() }));
 vi.mock("@react-navigation/native", () => ({
-  useNavigation: () => ({}),
+  useNavigation: () => ({ canGoBack: () => false }),
   usePreventRemove: (enabled: boolean, remove: () => void) => {
     navigation.remove = enabled ? remove : null;
   },
@@ -132,13 +150,15 @@ vi.mock("../../components/FilePreviewModal", () => ({
 vi.mock("../../lib/attachmentDownload", async (importOriginal) => {
   const { nativeViewerErrorMessage } =
     await importOriginal<typeof import("../../lib/attachmentDownload")>();
-  return { nativeViewerErrorMessage, writeGeneratedAttachmentFile: vi.fn() };
+  return {
+    nativeViewerErrorMessage,
+    writeGeneratedAttachmentFile: vi.fn(),
+    downloadAttachmentForPreview: vi.fn(async () => {
+      throw new Error("Download started");
+    }),
+  };
 });
 vi.mock("../../lib/copyTextWithHaptic", () => ({ copyTextWithHaptic: vi.fn() }));
-vi.mock("./zipEntryActions", () => ({
-  addZipEntryToDraft: vi.fn(),
-  withExtractedZipEntry: vi.fn(),
-}));
 vi.mock("./SourceFileSurface", () => ({
   SourceFileSurface: (props: { readonly contents: string }) => <pre>{props.contents}</pre>,
 }));
@@ -156,12 +176,22 @@ vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
 
 import { ZipArchiveView } from "./ZipArchiveView";
 import { AttachmentFileView } from "./AttachmentFileView";
+import { AttachmentFileScreen } from "./AttachmentFileScreen";
+import { downloadAttachmentForPreview } from "../../lib/attachmentDownload";
+import { alert } from "../../components/ui/Dialog";
+import { appAtomRegistry } from "../../state/atom-registry";
+import { composerDraftsAtom } from "../../state/use-composer-drafts";
 
 function setup() {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.useFakeTimers({ toFake: ["setImmediate", "clearImmediate"] });
   files.clear();
   navigation.remove = null;
+  server.capabilities = { repositoryIdentity: false };
+  server.refresh.mockClear();
+  vi.mocked(downloadAttachmentForPreview).mockClear();
+  vi.mocked(alert).mockClear();
+  appAtomRegistry.set(composerDraftsAtom, {});
   files.set(
     "file:///first.zip",
     Uint8Array.from(
@@ -284,6 +314,105 @@ it("keeps the ZIP filter and archive open when native Back closes a selected ent
   expect(
     screen.container.querySelector<HTMLInputElement>('[aria-label="Filter files in ZIP"]')?.value,
   ).toBe("first");
+});
+
+it.each([
+  ["normal file", "guide.bin", "application/octet-stream"],
+  ["ZIP entry", "archive.zip", "application/zip"],
+])(
+  "does not offer Add to chat for a %s when attachment uploads are disabled",
+  async (_, name, mimeType) => {
+    const screen = setup();
+    server.capabilities = {
+      repositoryIdentity: false,
+      attachmentUploads: false,
+      fileAttachments: { maxUploadBytes: 1024 },
+    };
+    const { fetch } = await import("expo/fetch");
+    vi.mocked(fetch, { partial: true }).mockImplementation(async () => ({
+      ok: true,
+      body: new Response(Uint8Array.from(files.get("file:///first.zip")!)).body,
+    }));
+    await act(async () =>
+      screen.root.render(
+        <AttachmentFileScreen
+          route={{
+            params: {
+              environmentId: "environment-1",
+              threadId: "thread-1",
+              attachmentId: "attachment-1",
+              name,
+              mimeType,
+              sizeBytes: "22",
+            },
+          }}
+        />,
+      ),
+    );
+    if (mimeType === "application/zip") {
+      await screen.settle(() =>
+        expect(screen.container.querySelector('[aria-label="first.txt"]')).not.toBeNull(),
+      );
+      await act(async () =>
+        screen.container.querySelector<HTMLButtonElement>('[aria-label="first.txt"]')!.click(),
+      );
+      await screen.settle(() =>
+        expect(screen.container.querySelector("pre")?.textContent).toBe("First archive contents"),
+      );
+    } else {
+      await act(async () =>
+        Array.from(screen.container.querySelectorAll("button"))
+          .find((button) => button.textContent === "Close")!
+          .click(),
+      );
+    }
+    const add = Array.from(screen.container.querySelectorAll("button")).find(
+      (button) => button.textContent === "Add to chat",
+    );
+    expect(add === undefined || add.disabled).toBe(true);
+    expect(appAtomRegistry.get(composerDraftsAtom)).toEqual({});
+  },
+);
+
+it("rejects a known file above the provider limit before starting a download", async () => {
+  const screen = setup();
+  server.capabilities = {
+    repositoryIdentity: false,
+    attachmentUploads: true,
+    fileAttachments: { maxUploadBytes: PROVIDER_SEND_TURN_MAX_FILE_BYTES * 2 },
+  };
+  await act(async () =>
+    screen.root.render(
+      <AttachmentFileScreen
+        route={{
+          params: {
+            environmentId: "environment-1",
+            threadId: "thread-1",
+            attachmentId: "attachment-1",
+            name: "large.bin",
+            mimeType: "application/octet-stream",
+            sizeBytes: String(PROVIDER_SEND_TURN_MAX_FILE_BYTES + 1),
+          },
+        }}
+      />,
+    ),
+  );
+  await act(async () =>
+    Array.from(screen.container.querySelectorAll("button"))
+      .find((button) => button.textContent === "Close")!
+      .click(),
+  );
+  await act(async () =>
+    Array.from(screen.container.querySelectorAll("button"))
+      .find((button) => button.textContent === "Add to chat")!
+      .click(),
+  );
+  expect(alert).toHaveBeenCalledWith(
+    "Could not add file to chat",
+    fileAttachmentTooLargeMessage("large.bin", PROVIDER_SEND_TURN_MAX_FILE_BYTES),
+  );
+  expect(downloadAttachmentForPreview).not.toHaveBeenCalled();
+  expect(appAtomRegistry.get(composerDraftsAtom)).toEqual({});
 });
 
 it("clears the native error after a successful retry and keeps Add to chat available", async () => {
