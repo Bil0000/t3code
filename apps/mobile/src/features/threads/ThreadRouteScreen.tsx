@@ -328,7 +328,7 @@ function ThreadRouteContent(
     const commandId = keepCommandIds.current.get(key) ?? CommandId.make(uuidv4());
     keepCommandIds.current.set(key, commandId);
     setKeepingThread(true);
-    try {
+    await (async () => {
       const result = await keepThread({
         environmentId: selectedThread.environmentId,
         input: { threadId: selectedThread.id, commandId },
@@ -353,9 +353,9 @@ function ThreadRouteContent(
           "Thread kept",
           "The server saved your thread. Some local queued messages could not be saved on this device.",
         );
-    } finally {
+    })().finally(() => {
       setKeepingThread(false);
-    }
+    });
   };
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, "thread interrupt");
   const resumeThreadQueue = useAtomCommand(threadEnvironment.resumeThreadQueue, "resume queue");
