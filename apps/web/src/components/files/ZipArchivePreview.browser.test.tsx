@@ -139,14 +139,12 @@ function rows(screen: Screen) {
 }
 
 async function select(screen: Screen, path: string) {
-  await vi.waitFor(() =>
-    expect(
-      rows(screen).some((row) => row.dataset.itemPath === path),
-      path,
-    ).toBe(true),
-  );
-  const row = rows(screen).find((row) => row.dataset.itemPath === path)!;
-  await act(() => row.click());
+  const row = await vi.waitFor(() => {
+    const row = rows(screen).find((row) => row.dataset.itemPath === path && row.checkVisibility());
+    expect(row, path).toBeDefined();
+    return row!;
+  });
+  await userEvent.click(row);
 }
 
 async function back(screen: Screen) {
