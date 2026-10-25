@@ -114,7 +114,14 @@ function SubagentMetadata(props: {
     parentProject,
     childProject,
   });
-  const traits = resolveSubagentTraits({ subagent, provider, childThread: child });
+  const traits = resolveSubagentTraits({
+    subagent,
+    provider,
+    childThread: child,
+    childProvider: config?.providers.find(
+      (candidate) => candidate.instanceId === child?.providerInstanceId,
+    ),
+  });
   return (
     <View className="min-w-0 flex-row items-center gap-1.5">
       <ProviderIcon

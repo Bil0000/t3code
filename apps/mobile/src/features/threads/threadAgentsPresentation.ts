@@ -20,12 +20,25 @@ export function resolveSubagentTraits(input: {
     "model" | "providerInstanceId" | "origin" | "modelSelection"
   >;
   readonly provider?: Pick<ServerProvider, "driver" | "models"> | undefined;
-  readonly childThread?: Pick<OrchestrationV2ThreadShell, "modelSelection"> | undefined;
+  readonly childProvider?: Pick<ServerProvider, "instanceId" | "driver" | "models"> | undefined;
+  readonly childThread?:
+    | Pick<OrchestrationV2ThreadShell, "providerInstanceId" | "modelSelection">
+    | undefined;
 }): string {
-  const { subagent, provider } = input;
-  const selection =
-    subagent.modelSelection ??
-    (subagent.origin === "app_owned" ? input.childThread?.modelSelection : undefined);
+  const { subagent, childThread } = input;
+  const childSelection =
+    subagent.origin === "app_owned" &&
+    subagent.modelSelection === undefined &&
+    childThread !== undefined &&
+    childThread.providerInstanceId === childThread.modelSelection.instanceId
+      ? childThread.modelSelection
+      : undefined;
+  const childProvider =
+    childSelection && childSelection.instanceId === input.childProvider?.instanceId
+      ? input.childProvider
+      : undefined;
+  const provider = childProvider ?? input.provider;
+  const selection = subagent.modelSelection ?? childSelection;
   const modelSlug = provider
     ? resolveSelectableModel(provider.driver, subagent.model, provider.models)
     : subagent.model?.trim();
@@ -36,7 +49,7 @@ export function resolveSubagentTraits(input: {
     !selection ||
     modelSlug == null ||
     selectedModel !== modelSlug ||
-    selection.instanceId !== subagent.providerInstanceId
+    selection.instanceId !== (childProvider?.instanceId ?? subagent.providerInstanceId)
   )
     return "";
 
