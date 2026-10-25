@@ -83,13 +83,16 @@ export function readAttachmentUpload(imageId: string): AttachmentUploadState | u
   return useAttachmentUploadStore.getState().uploadsByImageId[imageId];
 }
 
-function resolveCurrentFileDraftTarget(job: UploadJob): ComposerThreadTarget | undefined {
-  if (job.draftTarget === undefined || job.image.type !== "file") {
+function resolveCurrentDraftTarget(
+  job: Pick<UploadJob, "draftTarget" | "image" | "environmentId">,
+): ComposerThreadTarget | undefined {
+  if (job.draftTarget === undefined) {
     return undefined;
   }
   const store = useComposerDraftStore.getState();
   for (const [key, draft] of Object.entries(store.draftsByThreadKey)) {
-    if (!draft.files.some((file) => file.id === job.image.id)) {
+    const attachments = job.image.type === "file" ? draft.files : draft.images;
+    if (!attachments.some((attachment) => attachment.id === job.image.id)) {
       continue;
     }
     const draftSession = store.draftThreadsByThreadKey[key];
@@ -110,9 +113,29 @@ function resolveCurrentFileDraftTarget(job: UploadJob): ComposerThreadTarget | u
   return undefined;
 }
 
+function rejectTemporaryUpload(
+  job: Pick<UploadJob, "draftTarget" | "image" | "environmentId">,
+): boolean {
+  const draftTarget = resolveCurrentDraftTarget(job) ?? job.draftTarget;
+  if (
+    (job.draftTarget === undefined || !isTemporaryComposerTarget(job.draftTarget)) &&
+    (draftTarget === undefined || !isTemporaryComposerTarget(draftTarget))
+  ) {
+    return false;
+  }
+  releaseAttachmentUpload(job.image.id);
+  setUploadState(job.image.id, {
+    status: "failed",
+    environmentId: job.environmentId,
+    reason: "Keep this thread before attaching files.",
+  });
+  return true;
+}
+
 /** Persist background completions even when no composer is mounted. */
 function stampDraftFileUpload(job: UploadJob, attachmentId: string): void {
-  const draftTarget = resolveCurrentFileDraftTarget(job);
+  if (job.image.type !== "file") return;
+  const draftTarget = resolveCurrentDraftTarget(job);
   if (draftTarget === undefined) {
     return;
   }
@@ -164,6 +187,7 @@ function uploadBytes(input: {
 }
 
 async function runUpload(job: UploadJob): Promise<void> {
+  if (job.cancelled || rejectTemporaryUpload(job)) return;
   if (!readEnvironmentScope(job.environmentId, AuthOrchestrationOperateScope)) {
     setUploadState(job.image.id, {
       status: "failed",
@@ -180,7 +204,7 @@ async function runUpload(job: UploadJob): Promise<void> {
       environmentId: job.environmentId,
       attachmentId: job.persistedAttachmentId,
     });
-    if (job.cancelled) {
+    if (job.cancelled || rejectTemporaryUpload(job)) {
       return;
     }
     if (verification.status === "verified") {
@@ -193,7 +217,7 @@ async function runUpload(job: UploadJob): Promise<void> {
       return;
     }
     if (verification.status === "missing" && !job.image.file && job.image.type === "file") {
-      const draftTarget = resolveCurrentFileDraftTarget(job);
+      const draftTarget = resolveCurrentDraftTarget(job);
       if (
         draftTarget !== undefined &&
         useComposerDraftStore
@@ -321,7 +345,10 @@ async function runUpload(job: UploadJob): Promise<void> {
         },
       }),
     onMinted: (attachmentId) => {
-      if (job.cancelled && readEnvironmentScope(job.environmentId, AuthOrchestrationOperateScope)) {
+      if (
+        (job.cancelled || rejectTemporaryUpload(job)) &&
+        readEnvironmentScope(job.environmentId, AuthOrchestrationOperateScope)
+      ) {
         return "cancel";
       }
       job.attachmentId = attachmentId;
@@ -332,7 +359,7 @@ async function runUpload(job: UploadJob): Promise<void> {
     },
   });
   job.abort = null;
-  if (result.status === "cancelled" || job.cancelled) {
+  if (result.status === "cancelled" || job.cancelled || rejectTemporaryUpload(job)) {
     return;
   }
   if (result.status === "uploaded") {
@@ -415,12 +442,7 @@ export function startAttachmentUpload(input: {
   readonly image: ComposerImageAttachment | ComposerFileAttachment;
   readonly draftTarget?: ComposerThreadTarget;
 }): void {
-  if (input.draftTarget && isTemporaryComposerTarget(input.draftTarget)) {
-    setUploadState(input.image.id, {
-      status: "failed",
-      environmentId: input.environmentId,
-      reason: "Keep this thread before attaching files.",
-    });
+  if (rejectTemporaryUpload(input)) {
     return;
   }
   if (!readEnvironmentScope(input.environmentId, AuthOrchestrationOperateScope)) return;
