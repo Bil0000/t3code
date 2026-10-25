@@ -2208,7 +2208,8 @@ export const layerWsRpc = (
             ),
           ),
         [ORCHESTRATION_V2_WS_METHODS.getTurnDiff]: (input) =>
-          checkpointDiffQuery.getTurnDiff(input).pipe(
+          requireThreadRead(input).pipe(
+            Effect.andThen(checkpointDiffQuery.getTurnDiff(input)),
             Effect.mapError(
               (cause) =>
                 new OrchestrationGetTurnDiffError({
@@ -2218,7 +2219,8 @@ export const layerWsRpc = (
             ),
           ),
         [ORCHESTRATION_V2_WS_METHODS.getFullThreadDiff]: (input) =>
-          checkpointDiffQuery.getFullThreadDiff(input).pipe(
+          requireThreadRead(input).pipe(
+            Effect.andThen(checkpointDiffQuery.getFullThreadDiff(input)),
             Effect.mapError(
               (cause) =>
                 new OrchestrationGetFullThreadDiffError({

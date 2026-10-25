@@ -1,4 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, it } from "@effect/vitest";
 import {
   AuthSessionId,
@@ -10,6 +11,9 @@ import {
   MessageId,
   OrchestrationV2GetThreadProjectionError,
   OrchestrationV2GetShellSnapshotError,
+  OrchestrationGetTurnDiffError,
+  OrchestrationGetFullThreadDiffError,
+  type OrchestrationGetTurnDiffResult,
   type OrchestrationV2ThreadFamily,
   type OrchestrationV2WorktreeThreadIds,
   ThreadId,
@@ -33,6 +37,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as PubSub from "effect/PubSub";
 import * as Result from "effect/Result";
 import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as Scope from "effect/Scope";
@@ -51,6 +56,8 @@ import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as AntigravityInstallation from "./provider/AntigravityInstallation.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
+import * as CheckpointStore from "./checkpointing/CheckpointStore.ts";
+import { CheckpointTurnRangeUnavailableError } from "./checkpointing/Errors.ts";
 import * as CommandOutputHub from "./orchestration-v2/CommandOutputHub.ts";
 import * as CodexInstallation from "./provider/CodexInstallation.ts";
 import * as DeviceService from "./device/DeviceService.ts";
@@ -139,6 +146,11 @@ import {
 
 const snapshotConfig = (fields: Partial<ServerConfig>) =>
   ({ availableEditors: [], settings: {}, ...fields }) as unknown as ServerConfig;
+
+const isTurnDiffError = Schema.is(OrchestrationGetTurnDiffError);
+const isFullThreadDiffError = Schema.is(OrchestrationGetFullThreadDiffError);
+const isCheckpointTurnRangeUnavailableError = Schema.is(CheckpointTurnRangeUnavailableError);
+const isThreadProjectionError = Schema.is(OrchestrationV2GetThreadProjectionError);
 
 it.effect("rejects temporary image persistence before writing attachment bytes", () =>
   Effect.gen(function* () {
@@ -772,6 +784,192 @@ it.effect.each(["family", "worktree"] as const)(
           ? ["racing-child"]
           : ["private", "private-child", "racing", "racing-child", "saved", "saved-child"],
       );
+    }).pipe(Effect.scoped),
+);
+
+it.effect.each(
+  (["getTurnDiff", "getFullThreadDiff"] as const).flatMap((method) =>
+    [0, 1].map((toTurnCount) => ({ method, toTurnCount })),
+  ),
+)(
+  "$method gates temporary reads before checkpoint queries for turn count $toTurnCount",
+  ({ method, toTurnCount }) =>
+    Effect.gen(function* () {
+      const services = yield* Layer.build(
+        Layer.mergeAll(
+          layerUnusedConfigRpcServices,
+          Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({}),
+          Layer.mock(ServerBrowser.ServerBrowser)({}),
+        ).pipe(Layer.provideMerge(layerConfigSources)),
+      );
+      const storage = Context.get(services, TemporaryThreadStorage.TemporaryThreadStorage);
+      const projection = Context.get(services, ProjectionStore.ProjectionStoreV2);
+      const now = yield* DateTime.now;
+      const savedId = ThreadId.make("saved-diff");
+      const temporaryId = ThreadId.make("temporary-diff");
+      yield* storage.register({ threadId: temporaryId });
+      for (const threadId of [savedId, temporaryId]) {
+        yield* projection.apply({
+          id: EventId.make(`create:${threadId}`),
+          type: "thread.created",
+          threadId,
+          occurredAt: now,
+          payload: {
+            id: threadId,
+            createdBy: "user",
+            creationSource: "web",
+            projectId: ProjectId.make("absent-project"),
+            title: threadId,
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+            activeProviderThreadId: null,
+            lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+            forkedFrom: null,
+            createdAt: now,
+            updatedAt: now,
+            archivedAt: null,
+            settledOverride: null,
+            settledAt: null,
+            lastVisitedAt: null,
+            deletedAt: null,
+          },
+        });
+      }
+      let reads = 0;
+      const threads = Layer.mock(ThreadManagement.ThreadManagementService)({
+        getCheckpointContext: (threadId) =>
+          Effect.sync(() => reads++).pipe(
+            Effect.andThen(projection.getCheckpointContext(threadId)),
+            Effect.mapError(
+              (cause) => new Orchestrator.OrchestratorProjectionError({ threadId, cause }),
+            ),
+          ),
+      });
+      const query = yield* Layer.build(
+        CheckpointDiffQuery.layer.pipe(
+          Layer.provide(threads),
+          Layer.provide(Layer.mock(CheckpointStore.CheckpointStore)({})),
+          Layer.provide(NodeCrypto.layer),
+        ),
+      );
+      const responses =
+        yield* Queue.unbounded<
+          Exit.Exit<
+            OrchestrationGetTurnDiffResult,
+            OrchestrationGetTurnDiffError | OrchestrationGetFullThreadDiffError
+          >
+        >();
+      const server = yield* RpcServer.makeNoSerialization(
+        RpcGroup.make(
+          Rpc.make(ORCHESTRATION_V2_WS_METHODS.getTurnDiff, {
+            payload: OrchestrationV2RpcSchemas.getTurnDiff.input,
+            success: OrchestrationV2RpcSchemas.getTurnDiff.output,
+            error: OrchestrationGetTurnDiffError,
+          }),
+          Rpc.make(ORCHESTRATION_V2_WS_METHODS.getFullThreadDiff, {
+            payload: OrchestrationV2RpcSchemas.getFullThreadDiff.input,
+            success: OrchestrationV2RpcSchemas.getFullThreadDiff.output,
+            error: OrchestrationGetFullThreadDiffError,
+          }),
+        ),
+        {
+          ...WS_RPC_SERVER_OPTIONS,
+          onFromServer: (response) =>
+            response._tag === "Exit"
+              ? Queue.offer(responses, response.exit).pipe(Effect.asVoid)
+              : Effect.void,
+        },
+      ).pipe(
+        Effect.provide(
+          layerWsRpc(
+            {
+              sessionId: AuthSessionId.make("diff-privacy"),
+              subject: "diff-privacy",
+              method: "browser-session-cookie",
+              scopes: [],
+            },
+            {},
+            {},
+            Context.get(services, PreviewAutomationBroker.PreviewAutomationBroker),
+            Context.get(services, ServerBrowser.ServerBrowser),
+            yield* Effect.scope,
+          ).pipe(
+            Layer.provide(
+              Layer.mergeAll(
+                threads,
+                Layer.mock(BackgroundPolicy.BackgroundPolicy)({
+                  removeRpcClient: () => Effect.void,
+                }),
+                Layer.mock(EventLoopMonitor.EventLoopMonitor)({}),
+                Layer.mock(ExternalLauncher.ExternalLauncher)({}),
+                Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({}),
+                Layer.mock(DirectEndpoints.DirectEndpoints)({}),
+                Layer.mock(ProviderRegistry.ProviderRegistry)({}),
+                Layer.mock(UsageLimitSources.UsageLimitSources)({}),
+                Layer.mock(ServerEnvironment.ServerEnvironment)({}),
+                Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
+                Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+                  namedProjectsRoot: process.cwd(),
+                }),
+              ),
+            ),
+            Layer.provide(Layer.succeedContext(Context.merge(services, query))),
+          ),
+        ),
+      );
+      let request = 0;
+      const check = (
+        threadId: ThreadId,
+        acceptTemporaryThreads: boolean | undefined,
+        allowed: boolean,
+      ) =>
+        Effect.gen(function* () {
+          const before = reads;
+          yield* server.write(0, {
+            _tag: "Request",
+            id: RpcMessage.RequestId(`diff:${request++}`),
+            tag: ORCHESTRATION_V2_WS_METHODS[method],
+            payload: {
+              threadId,
+              ...(method === "getTurnDiff" ? { fromTurnCount: 0 } : {}),
+              toTurnCount,
+              ...(acceptTemporaryThreads === undefined ? {} : { acceptTemporaryThreads }),
+            },
+            headers: Headers.empty,
+          });
+          const result = yield* Queue.take(responses);
+          if (allowed && toTurnCount === 0) {
+            assert.deepEqual(yield* result, {
+              threadId,
+              fromTurnCount: 0,
+              toTurnCount: 0,
+              diff: "",
+            });
+          } else {
+            assert.isTrue(Exit.isFailure(result));
+            if (Exit.isFailure(result)) {
+              const reason = result.cause.reasons[0];
+              assert.equal(reason?._tag, "Fail");
+              if (reason?._tag === "Fail") {
+                if (method === "getTurnDiff") assert.isTrue(isTurnDiffError(reason.error));
+                else assert.isTrue(isFullThreadDiffError(reason.error));
+                if (allowed)
+                  assert.isTrue(isCheckpointTurnRangeUnavailableError(reason.error.cause));
+                else assert.isTrue(isThreadProjectionError(reason.error.cause));
+              }
+            }
+          }
+          assert.equal(reads - before, allowed && toTurnCount === 1 ? 1 : 0);
+        });
+      for (const optIn of [undefined, false, true]) yield* check(savedId, optIn, true);
+      yield* check(temporaryId, true, true);
+      for (const optIn of [undefined, false]) yield* check(temporaryId, optIn, false);
+      yield* storage.discard(temporaryId);
+      for (const optIn of [undefined, false, true]) yield* check(temporaryId, optIn, false);
     }).pipe(Effect.scoped),
 );
 

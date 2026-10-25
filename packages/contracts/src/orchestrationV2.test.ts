@@ -48,6 +48,16 @@ const decodeTemporaryViews = Schema.decodeUnknownSync(
 describe("orchestration V2 contracts", () => {
   it.each([
     [
+      "turn diff",
+      Schema.decodeUnknownSync(OrchestrationV2RpcSchemas.getTurnDiff.input),
+      { threadId: "thread-1", fromTurnCount: 0, toTurnCount: 1 },
+    ],
+    [
+      "full thread diff",
+      Schema.decodeUnknownSync(OrchestrationV2RpcSchemas.getFullThreadDiff.input),
+      { threadId: "thread-1", toTurnCount: 1 },
+    ],
+    [
       "family",
       Schema.decodeUnknownSync(OrchestrationV2RpcSchemas.getThreadFamily.input),
       { threadId: "thread-1" },

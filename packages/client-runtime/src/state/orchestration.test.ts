@@ -21,6 +21,8 @@ import type { RpcSession } from "../rpc/session.ts";
 import { createOrchestrationEnvironmentAtoms } from "./orchestration.ts";
 
 it.effect.each([
+  "turnDiff",
+  "fullThreadDiff",
   "workflowScript",
   "turnItem",
   "threadFind",
@@ -40,6 +42,8 @@ it.effect.each([
       session: yield* SubscriptionRef.make(
         Option.some({
           client: {
+            [ORCHESTRATION_V2_WS_METHODS.getTurnDiff]: unary,
+            [ORCHESTRATION_V2_WS_METHODS.getFullThreadDiff]: unary,
             [ORCHESTRATION_V2_WS_METHODS.getWorkflowScript]: unary,
             [ORCHESTRATION_V2_WS_METHODS.getTurnItem]: unary,
             [ORCHESTRATION_V2_WS_METHODS.getWorktreeThreadIds]: unary,
@@ -75,7 +79,14 @@ it.effect.each([
     const turnItem = { threadId, itemId: TurnItemId.make("item") };
     const search = { threadId, query: "needle" };
     const worktree = { worktreePath: "/repo/worktree" };
+    const turnDiff = { threadId, fromTurnCount: 0, toTurnCount: 1 };
+    const fullThreadDiff = { threadId, toTurnCount: 1 };
     const cases = {
+      turnDiff: [atoms.turnDiff({ environmentId, input: turnDiff }), turnDiff],
+      fullThreadDiff: [
+        atoms.fullThreadDiff({ environmentId, input: fullThreadDiff }),
+        fullThreadDiff,
+      ],
       workflowScript: [atoms.workflowScript({ environmentId, input: workflow }), workflow],
       turnItem: [atoms.turnItem({ environmentId, input: turnItem }), turnItem],
       threadFind: [atoms.threadFind({ environmentId, input: search }), search],
