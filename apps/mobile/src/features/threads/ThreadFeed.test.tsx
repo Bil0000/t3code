@@ -2,7 +2,10 @@ import { act, createContext, type ComponentProps, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import * as NodeModule from "node:module";
 import { expect, it, vi } from "vite-plus/test";
-import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, MessageId, ThreadId, type ScopedThreadRef } from "@t3tools/contracts";
+import { RegistryContext } from "@effect/atom-react";
+import { AtomRegistry } from "effect/reactivity";
+import type { OrchestrationV2ThreadProjection } from "@t3tools/contracts";
 import { setTemporaryThread } from "@t3tools/client-runtime/temporary-threads";
 
 const { JSDOM } = NodeModule.createRequire(import.meta.url)("jsdom") as {
@@ -12,6 +15,8 @@ const { JSDOM } = NodeModule.createRequire(import.meta.url)("jsdom") as {
 const state = vi.hoisted(() => ({
   shell: { temporary: true },
   listeners: new Set<() => void>(),
+  detailReads: vi.fn(),
+  projections: new Map<string, OrchestrationV2ThreadProjection>(),
 }));
 vi.mock("react-native", () => ({
   Platform: { OS: "android" },
@@ -126,9 +131,9 @@ vi.mock("../../components/FilePreviewGallery", () => ({
 vi.mock("../../components/ui/NativePresentation", () => ({
   PresentationSource: ({ children }: { children: ReactNode }) => children,
 }));
-vi.mock("./thread-workflow-opening", () => ({
-  useWorkflowOpening: () => null,
-  ThreadWorkflowOpening: () => null,
+vi.mock("./SubagentRow", () => ({ SubagentRow: () => null }));
+vi.mock("./work-log-layout", () => ({
+  WorkLogBlock: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
 }));
 vi.mock("./useFileChipShare", () => ({ useFileChipShare: () => () => {} }));
 vi.mock("../../native/useMarkdownImageSource", () => ({
@@ -149,7 +154,28 @@ vi.mock("../../state/session", () => ({
   usePreparedConnection: () => null,
 }));
 vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
-vi.mock("../../state/threads", () => ({ environmentThreadShells: {}, threadEnvironment: {} }));
+vi.mock("../../state/threads", async () => {
+  const { createEnvironmentThreadDetailAtoms, EMPTY_ENVIRONMENT_THREAD_STATE } =
+    await import("@t3tools/client-runtime/state/threads");
+  const { AsyncResult, Atom } = await import("effect/reactivity");
+  const Option = await import("effect/Option");
+  const stateAtom = Atom.family((threadId: string) =>
+    Atom.make(() => {
+      state.detailReads(threadId);
+      return AsyncResult.success({
+        ...EMPTY_ENVIRONMENT_THREAD_STATE,
+        data: Option.fromNullishOr(state.projections.get(threadId)),
+      });
+    }),
+  );
+  return {
+    environmentThreadShells: {},
+    threadEnvironment: {},
+    environmentThreadDetails: createEnvironmentThreadDetailAtoms((_, threadId) =>
+      stateAtom(threadId),
+    ),
+  };
+});
 vi.mock("../../components/ui/Button", () => ({ Button: () => null }));
 vi.mock("../../components/ComposerContextSheet", () => ({ ComposerContextSheet: () => null }));
 vi.mock("../../components/ui/AppActivityIndicator", () => ({ AppActivityIndicator: () => null }));
@@ -205,15 +231,20 @@ vi.mock("../../components/ui/AppText", () => ({
   AppText: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
 }));
 
+import { v2Projection } from "../../../../../packages/client-runtime/src/state/orchestrationV2TestFixtures";
 import { ThreadFeed } from "./ThreadFeed";
+import { useWorkflowOpening } from "./thread-workflow-opening";
 
 it.each([true, false])(
-  "opens existing media rows after Keep without a parent render with shell temporary=%s",
+  "admits detail after launch and opens media after Keep with shell temporary=%s",
   async (temporary) => {
     const environmentId = EnvironmentId.make("env");
     const threadId = ThreadId.make("thread");
     state.shell = { temporary };
     state.listeners.clear();
+    state.detailReads.mockClear();
+    state.projections.clear();
+    const registry = AtomRegistry.make();
     setTemporaryThread(environmentId, threadId, true);
     const dom = new JSDOM("<html><body></body></html>");
     vi.stubGlobal("window", dom.window);
@@ -237,32 +268,45 @@ it.each([true, false])(
       },
       { id: "viewed", type: "activity-group", activities: [], continuesWorkLog: false },
     ] as unknown as ComponentProps<typeof ThreadFeed>["feed"];
+    const feedView = (
+      <ThreadFeed
+        environmentId={environmentId}
+        threadId={threadId}
+        selectedThreadDetailRef={null}
+        threadTitle="Thread"
+        feed={feed}
+        queuedMessages={[]}
+        dispatchingMessageId={null}
+        onEditPendingMessage={() => {}}
+        contentPresentation={{ kind: "ready" }}
+        agentLabel="Codex"
+        latestRun={null}
+        activeWorkStartedAt={null}
+        listRef={{ current: null }}
+        freeze={{ value: false } as ComponentProps<typeof ThreadFeed>["freeze"]}
+        anchorMessageId={null}
+        submittedMessageId={null}
+        contentInsetEndAdjustment={
+          { value: 0 } as ComponentProps<typeof ThreadFeed>["contentInsetEndAdjustment"]
+        }
+        keyboardOffset={0}
+      />
+    );
     try {
       await act(async () =>
         root.render(
-          <ThreadFeed
-            environmentId={environmentId}
-            threadId={threadId}
-            threadTitle="Thread"
-            feed={feed}
-            queuedMessages={[]}
-            dispatchingMessageId={null}
-            onEditPendingMessage={() => {}}
-            contentPresentation={{ kind: "ready" }}
-            agentLabel="Codex"
-            latestRun={null}
-            activeWorkStartedAt={null}
-            listRef={{ current: null }}
-            freeze={{ value: false } as ComponentProps<typeof ThreadFeed>["freeze"]}
-            anchorMessageId={null}
-            submittedMessageId={null}
-            contentInsetEndAdjustment={
-              { value: 0 } as ComponentProps<typeof ThreadFeed>["contentInsetEndAdjustment"]
-            }
-            keyboardOffset={0}
-          />,
+          <RegistryContext.Provider value={registry}>{feedView}</RegistryContext.Provider>,
         ),
       );
+      expect(state.detailReads).not.toHaveBeenCalled();
+      await act(async () =>
+        root.render(
+          <RegistryContext.Provider value={registry}>
+            <ThreadFeed {...feedView.props} selectedThreadDetailRef={{ environmentId, threadId }} />
+          </RegistryContext.Provider>,
+        ),
+      );
+      expect(state.detailReads.mock.calls).toEqual([[threadId]]);
       expect(container.textContent?.match(/Keep thread to open media/g)).toHaveLength(4);
       expect(container.querySelectorAll("img")).toHaveLength(0);
       await act(async () => {
@@ -279,9 +323,87 @@ it.each([true, false])(
       ]);
     } finally {
       await act(async () => root.unmount());
+      registry.dispose();
       setTemporaryThread(environmentId, threadId, false);
       vi.unstubAllGlobals();
       dom.window.close();
     }
   },
 );
+
+function WorkflowReader(props: { readonly detailRef: ScopedThreadRef | null }) {
+  const opening = useWorkflowOpening(props.detailRef);
+  return <span>{opening?.script}</span>;
+}
+
+it("loads the workflow and its parent after detail admission", async () => {
+  const environmentId = EnvironmentId.make("env");
+  const threadId = ThreadId.make("workflow");
+  const parentId = ThreadId.make("parent");
+  const script = 'export const meta = { name: "probe" };';
+  state.detailReads.mockClear();
+  state.projections.clear();
+  state.projections.set(threadId, {
+    ...v2Projection,
+    thread: {
+      ...v2Projection.thread,
+      id: threadId,
+      creationSource: "provider",
+      lineage: {
+        parentThreadId: parentId,
+        rootThreadId: parentId,
+        relationshipToParent: "subagent",
+      },
+    },
+    messages: [
+      {
+        id: MessageId.make("script"),
+        threadId,
+        runId: null,
+        nodeId: null,
+        role: "user",
+        text: script,
+        workflowScript: true,
+        attachments: [],
+        streaming: false,
+        createdBy: "user",
+        creationSource: "mobile",
+        createdAt: v2Projection.updatedAt,
+        updatedAt: v2Projection.updatedAt,
+      },
+    ],
+  });
+  state.projections.set(parentId, v2Projection);
+  const registry = AtomRegistry.make();
+  const dom = new JSDOM("<html><body></body></html>");
+  vi.stubGlobal("window", dom.window);
+  vi.stubGlobal("document", dom.window.document);
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  try {
+    await act(async () =>
+      root.render(
+        <RegistryContext.Provider value={registry}>
+          <WorkflowReader detailRef={null} />
+        </RegistryContext.Provider>,
+      ),
+    );
+    expect(state.detailReads).not.toHaveBeenCalled();
+    expect(container.textContent).toBe("");
+    await act(async () =>
+      root.render(
+        <RegistryContext.Provider value={registry}>
+          <WorkflowReader detailRef={{ environmentId, threadId }} />
+        </RegistryContext.Provider>,
+      ),
+    );
+    expect(state.detailReads.mock.calls).toEqual([[threadId], [parentId]]);
+    expect(container.textContent).toBe(script);
+  } finally {
+    await act(async () => root.unmount());
+    registry.dispose();
+    vi.unstubAllGlobals();
+    dom.window.close();
+  }
+});

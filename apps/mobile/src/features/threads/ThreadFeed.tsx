@@ -50,6 +50,7 @@ import {
   type OrchestrationV2ProjectedTurnItem,
   type RunId,
   type ScheduledTaskId,
+  type ScopedThreadRef,
 } from "@t3tools/contracts";
 import { renderAssistantCitationsAsText } from "@t3tools/shared/assistantCitations";
 import { encodeComposerContextFragment } from "@t3tools/shared/composerContextClipboard";
@@ -349,6 +350,7 @@ export interface ThreadFeedProps {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   readonly threadTitle: string;
+  readonly selectedThreadDetailRef: ScopedThreadRef | null;
   readonly workspaceRoot?: string | null;
   readonly feed: ReadonlyArray<ThreadFeedEntry>;
   readonly pendingHandoff?: HandoffEndpoints | null;
@@ -2089,7 +2091,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const temporary =
     useQuietThreadShell(scopeThreadRef(props.environmentId, props.threadId))?.temporary === true ||
     isTemporaryThread(props.environmentId, props.threadId);
-  const workflowOpening = useWorkflowOpening(props.environmentId, props.threadId);
+  const workflowOpening = useWorkflowOpening(props.selectedThreadDetailRef);
   const deviceType = useDeviceType();
   const duoColumns = useNativeWorkspaceColumnsSupported() && isDuoDevice(deviceType);
   const openPullRequest = useOpenPullRequest();
