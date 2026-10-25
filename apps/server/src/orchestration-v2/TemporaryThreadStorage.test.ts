@@ -760,7 +760,8 @@ it.effect("rejecting registration of a saved thread preserves diagnostics", () =
     yield* create;
     const rejected = yield* Effect.result(storage.register({ threadId }));
     assert.equal(rejected._tag, "Failure");
-    if (rejected._tag === "Failure") assert.equal(rejected.failure.operation, "already-durable");
+    if (rejected._tag === "Failure")
+      assert.equal(rejected.failure._tag, "TemporaryThreadAlreadyDurableError");
     assert.isFalse(diagnostics.hasTemporaryThreads());
     assert.isTrue(diagnostics.canRecord());
     assert.isTrue(diagnostics.canSnapshot());

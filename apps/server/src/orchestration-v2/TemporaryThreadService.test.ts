@@ -30,6 +30,11 @@ const views = (
 const setup = Effect.gen(function* () {
   const temporary = new Set<ThreadId>();
   const discarded = new Set<ThreadId>();
+  const registrationErrors = new Map<
+    ThreadId,
+    | TemporaryThreadStorage.TemporaryThreadStorageError
+    | TemporaryThreadStorage.TemporaryThreadAlreadyDurableError
+  >();
   const operations: Array<string> = [];
   const changes = yield* PubSub.unbounded<{
     type: "registered" | "kept" | "discarding" | "discarded";
@@ -47,6 +52,8 @@ const setup = Effect.gen(function* () {
   const storage = TemporaryThreadStorage.TemporaryThreadStorage.of({
     register: ({ threadId: id }) =>
       Effect.gen(function* () {
+        const error = registrationErrors.get(id);
+        if (error !== undefined) return yield* error;
         temporary.add(id);
         yield* PubSub.publish(changes, {
           type: "registered",
@@ -107,6 +114,7 @@ const setup = Effect.gen(function* () {
     operations,
     temporary,
     discarded,
+    registrationErrors,
     serviceLayer,
     cleanupStarted,
     cleanupRelease,
@@ -126,6 +134,41 @@ const setup = Effect.gen(function* () {
     },
   };
 });
+
+it.effect.each(["already-durable", "register"])(
+  "view registration propagates storage failure with operation %s",
+  (operation) =>
+    Effect.gen(function* () {
+      const fixture = yield* setup;
+      const error = new TemporaryThreadStorage.TemporaryThreadStorageError({ operation, threadId });
+      fixture.registrationErrors.set(threadId, error);
+      yield* Effect.gen(function* () {
+        const service = yield* TemporaryThreadService.TemporaryThreadService;
+        const result = yield* Effect.result(service.updateViews(first, views([threadId])));
+        assert.equal(result._tag, "Failure");
+        if (result._tag === "Failure") assert.equal(result.failure.cause, error);
+        assert.isFalse(fixture.temporary.has(threadId));
+      }).pipe(Effect.provide(fixture.serviceLayer));
+    }),
+);
+
+it.effect("view registration skips only saved threads and retains temporary ownership", () =>
+  Effect.gen(function* () {
+    const fixture = yield* setup;
+    fixture.registrationErrors.set(
+      threadId,
+      new TemporaryThreadStorage.TemporaryThreadAlreadyDurableError({ threadId }),
+    );
+    yield* Effect.gen(function* () {
+      const service = yield* TemporaryThreadService.TemporaryThreadService;
+      yield* service.updateViews(first, views([threadId, childId]));
+      assert.isFalse(fixture.temporary.has(threadId));
+      assert.isTrue(fixture.temporary.has(childId));
+      yield* service.updateViews(first, views([], 2));
+      assert.deepEqual(fixture.operations, ["mark", "stop:temporary-child", "discard"]);
+    }).pipe(Effect.provide(fixture.serviceLayer));
+  }),
+);
 
 it.effect("only the last explicit view leave stops and discards the entire family", () =>
   Effect.gen(function* () {

@@ -183,11 +183,12 @@ const make = Effect.gen(function* () {
       const threadIds: Array<ThreadId> = [];
       for (const id of new Set(input.threadIds)) {
         if ((yield* storage.isDiscarded(id)) || state.discarding.has(id)) continue;
-        const registered = yield* Effect.result(storage.register({ threadId: id }));
-        if (registered._tag === "Failure") {
-          if (registered.failure.operation === "already-durable") continue;
-          return yield* mapError("views", id)(registered.failure);
-        }
+        yield* storage
+          .register({ threadId: id })
+          .pipe(
+            Effect.catchTags({ TemporaryThreadAlreadyDurableError: () => Effect.void }),
+            Effect.mapError(mapError("views", id)),
+          );
         if (yield* storage.isTemporary(id)) threadIds.push(id);
       }
       views.set(input.viewId, {

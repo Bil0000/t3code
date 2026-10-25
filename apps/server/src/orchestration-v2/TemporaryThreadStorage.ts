@@ -45,6 +45,15 @@ export class TemporaryThreadStorageError extends Schema.TaggedError<TemporaryThr
   }
 }
 
+export class TemporaryThreadAlreadyDurableError extends Schema.TaggedError<TemporaryThreadAlreadyDurableError>()(
+  "TemporaryThreadAlreadyDurableError",
+  { threadId: ThreadId },
+) {
+  override get message(): string {
+    return "Temporary thread storage already-durable failed.";
+  }
+}
+
 type StorageChange = {
   readonly type: "registered" | "kept" | "discarding" | "discarded";
   readonly threadIds: ReadonlyArray<ThreadId>;
@@ -57,7 +66,7 @@ export class TemporaryThreadStorage extends Context.Service<
     readonly register: (input: {
       readonly threadId: ThreadId;
       readonly parentThreadId?: ThreadId;
-    }) => Effect.Effect<void, TemporaryThreadStorageError>;
+    }) => Effect.Effect<void, TemporaryThreadStorageError | TemporaryThreadAlreadyDurableError>;
     readonly isTemporary: (threadId: ThreadId) => Effect.Effect<boolean>;
     readonly isDiscarded: (threadId: ThreadId) => Effect.Effect<boolean>;
     readonly family: (threadId: ThreadId) => Effect.Effect<ReadonlyArray<ThreadId>>;
@@ -390,11 +399,7 @@ const make = Effect.gen(function* () {
           }
           const exists =
             yield* durable.sql`SELECT 1 FROM orchestration_v2_projection_threads WHERE thread_id = ${threadId}`;
-          if (exists.length > 0)
-            return yield* new TemporaryThreadStorageError({
-              operation: "already-durable",
-              threadId,
-            });
+          if (exists.length > 0) return yield* new TemporaryThreadAlreadyDurableError({ threadId });
           const parent = parentThreadId === undefined ? undefined : owners.get(parentThreadId);
           if (parent?.state === "discarding")
             return yield* new TemporaryThreadStorageError({ operation: "discarding", threadId });
@@ -410,7 +415,11 @@ const make = Effect.gen(function* () {
               diagnostics.value.leave(threadId, true);
           }),
         ),
-        Effect.mapError(mapStorageError("register", threadId)),
+        Effect.mapError((cause) =>
+          cause._tag === "TemporaryThreadAlreadyDurableError"
+            ? cause
+            : mapStorageError("register", threadId)(cause),
+        ),
       );
     }),
     isTemporary: (id) => Effect.sync(() => temporary(id)),
