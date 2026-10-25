@@ -2,7 +2,7 @@ import { appAtomRegistry } from "../../state/atom-registry";
 import { composerDraftsAtom, updateComposerDraftSettings } from "../../state/use-composer-drafts";
 import { threadOutboxManager } from "../../state/thread-outbox";
 import { AsyncResult } from "effect/reactivity";
-import { setTemporaryThread } from "@t3tools/client-runtime/temporary-threads";
+import { isTemporaryThread } from "@t3tools/client-runtime/temporary-threads";
 import { useAtomValue } from "@effect/atom-react";
 import { CommandId } from "@t3tools/contracts";
 import * as Dialog from "../../components/ui/Dialog";
@@ -344,6 +344,7 @@ function ThreadRouteContent(
   );
   const [keepingThread, setKeepingThread] = useState(false);
   const [keptThreadKey, setKeptThreadKey] = useState<string | null>(null);
+  const queuedMessages = useAtomValue(threadOutboxManager.queuedMessagesByThreadKeyAtom);
   const keepCommandIds = useRef(new Map<string, CommandId>());
   const keepCurrentThread = async () => {
     if (!selectedThread || keepingThread || !keepPermission) return;
@@ -352,33 +353,42 @@ function ThreadRouteContent(
     keepCommandIds.current.set(key, commandId);
     setKeepingThread(true);
     await (async () => {
-      const result = await keepThread({
-        environmentId: selectedThread.environmentId,
-        input: { threadId: selectedThread.id, commandId },
-      });
-      if (AsyncResult.isFailure(result)) {
-        Dialog.alert("Could not keep thread", "The thread is still temporary. Try again.");
-        return;
-      }
-      setTemporaryThread(selectedThread.environmentId, selectedThread.id, false);
+      const saved = await threadOutboxManager.keepThread(
+        selectedThread.environmentId,
+        selectedThread.id,
+        async () => {
+          if (
+            !selectedThread.temporary &&
+            !isTemporaryThread(selectedThread.environmentId, selectedThread.id)
+          )
+            return true;
+          const result = await keepThread({
+            environmentId: selectedThread.environmentId,
+            input: { threadId: selectedThread.id, commandId },
+          });
+          if (AsyncResult.isFailure(result)) {
+            Dialog.alert("Could not keep thread", "The thread is still temporary. Try again.");
+            return false;
+          }
+          return true;
+        },
+      );
+      if (!saved) return;
       setKeptThreadKey(key);
       for (const draftKey of Object.keys(appAtomRegistry.get(composerDraftsAtom))) {
         if (draftKey === key || draftKey.startsWith(`${key}~queued-edit~`))
           updateComposerDraftSettings(draftKey, { temporary: false });
       }
-      const queued =
-        appAtomRegistry.get(threadOutboxManager.queuedMessagesByThreadKeyAtom)[key] ?? [];
-      const saved = await Promise.allSettled(
-        queued.map((message) => threadOutboxManager.update({ ...message, temporary: false })),
-      );
-      if (saved.some((result) => result.status === "rejected"))
+    })()
+      .catch(() => {
         Dialog.alert(
-          "Thread kept",
-          "The server saved your thread. Some local queued messages could not be saved on this device.",
+          "Could not finish saving",
+          "Queued messages are not yet saved on this device. Keep this app open and tap Keep thread to try again.",
         );
-    })().finally(() => {
-      setKeepingThread(false);
-    });
+      })
+      .finally(() => {
+        setKeepingThread(false);
+      });
   };
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, "thread interrupt");
   const resumeThreadQueue = useAtomCommand(threadEnvironment.resumeThreadQueue, "resume queue");
@@ -1012,8 +1022,14 @@ function ThreadRouteContent(
             props.inspectorPresentation ? null : (
               <ThreadHeader
                 temporary={
-                  selectedThread.temporary === true &&
-                  keptThreadKey !== scopedThreadKey(selectedThread.environmentId, selectedThread.id)
+                  (selectedThread.temporary === true &&
+                    keptThreadKey !==
+                      scopedThreadKey(selectedThread.environmentId, selectedThread.id)) ||
+                  (
+                    queuedMessages[
+                      scopedThreadKey(selectedThread.environmentId, selectedThread.id)
+                    ] ?? []
+                  ).some((message) => message.temporary)
                 }
                 keepingThread={keepingThread}
                 onKeepThread={keepPermission ? () => void keepCurrentThread() : undefined}
