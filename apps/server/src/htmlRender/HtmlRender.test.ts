@@ -1,7 +1,12 @@
 // @effect-diagnostics nodeBuiltinImport:off - plain local servers stand in for LAN services.
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { assert, describe, expect, it } from "@effect/vitest";
-import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import { assert, describe, expect, it, vi } from "@effect/vitest";
+import {
+  EnvironmentId,
+  ProviderInstanceId,
+  TemporaryResourceError,
+  ThreadId,
+} from "@t3tools/contracts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Deferred from "effect/Deferred";
@@ -19,7 +24,11 @@ import * as NodeURL from "node:url";
 
 import { resolveAttachmentPathById } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
+import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
+import * as TemporaryThreadDiagnostics from "../observability/TemporaryThreadDiagnostics.ts";
+import * as TemporaryThreadStorage from "../orchestration-v2/TemporaryThreadStorage.ts";
 import * as HtmlRender from "./HtmlRender.ts";
+import * as HeadlessChrome from "./headlessChrome.ts";
 import { HtmlRenderBrowserError } from "./headlessChrome.ts";
 import * as PreviewBrowser from "../preview/PreviewBrowser.ts";
 
@@ -55,6 +64,76 @@ const layerTest = layerHtmlRender();
 const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 describe("HtmlRender", () => {
+  it.effect.each(["saved", "temporary", "discarded", "external", "absent"] as const)(
+    "%s HTML preview with an unrelated temporary thread",
+    (caller) =>
+      Effect.gen(function* () {
+        const renderer = yield* HtmlRender.HtmlRender;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const diagnostics = yield* TemporaryThreadDiagnostics.TemporaryThreadDiagnostics;
+        diagnostics.enter(ThreadId.make("unrelated-temporary"));
+        const screenshot = {
+          png: "preview-png",
+          contentHeight: 100,
+          capturedHeight: 100,
+          consoleMessages: [],
+        };
+        using capture = vi
+          .spyOn(HeadlessChrome, "captureHtmlScreenshot")
+          .mockReturnValue(Effect.succeed(screenshot));
+        using directory = vi.spyOn(fileSystem, "makeTempDirectoryScoped");
+        using write = vi.spyOn(fileSystem, "writeFileString");
+        const invocation: McpInvocationContext.McpInvocationScope = {
+          environmentId: EnvironmentId.make("preview-environment"),
+          capabilities: new Set(["preview"]),
+          issuedAt: 0,
+          requestNamespace: "preview-request",
+          thread:
+            caller === "external"
+              ? undefined
+              : {
+                  threadId: ThreadId.make(caller),
+                  providerSessionId: "preview-session",
+                  providerInstanceId: ProviderInstanceId.make("codex"),
+                },
+          client: undefined,
+        };
+        const preview = renderer.preview({ html: "<p>Preview</p>" });
+        const result = yield* Effect.result(
+          caller === "absent"
+            ? preview
+            : preview.pipe(
+                Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+              ),
+        );
+        if (caller === "saved") {
+          assert.equal(result._tag, "Success");
+          if (result._tag === "Success")
+            expect(result.success).toEqual({ ...screenshot, width: 728 });
+          expect(capture).toHaveBeenCalledOnce();
+        } else {
+          assert.equal(result._tag, "Failure");
+          if (result._tag === "Failure")
+            expect(result.failure).toBeInstanceOf(TemporaryResourceError);
+          expect(capture).not.toHaveBeenCalled();
+        }
+        expect(directory).not.toHaveBeenCalled();
+        expect(write).not.toHaveBeenCalled();
+      }).pipe(
+        Effect.provide(
+          layerHtmlRender("unused-browser").pipe(
+            Layer.provideMerge(TemporaryThreadDiagnostics.layer),
+            Layer.provide(
+              Layer.mock(TemporaryThreadStorage.TemporaryThreadStorage)({
+                isTemporary: (id) => Effect.succeed(id === "temporary"),
+                isDiscarded: (id) => Effect.succeed(id === "discarded"),
+              }),
+            ),
+          ),
+        ),
+      ),
+  );
+
   it.effect("inlines local images by absolute path and leaves URLs and relative paths alone", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;

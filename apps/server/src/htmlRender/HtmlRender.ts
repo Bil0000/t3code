@@ -33,6 +33,7 @@ import { resolveAttachmentRelativePath } from "../attachmentPaths.ts";
 import { createAttachmentId } from "../attachmentStore.ts";
 import { resolveRootCliCommand } from "../cli/invocation.ts";
 import * as ServerConfig from "../config.ts";
+import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import * as HeadlessChrome from "./headlessChrome.ts";
 import * as PreviewBrowser from "../preview/PreviewBrowser.ts";
 import * as PreviewBrowserHost from "../preview/PreviewBrowserHost.ts";
@@ -473,8 +474,11 @@ const make = Effect.gen(function* () {
     readonly width?: number | undefined;
     readonly appearance?: ThemeAppearance | undefined;
   }) {
-    yield* TemporaryResourcePolicy.assertCurrentThreadDurable("HTML preview");
-    yield* policy.assertUnattributedDurable("HTML preview");
+    const invocation = yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext);
+    const threadId = Option.isSome(invocation) ? invocation.value.thread?.threadId : undefined;
+    yield* threadId === undefined
+      ? policy.assertUnattributedDurable("HTML preview")
+      : policy.assertDurable(threadId, "HTML preview");
     const width = Math.min(
       MAX_PREVIEW_WIDTH,
       Math.max(MIN_PREVIEW_WIDTH, Math.round(input.width ?? HTML_RENDER_COLUMN_WIDTH)),
