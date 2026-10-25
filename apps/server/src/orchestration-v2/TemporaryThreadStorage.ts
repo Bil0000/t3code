@@ -6,6 +6,7 @@ import {
   OrchestrationV2ProviderSessionJson,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -109,6 +110,7 @@ export class TemporaryThreadStores extends Context.Service<
   {
     readonly durable: RawStores;
     readonly volatile: RawStores;
+    readonly getShellSnapshot: ProjectionStore.ProjectionStoreV2["Service"]["getShellSnapshot"];
   }
 >()("t3/orchestration-v2/TemporaryThreadStorage/TemporaryThreadStores") {}
 
@@ -223,6 +225,45 @@ const make = Effect.gen(function* () {
     return ids.length === 0 ? durable : target(ids[0]);
   });
   const locked = <A, E, R>(effect: Effect.Effect<A, E, R>) => gate.withPermit(effect);
+  const getShellSnapshot = Effect.fn("TemporaryThreadStorage.getShellSnapshot")(
+    function* (options?: ProjectionStore.ShellSnapshotOptions) {
+      const read = yield* durable.sql
+        .withTransaction(
+          Effect.all({
+            disk: durable.projectionStore.readShellSnapshot(options),
+            memory: volatile.projectionStore.readShellSnapshot(options),
+            snapshotSequence: durable.applicationEvents.latestApplicationSequence,
+          }),
+        )
+        .pipe(NodeSqliteClient.readOnly);
+      const disk = yield* read.disk;
+      const memory = yield* read.memory;
+      return {
+        ...disk,
+        snapshotSequence: read.snapshotSequence,
+        threads: [
+          ...disk.threads,
+          ...memory.threads
+            .filter((thread) => temporary(thread.id))
+            .map((thread) => ({ ...thread, temporary: true })),
+        ],
+        archivedThreads: [
+          ...disk.archivedThreads,
+          ...memory.archivedThreads
+            .filter((thread) => temporary(thread.id))
+            .map((thread) => ({ ...thread, temporary: true })),
+        ],
+      };
+    },
+    locked,
+    Effect.mapError(
+      (cause) =>
+        new ProjectionStore.ProjectionStoreReadError({
+          threadId: ThreadId.make("thread:shell"),
+          cause,
+        }),
+    ),
+  );
   const withThread = <A, E, R>(id: ThreadId, use: (stores: RawStores) => Effect.Effect<A, E, R>) =>
     locked(Effect.suspend(() => use(target(id))));
   const withWrite = <A, E, R>(
@@ -1195,7 +1236,7 @@ const make = Effect.gen(function* () {
   });
   return Context.empty().pipe(
     Context.add(TemporaryThreadStorage, storage),
-    Context.add(TemporaryThreadStores, { durable, volatile }),
+    Context.add(TemporaryThreadStores, { durable, volatile, getShellSnapshot }),
     Context.add(ProjectStore.ProjectStoreV2, durable.projectStore),
     Context.add(EventSink.EventSinkV2, eventSink),
     Context.add(EventStore.EventStoreV2, eventStore),

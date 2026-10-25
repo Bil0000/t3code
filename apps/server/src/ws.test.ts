@@ -1,6 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import { assert, it } from "@effect/vitest";
+import { assert, it, vi } from "@effect/vitest";
 import {
   AuthSessionId,
   CommandId,
@@ -42,6 +42,7 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as Scope from "effect/Scope";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import { Headers } from "effect/http";
 import { Rpc, RpcGroup, RpcMessage, RpcServer } from "effect/rpc";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -59,6 +60,7 @@ import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as CheckpointStore from "./checkpointing/CheckpointStore.ts";
 import { CheckpointTurnRangeUnavailableError } from "./checkpointing/Errors.ts";
 import * as CommandOutputHub from "./orchestration-v2/CommandOutputHub.ts";
+import * as CommandReceiptStore from "./orchestration-v2/CommandReceiptStore.ts";
 import * as CodexInstallation from "./provider/CodexInstallation.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import * as DirectEndpoints from "./environment/DirectEndpoints.ts";
@@ -621,6 +623,10 @@ it.effect.each(["family", "worktree"] as const)(
         yield* projection.apply(create(id, parent));
       }
       let keepDuringRead = false;
+      let checkLockOrder = false;
+      const readerHeld = yield* Deferred.make<void>();
+      const receiptHasStorage = yield* Deferred.make<void>();
+      const lockCycle = yield* Deferred.make<void>();
       const responses =
         yield* Queue.unbounded<
           Exit.Exit<
@@ -679,9 +685,40 @@ it.effect.each(["family", "worktree"] as const)(
                 Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
                   namedProjectsRoot: process.cwd(),
                 }),
+                Layer.succeed(TemporaryThreadStorage.TemporaryThreadStores, {
+                  ...stores,
+                  getShellSnapshot: (options) =>
+                    stores.getShellSnapshot(options).pipe(
+                      Effect.tap(() => {
+                        if (!keepDuringRead) return Effect.void;
+                        keepDuringRead = false;
+                        return storage
+                          .keep({
+                            threadId: ThreadId.make("racing"),
+                            commandId: CommandId.make("keep-racing"),
+                          })
+                          .pipe(
+                            Effect.mapError(
+                              (cause) =>
+                                new ProjectionStore.ProjectionStoreReadError({
+                                  threadId: ThreadId.make("racing"),
+                                  cause,
+                                }),
+                            ),
+                          );
+                      }),
+                    ),
+                }),
                 Layer.mock(ThreadManagement.ThreadManagementService)({
                   readShellSnapshot: (options) =>
-                    projection.readShellSnapshot(options).pipe(
+                    Effect.gen(function* () {
+                      if (checkLockOrder) {
+                        yield* Deferred.succeed(readerHeld, undefined);
+                        yield* Deferred.await(receiptHasStorage);
+                        yield* Deferred.succeed(lockCycle, undefined);
+                      }
+                      return yield* projection.readShellSnapshot(options);
+                    }).pipe(
                       Effect.map((decode) =>
                         decode.pipe(
                           Effect.tap(() => {
@@ -783,6 +820,30 @@ it.effect.each(["family", "worktree"] as const)(
         kind === "family"
           ? ["racing-child"]
           : ["private", "private-child", "racing", "racing-child", "saved", "saved-child"],
+      );
+      checkLockOrder = true;
+      const familyRead = yield* read(true).pipe(Effect.forkChild);
+      const acquiredReader = yield* Effect.raceFirst(
+        Deferred.await(readerHeld).pipe(Effect.as(true)),
+        Fiber.join(familyRead).pipe(Effect.as(false)),
+      );
+      const getReceipt = stores.volatile.applicationReceipts.getByCommandId;
+      using _receipt = vi
+        .spyOn(stores.volatile.applicationReceipts, "getByCommandId")
+        .mockImplementation((input) =>
+          Deferred.succeed(receiptHasStorage, undefined).pipe(Effect.andThen(getReceipt(input))),
+        );
+      const receiptRead = yield* Context.get(services, CommandReceiptStore.CommandReceiptStoreV2)
+        .getByCommandId(CommandId.make("lock-order-receipt"))
+        .pipe(Effect.forkChild);
+      if (acquiredReader) yield* Deferred.await(receiptHasStorage);
+      const completed = yield* Effect.raceFirst(
+        Effect.all([Fiber.join(familyRead), Fiber.join(receiptRead)]).pipe(Effect.as(true)),
+        Deferred.await(lockCycle).pipe(Effect.as(false)),
+      );
+      assert.isTrue(
+        completed,
+        "Shell and receipt reads must finish without a storage/SQL lock cycle",
       );
     }).pipe(Effect.scoped),
 );

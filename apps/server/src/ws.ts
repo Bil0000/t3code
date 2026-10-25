@@ -2055,20 +2055,17 @@ export const layerWsRpc = (
           acceptTemporaryThreads: boolean | undefined,
           message: string,
         ) {
-          const { threads, snapshotSequence } = yield* loadShellSnapshotParts({
-            sql,
-            readThreads: threadManagement.readShellSnapshot({
+          const { threads, snapshotSequence } = yield* rawStores
+            .getShellSnapshot({
               location: "active",
               ...options,
-            }),
-            listProjects: Effect.succeed([]),
-            latestSequence: applicationEvents.latestApplicationSequence,
-          }).pipe(
-            Effect.mapError(
-              (cause) => new OrchestrationV2GetShellSnapshotError({ message, cause }),
-            ),
-          );
-          const readable = yield* Effect.filter(threads.threads, (thread) =>
+            })
+            .pipe(
+              Effect.mapError(
+                (cause) => new OrchestrationV2GetShellSnapshotError({ message, cause }),
+              ),
+            );
+          const readable = yield* Effect.filter(threads, (thread) =>
             TemporaryThreadTransport.getReadState(thread.id, acceptTemporaryThreads).pipe(
               Effect.map(
                 (state) => state.allowed && (thread.temporary !== true || state.temporary),
