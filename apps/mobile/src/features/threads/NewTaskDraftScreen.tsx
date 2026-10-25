@@ -557,6 +557,14 @@ export function NewTaskDraftScreen(props: {
       !initialProjectId ||
       (destinationProject?.environmentId === initialEnvironmentId &&
         destinationProject.id === initialProjectId);
+    if (flow.temporary && shareId && cancelledIncomingShareId !== shareId) {
+      setCancelledIncomingShareId(shareId);
+      Dialog.alert(
+        "Cannot import into temporary chat",
+        "Your temporary draft stays private. The shared content stays in the inbox for a saved draft.",
+      );
+      return;
+    }
     if (
       flow.temporary ||
       !shareId ||
@@ -767,6 +775,7 @@ export function NewTaskDraftScreen(props: {
     consumeShare,
     cancelledIncomingShareId,
     flow.draftKey,
+    flow.temporary,
     hasImportedIncomingShare,
     incomingShare,
     isIncomingShareInboxLoading,
