@@ -966,7 +966,7 @@ it.effect.each([
     }),
 );
 
-it.effect("ProviderSessionManagerV2 retains temporary sessions past the idle limit", () =>
+it.effect("ProviderSessionManagerV2 pins memory-only sessions after saved reopen", () =>
   Effect.gen(function* () {
     const state = yield* Ref.make(emptyState);
     yield* Effect.gen(function* () {
@@ -990,6 +990,19 @@ it.effect("ProviderSessionManagerV2 retains temporary sessions past the idle lim
       });
       yield* TestClock.adjust("5 hours");
       assert.isTrue(yield* manager.isLive(providerSessionId));
+      assert.equal((yield* Ref.get(state)).closeCount, 0);
+      assert.strictEqual(
+        yield* manager.open({
+          threadId,
+          providerSessionId,
+          modelSelection,
+          runtimePolicy: { ...runtimePolicy, temporary: false },
+        }),
+        runtime,
+      );
+      yield* TestClock.adjust("5 hours");
+      assert.isTrue(yield* manager.isLive(providerSessionId));
+      assert.equal((yield* Ref.get(state)).openCount, 1);
       assert.equal((yield* Ref.get(state)).closeCount, 0);
       const fork = yield* runtime
         .forkThread({
