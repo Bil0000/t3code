@@ -362,6 +362,10 @@ export const layerCleanup = Layer.effect(
                 detail: "Temporary thread closed.",
               });
             }
+            yield* sessions.releaseTemporaryOwned({
+              threadId,
+              detail: "Temporary thread closed.",
+            });
             const deleteCommandId = CommandId.make(`temporary-discard:delete:${threadId}`);
             commands.push(deleteCommandId);
             yield* orchestrator.dispatch({

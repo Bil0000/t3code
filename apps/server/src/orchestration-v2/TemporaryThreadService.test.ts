@@ -1,5 +1,14 @@
 import { assert, it } from "@effect/vitest";
-import { CommandId, ThreadId } from "@t3tools/contracts";
+import {
+  CommandId,
+  EventId,
+  ProjectId,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  ProviderSessionId,
+  ThreadId,
+} from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -8,6 +17,12 @@ import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
+import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import * as EffectOutbox from "./EffectOutbox.ts";
+import * as EffectWorker from "./EffectWorker.ts";
+import * as Orchestrator from "./Orchestrator.ts";
+import * as ProjectionStore from "./ProjectionStore.ts";
+import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as TemporaryThreadStorage from "./TemporaryThreadStorage.ts";
 import * as TemporaryThreadService from "./TemporaryThreadService.ts";
 
@@ -186,6 +201,174 @@ it.effect("only the last explicit view leave stops and discards the entire famil
       assert.isTrue(fixture.discarded.has(childId));
     }).pipe(Effect.provide(fixture.serviceLayer));
   }),
+);
+
+it.effect.each([
+  { failRelease: false, detached: false },
+  { failRelease: true, detached: false },
+  { failRelease: false, detached: true },
+  { failRelease: true, detached: true },
+])(
+  "last-view discard uses production cleanup, release failure: $failRelease, detached: $detached",
+  ({ failRelease, detached }) =>
+    Effect.gen(function* () {
+      const fixture = yield* setup;
+      const now = yield* DateTime.now;
+      const providerInstanceId = ProviderInstanceId.make("codex");
+      const providerSessionId = ProviderSessionId.make("temporary-session");
+      const projections = yield* ProjectionStore.ProjectionStoreV2.pipe(
+        Effect.provide(ProjectionStore.layerMemory),
+      );
+      yield* projections.apply({
+        id: EventId.make("temporary-created"),
+        type: "thread.created",
+        threadId,
+        occurredAt: now,
+        payload: {
+          id: threadId,
+          temporary: true,
+          createdBy: "user",
+          creationSource: "web",
+          projectId: ProjectId.make("project"),
+          title: "Temporary thread",
+          providerInstanceId,
+          modelSelection: { instanceId: providerInstanceId, model: "gpt-5.4" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          activeProviderThreadId: null,
+          lineage: { rootThreadId: threadId, parentThreadId: null, relationshipToParent: null },
+          forkedFrom: null,
+          createdAt: now,
+          updatedAt: now,
+          archivedAt: null,
+          settledOverride: null,
+          settledAt: null,
+          lastVisitedAt: null,
+          deletedAt: null,
+        },
+      });
+      yield* projections.apply({
+        id: EventId.make("temporary-session-created"),
+        type: "provider-session.attached",
+        threadId,
+        occurredAt: now,
+        payload: {
+          id: providerSessionId,
+          driver: ProviderDriverKind.make("codex"),
+          providerInstanceId,
+          status: "ready",
+          cwd: "/workspace",
+          model: "gpt-5.4",
+          capabilities: CodexProviderCapabilitiesV2,
+          createdAt: now,
+          updatedAt: now,
+          lastError: null,
+        },
+      });
+      if (detached) {
+        yield* projections.apply({
+          id: EventId.make("temporary-session-detached"),
+          type: "provider-session.detached",
+          threadId,
+          occurredAt: now,
+          payload: { providerSessionId, detachedAt: now, reason: "Thread settled." },
+        });
+        assert.deepEqual(
+          (yield* projections.getThreadRecords(threadId, ["providerSessions"])).providerSessions,
+          [],
+        );
+      }
+      let rejectRelease = failRelease;
+      const cleanupLayer = TemporaryThreadService.layerCleanup.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.mock(Orchestrator.OrchestratorV2)({
+              getThreadRecords: (id, fields, filter) =>
+                projections
+                  .getThreadRecords(id, fields, filter)
+                  .pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new Orchestrator.OrchestratorProjectionError({ threadId: id, cause }),
+                    ),
+                  ),
+              dispatch: (command) =>
+                Effect.sync(() => {
+                  fixture.operations.push(command.type);
+                  return { sequence: 0, storedEvents: [] };
+                }),
+            }),
+            Layer.succeed(ProjectionStore.ProjectionStoreV2, projections),
+            Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
+              detach: (input) =>
+                Effect.sync(() => {
+                  assert.equal(input.providerSessionId, providerSessionId);
+                  assert.equal(input.threadId, threadId);
+                  assert.isTrue(input.revokeMcpCredential);
+                  fixture.operations.push("detach");
+                }),
+              releaseTemporaryOwned: (input) =>
+                Effect.gen(function* () {
+                  assert.equal(input.threadId, threadId);
+                  fixture.operations.push("release");
+                  if (rejectRelease)
+                    return yield* new ProviderSessionManager.ProviderSessionReleaseError({
+                      providerSessionId,
+                      reason: "manual_shutdown",
+                      cause: "release failure",
+                    });
+                }),
+            }),
+            Layer.mock(EffectWorker.OrchestrationEffectWorkerV2)({
+              drain: () => Effect.succeed(0),
+            }),
+            Layer.mock(EffectOutbox.EffectOutboxV2)({ listByCommandId: () => Effect.succeed([]) }),
+          ),
+        ),
+      );
+      const serviceLayer = TemporaryThreadService.layer.pipe(
+        Layer.provide(cleanupLayer),
+        Layer.provide(TemporaryThreadService.layerState),
+        Layer.provide(
+          Layer.succeed(TemporaryThreadStorage.TemporaryThreadStorage, fixture.storage),
+        ),
+      );
+      yield* Effect.gen(function* () {
+        const service = yield* TemporaryThreadService.TemporaryThreadService;
+        yield* service.updateViews(first, views([threadId]));
+        yield* service.updateViews(second, views([threadId], 1, false, "second-view"));
+        yield* service.updateViews(first, views([], 2));
+        assert.deepEqual(fixture.operations, []);
+        if (failRelease) {
+          const error = yield* service
+            .updateViews(second, views([], 2, false, "second-view"))
+            .pipe(Effect.flip);
+          assert.equal(error._tag, "TemporaryThreadServiceError");
+          assert.deepEqual(fixture.operations, [
+            "mark",
+            "thread.stop",
+            ...(detached ? [] : ["detach"]),
+            "release",
+          ]);
+          assert.isTrue(fixture.temporary.has(threadId));
+          assert.isFalse(fixture.discarded.has(threadId));
+          rejectRelease = false;
+          fixture.operations.length = 0;
+        }
+        yield* service.updateViews(second, views([], 2, false, "second-view"));
+        assert.deepEqual(fixture.operations, [
+          "mark",
+          "thread.stop",
+          ...(detached ? [] : ["detach"]),
+          "release",
+          "thread.delete",
+          "discard",
+        ]);
+        assert.isTrue(fixture.discarded.has(threadId));
+      }).pipe(Effect.provide(serviceLayer));
+    }),
 );
 
 it.effect("ignores stale view updates and rejects a view claimed by another session", () =>

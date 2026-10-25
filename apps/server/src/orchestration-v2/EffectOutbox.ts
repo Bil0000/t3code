@@ -41,6 +41,10 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
     revokeMcpCredential: Schema.optional(Schema.Boolean),
   }),
   Schema.Struct({
+    type: Schema.Literal("provider-session.release-temporary"),
+    detail: Schema.optional(Schema.String),
+  }),
+  Schema.Struct({
     type: Schema.Literal("provider-turn.start"),
     runId: RunId,
   }),
@@ -125,6 +129,7 @@ export type OrchestrationEffectRequestV2 = typeof OrchestrationEffectRequestV2.T
 export const REPLAY_SAFE_EFFECT_TYPES_AFTER_PROCESS_LOSS = [
   "provider-runtime.continue",
   "provider-session.detach",
+  "provider-session.release-temporary",
   "provider-thread.rollback",
   "checkpoint.capture",
   "scheduled-tasks.cleanup",

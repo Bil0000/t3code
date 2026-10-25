@@ -174,6 +174,10 @@ export interface ProviderSessionManagerV2Shape {
     readonly reason: ProviderSessionReleaseReason;
     readonly detail?: string;
   }) => Effect.Effect<void, ProviderSessionManagerV2Error>;
+  readonly releaseTemporaryOwned: (input: {
+    readonly threadId: ThreadId;
+    readonly detail?: string;
+  }) => Effect.Effect<void, ProviderSessionManagerV2Error>;
   readonly detach: (input: {
     readonly providerSessionId: ProviderSessionId;
     readonly threadId: ThreadId;
@@ -189,6 +193,7 @@ export class ProviderSessionManagerV2 extends Context.Service<
 
 interface LiveSessionEntry {
   readonly temporary: boolean;
+  readonly ownerThreadId: ThreadId;
   readonly attachedThreadIds: ReadonlySet<ThreadId>;
   readonly loadedProviderThreadKeyByThread: ReadonlyMap<ThreadId, string>;
   /** Scope revocation to recorded credential ids so superseded sessions cannot revoke replacements opened before detach. */
@@ -2082,7 +2087,7 @@ export const layerWithOptions = (
                   (input.runtimePolicy.temporary === true && !existing.temporary) ||
                   ((existing.temporary || input.runtimePolicy.temporary === true) &&
                     (existing.runtime.instanceId !== input.modelSelection.instanceId ||
-                      !existing.attachedThreadIds.has(input.threadId)))
+                      existing.ownerThreadId !== input.threadId))
                 ) {
                   return yield* new ProviderSessionOpenError({
                     instanceId: input.modelSelection.instanceId,
@@ -2092,7 +2097,7 @@ export const layerWithOptions = (
                   });
                 }
                 const attached = existing.attachedThreadIds.has(input.threadId);
-                if (!attached && !existing.supportsMultipleProviderThreads) {
+                if (!existing.temporary && !attached && !existing.supportsMultipleProviderThreads) {
                   return yield* new ProviderSessionOpenError({
                     instanceId: input.modelSelection.instanceId,
                     providerSessionId: input.providerSessionId,
@@ -2227,6 +2232,7 @@ export const layerWithOptions = (
               );
               const now = yield* Clock.currentTimeMillis;
               const entry: LiveSessionEntry = {
+                ownerThreadId: input.threadId,
                 attachedThreadIds: new Set([input.threadId]),
                 loadedProviderThreadKeyByThread: new Map(),
                 mcpCredentialIdByThread:
@@ -2354,6 +2360,34 @@ export const layerWithOptions = (
             ),
         ),
         release: releaseEntry,
+        releaseTemporaryOwned: Effect.fn("ProviderSessionManager.releaseTemporaryOwned")(
+          function* (input) {
+            const owned = Array.from((yield* Ref.get(sessions)).values()).filter(
+              (entry) => entry.temporary && entry.ownerThreadId === input.threadId,
+            );
+            yield* Effect.forEach(
+              owned,
+              (entry) =>
+                sessionOpen.withLock(
+                  entry.runtime.providerSessionId,
+                  Effect.gen(function* () {
+                    const current = (yield* Ref.get(sessions)).get(
+                      sessionKey(entry.runtime.providerSessionId),
+                    );
+                    if (current?.temporary !== true || current.ownerThreadId !== input.threadId)
+                      return;
+                    yield* releaseEntry({
+                      providerSessionId: entry.runtime.providerSessionId,
+                      reason: "manual_shutdown",
+                      detachedThreadId: input.threadId,
+                      ...(input.detail === undefined ? {} : { detail: input.detail }),
+                    });
+                  }),
+                ),
+              { discard: true },
+            );
+          },
+        ),
         detach: Effect.fn("ProviderSessionManager.detach")(
           function* (input) {
             const key = sessionKey(input.providerSessionId);
@@ -2457,6 +2491,7 @@ export const layerWithOptions = (
               return;
             }
             if (
+              !detached.value.temporary &&
               detached.value.attachedThreadIds.size === 0 &&
               !detached.value.supportsMultipleProviderThreads
             ) {
@@ -2469,7 +2504,11 @@ export const layerWithOptions = (
               return;
             }
             const unloadThread = detached.value.exposedRuntime.unloadThread;
-            if (detached.value.supportsMultipleProviderThreads && unloadThread !== undefined) {
+            if (
+              !detached.value.temporary &&
+              detached.value.supportsMultipleProviderThreads &&
+              unloadThread !== undefined
+            ) {
               // Serialize unload with attachment so attached threads stay loaded and later attaches resume after unload.
               yield* threadAttachment.withLock(
                 threadAttachmentKey(input),
