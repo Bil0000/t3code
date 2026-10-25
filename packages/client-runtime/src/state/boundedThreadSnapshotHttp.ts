@@ -19,7 +19,9 @@ import { isTemporaryThread } from "../temporaryThreads.ts";
 const DEFAULT_BOUNDED_THREAD_SNAPSHOT_TIMEOUT_MS = 6_000;
 
 export const layerSocket = Layer.succeed(ThreadSnapshotLoader.ThreadSnapshotLoader, {
-  load: () => Effect.succeed({ _tag: "unavailable" }),
+  load: Effect.fn("ThreadSnapshotLoader.load")(() =>
+    Effect.succeed({ _tag: "unavailable" } as const),
+  ),
 });
 
 export const fetchEnvironmentBoundedThreadSnapshot = Effect.fn(
@@ -35,7 +37,7 @@ export const fetchEnvironmentBoundedThreadSnapshot = Effect.fn(
 }) {
   const endpoint = {
     params: { threadId: input.threadId },
-    query: { compactTurnItems: "1", dedupeBodies: "1" },
+    query: { compactTurnItems: "1", dedupeBodies: "1", compactIds: "1" },
   };
   return yield* executeAuthenticatedEnvironmentHttpRequest({
     ...input,
@@ -69,7 +71,10 @@ export const layer: Layer.Layer<
       RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization,
     );
     return ThreadSnapshotLoader.ThreadSnapshotLoader.of({
-      load: (prepared: PreparedConnection, threadId: ThreadId) => {
+      load: Effect.fn("ThreadSnapshotLoader.load")(function (
+        prepared: PreparedConnection,
+        threadId: ThreadId,
+      ) {
         const loadFullFallback = ThreadSnapshotLoader.fetchEnvironmentThreadSnapshot({
           prepared,
           threadId,
@@ -164,7 +169,7 @@ export const layer: Layer.Layer<
             ? Effect.succeed({ _tag: "unavailable" as const })
             : loadBounded,
         );
-      },
+      }),
     });
   }),
 );

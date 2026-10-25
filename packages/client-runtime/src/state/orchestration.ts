@@ -2,6 +2,7 @@ import {
   ORCHESTRATION_V2_WS_METHODS,
   type ThreadId,
   type OrchestrationV2SearchThreadInput,
+  type OrchestrationGetTurnDiffResult,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -18,6 +19,7 @@ import {
   createEnvironmentRpcSubscriptionAtomFamily,
   createEnvironmentSubscriptionAtomFamily,
   createEnvironmentCommand,
+  type QueryAnswerHandler,
 } from "./runtime.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
@@ -28,7 +30,18 @@ import { fetchEnvironmentThreadTranscript } from "./threadTranscriptHttp.ts";
 
 export function createOrchestrationEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | HttpClient.HttpClient | R, E>,
+  options: {
+    /** Runs on each turn-range and full-thread diff the server answers. */
+    readonly onCheckpointDiffAnswer?: QueryAnswerHandler<
+      { readonly ignoreWhitespace?: boolean },
+      OrchestrationGetTurnDiffResult
+    >;
+  } = {},
 ) {
+  const onCheckpointDiffAnswer =
+    options.onCheckpointDiffAnswer === undefined
+      ? {}
+      : { onAnswer: options.onCheckpointDiffAnswer };
   return {
     threadTranscript: createEnvironmentCommand(runtime, {
       label: "environment-data:orchestration:thread-transcript",
@@ -95,6 +108,7 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
           ...input,
           acceptTemporaryThreads: true,
         }),
+      ...onCheckpointDiffAnswer,
     }),
     workflowScript: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:orchestration:workflow-script",
@@ -130,6 +144,7 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
           ...input,
           acceptTemporaryThreads: true,
         }),
+      ...onCheckpointDiffAnswer,
     }),
     threadFind: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:orchestration:thread-find",

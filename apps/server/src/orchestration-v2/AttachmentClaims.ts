@@ -6,6 +6,7 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import { isSvgAttachment } from "@t3tools/shared/image";
 
 import {
   parseThreadSegmentFromAttachmentId,
@@ -14,6 +15,7 @@ import {
   resolveAttachmentPath,
 } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
+import * as DocumentText from "../provider/DocumentText.ts";
 
 import * as TemporaryResourcePolicy from "./TemporaryResourcePolicy.ts";
 
@@ -46,10 +48,20 @@ export const releaseClaimedAttachments = Effect.fn("AttachmentClaims.releaseClai
   function* (claimedPaths: ReadonlyArray<string>) {
     if (claimedPaths.length === 0) return;
     const fileSystem = yield* FileSystem.FileSystem;
-    yield* Effect.forEach(claimedPaths, (path) => fileSystem.remove(path).pipe(Effect.ignore), {
-      concurrency: 1,
-      discard: true,
-    }).pipe(Effect.uninterruptible);
+    yield* Effect.forEach(
+      claimedPaths,
+      (path) =>
+        fileSystem
+          .remove(path)
+          .pipe(
+            Effect.ignore,
+            Effect.andThen(fileSystem.remove(`${path}.txt`, { force: true }).pipe(Effect.ignore)),
+          ),
+      {
+        concurrency: 1,
+        discard: true,
+      },
+    ).pipe(Effect.uninterruptible);
   },
 );
 
@@ -80,6 +92,7 @@ export const claimPendingAttachments = Effect.fn("AttachmentClaims.claimPendingA
     const serverConfig = yield* ServerConfig.ServerConfig;
     const fileSystem = yield* FileSystem.FileSystem;
     const claimedPaths: string[] = [];
+    const documents = yield* DocumentText.DocumentText;
     const attachments = yield* Effect.forEach(
       input.attachments,
       (attachment) =>
@@ -114,6 +127,12 @@ export const claimPendingAttachments = Effect.fn("AttachmentClaims.claimPendingA
           const normalized: ChatAttachment = {
             ...attachment,
             id: ChatAttachmentId.make(claim.finalId),
+            name:
+              attachment.type === "file" &&
+              isSvgAttachment(attachment) &&
+              !/\.svg$/i.test(attachment.name)
+                ? `${attachment.name}.svg`
+                : attachment.name,
             mimeType: attachment.mimeType.toLowerCase(),
           };
           const expectedPath = resolveAttachmentPath({
@@ -138,6 +157,20 @@ export const claimPendingAttachments = Effect.fn("AttachmentClaims.claimPendingA
             Effect.andThen(Effect.sync(() => claimedPaths.push(claim.finalPath))),
             Effect.uninterruptible,
           );
+          const sidecar = `${claim.currentPath}.txt`;
+          if (yield* fileSystem.exists(sidecar).pipe(Effect.orElseSucceed(() => false))) {
+            yield* fileSystem.copyFile(sidecar, `${claim.finalPath}.txt`).pipe(
+              Effect.andThen(Effect.sync(() => claimedPaths.push(`${claim.finalPath}.txt`))),
+              Effect.onError(() =>
+                fileSystem.remove(`${claim.finalPath}.txt`, { force: true }).pipe(Effect.ignore),
+              ),
+              Effect.uninterruptible,
+              Effect.ignore,
+            );
+          } else {
+            const extracted = yield* documents.ensure(claim.finalPath);
+            if (extracted) claimedPaths.push(extracted);
+          }
           return normalized;
         }),
       { concurrency: 1 },

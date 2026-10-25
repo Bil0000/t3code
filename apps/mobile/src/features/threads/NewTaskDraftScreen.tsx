@@ -38,6 +38,7 @@ import {
 
 import { ComposerEditor, type ComposerEditorHandle } from "../../components/ComposerEditor";
 import { composerContextImportsAtom } from "../../state/use-composer-drafts";
+import { abortComposerDraftOperations } from "../../state/composerDraftOperations";
 import { composerContextSendBlockReason } from "../../lib/composerContext";
 import { ComposerInlineControl } from "../../components/ComposerToolbar";
 
@@ -358,6 +359,7 @@ export function NewTaskDraftScreen(props: {
       return;
     }
     if (requestedInitialProjectAvailable) {
+      // oxlint-disable-next-line react/set-state-in-effect -- Ends the return-to-picker flow once the requested project arrives from the catalog.
       setIsReturningToProjectPicker(false);
       return;
     }
@@ -496,6 +498,7 @@ export function NewTaskDraftScreen(props: {
       }
 
       if (projects.length > 0) {
+        // oxlint-disable-next-line react/set-state-in-effect -- Route-driven project resolution starts the return-to-picker flow when no project matches.
         setIsReturningToProjectPicker(true);
       }
       return;
@@ -516,6 +519,7 @@ export function NewTaskDraftScreen(props: {
     projects,
     flow.draftKey,
     props.initialProjectRef,
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Opening a draft from a share, pending task, or draft id re-resolves its project.
     props.incomingShareId,
     props.pendingTaskId,
     props.draftId,
@@ -525,6 +529,7 @@ export function NewTaskDraftScreen(props: {
     setProject,
   ]);
 
+  const { loadBranches } = flow;
   useEffect(() => {
     if (!selectedProject) {
       loadedBranchesProjectKeyRef.current = null;
@@ -535,8 +540,8 @@ export function NewTaskDraftScreen(props: {
       return;
     }
     loadedBranchesProjectKeyRef.current = projectKey;
-    flow.loadBranches();
-  }, [flow.loadBranches, selectedProject]);
+    loadBranches();
+  }, [loadBranches, selectedProject]);
 
   useEffect(() => {
     const shareId = props.incomingShareId;
@@ -605,6 +610,7 @@ export function NewTaskDraftScreen(props: {
     let didConsumeShare = false;
     let needsDraftRestore = false;
     activeShareImportTokenRef.current = importToken;
+    // oxlint-disable-next-line react/set-state-in-effect -- Publishes the share import started by this effect before its async work runs.
     setImportingShareKey(importKey);
     void (async () => {
       await reserveShare(shareId, {
@@ -758,6 +764,7 @@ export function NewTaskDraftScreen(props: {
     cancelledIncomingShareId,
     flow.draftKey,
     flow.temporary,
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- hasImportedIncomingShare reflects the draft store; a change re-checks whether the share still needs importing.
     hasImportedIncomingShare,
     incomingShare,
     isIncomingShareInboxLoading,
@@ -973,6 +980,9 @@ export function NewTaskDraftScreen(props: {
       );
       return null;
     }
+    // The composer has moved to the submitted thread; a pick still converting
+    // would otherwise resurrect this draft.
+    abortComposerDraftOperations(draftKey);
     const draftSnapshot = getComposerDraftSnapshot(draftKey);
     if (editingPendingTask) {
       flow.finishEditingPendingTask();
@@ -1205,7 +1215,7 @@ export function NewTaskDraftScreen(props: {
             draftKey={flow.draftKey}
             value={flow.prompt}
             onChangeText={flow.setPrompt}
-            placeholder="Ask the repo agent, or run a command…"
+            placeholder="Ask anything"
             multiline
             style={{ minHeight: 64 }}
           />
@@ -1326,10 +1336,6 @@ export function NewTaskDraftScreen(props: {
         onSendMessage={handleStart}
         onReconnectEnvironment={() => onReconnectEnvironment(selectedProject.environmentId)}
         canSwitchThreadProvider
-        onUpdateThreadModelSelection={(selection) =>
-          flow.setSelectedModelKey(`${selection.instanceId}:${selection.model}`, selection.options)
-        }
-        onUpdateThreadRuntimeMode={flow.setRuntimeMode}
         onUpdateThreadInteractionMode={flow.planModeEnabled ? flow.setInteractionMode : undefined}
         onRespondToApproval={async () => {}}
         onSelectUserInputOption={() => {}}
