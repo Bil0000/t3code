@@ -1,6 +1,11 @@
-import { ProviderDriverKind, ProviderInstanceId, type ModelSelection } from "@t3tools/contracts";
+import {
+  ProviderDriverKind,
+  ProviderInstanceId,
+  ThreadId,
+  type ModelSelection,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
-import { resolveSubagentTraits } from "./threadAgentsPresentation";
+import { resolveSubagentTraits, workflowMemberRowSubagent } from "./threadAgentsPresentation";
 
 const instanceId = ProviderInstanceId.make("codex");
 const selection: ModelSelection = {
@@ -50,6 +55,32 @@ const provider = {
 };
 
 describe("subagent traits", () => {
+  it.each([null, "derived-native-child"])(
+    "does not borrow settings for a workflow member with child %s",
+    (childThreadId) => {
+      const row = workflowMemberRowSubagent(
+        {
+          childThreadId,
+          model: "GPT Test",
+          title: "Worker",
+          progress: null,
+          status: "running",
+          result: null,
+          error: null,
+        },
+        { driver: provider.driver, providerInstanceId: instanceId },
+        ThreadId.make("coordinator"),
+      );
+      expect(
+        resolveSubagentTraits({
+          subagent: row,
+          provider,
+          childThread: { providerInstanceId: instanceId, modelSelection: selection },
+        }).traits,
+      ).toBe("");
+    },
+  );
+
   it("does not match two models that are absent from the catalog", () => {
     expect(
       resolveSubagentTraits({

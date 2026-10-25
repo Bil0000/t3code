@@ -16,6 +16,7 @@ import { environmentThreadDetails } from "../../state/threads";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { useMarkdownCodeHighlight } from "./markdownCodeHighlightState";
 import { SubagentRow } from "./SubagentRow";
+import { workflowMemberRowSubagent } from "./threadAgentsPresentation";
 import { WorkLogBlock } from "./work-log-layout";
 
 // A script longer than this many lines shows its head until opened.
@@ -47,27 +48,6 @@ export function useWorkflowOpening(environmentId: EnvironmentId, threadId: Threa
         messages: projection.messages,
         parentSubagents,
       });
-}
-
-function memberRowSubagent(
-  member: RuntimeSubagent,
-  opening: WorkflowOpeningValue,
-  coordinatorThreadId: ThreadId,
-) {
-  return {
-    // A member's parent thread is the coordinator's thread, the one showing this opening.
-    threadId: coordinatorThreadId,
-    childThreadId: member.childThreadId as ThreadId | null,
-    model: member.model,
-    origin: member.childThreadId === null ? ("provider_native" as const) : ("app_owned" as const),
-    driver: opening.driver!,
-    providerInstanceId: opening.providerInstanceId!,
-    title: member.title,
-    prompt: member.progress ?? member.title,
-    status: member.status,
-    progress: undefined,
-    result: member.result ?? member.error,
-  };
 }
 
 type WorkflowOpeningValue = NonNullable<ReturnType<typeof useWorkflowOpening>>;
@@ -105,7 +85,7 @@ export function ThreadWorkflowOpening(props: {
       >
         <SubagentRow
           environmentId={props.environmentId}
-          subagent={memberRowSubagent(member, opening, props.threadId)}
+          subagent={workflowMemberRowSubagent(member, opening, props.threadId)}
           elapsed={null}
         />
       </Pressable>

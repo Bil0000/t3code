@@ -2,17 +2,45 @@ import {
   formatSubagentDisplayTitle,
   subagentDetailPreview,
 } from "@t3tools/client-runtime/state/subagent-display";
-import { isActiveSubagentStatus } from "@t3tools/client-runtime/state/subagentRuntime";
+import {
+  isActiveSubagentStatus,
+  type RuntimeSubagent,
+  type WorkflowOpening,
+} from "@t3tools/client-runtime/state/subagentRuntime";
 import { formatModelSelectionEffort } from "@t3tools/client-runtime/state/thread-execution";
 import { buildTraitsTriggerDisplay } from "@t3tools/client-runtime/model-traits";
 import type {
   OrchestrationV2Subagent,
   OrchestrationV2ThreadShell,
   ServerProvider,
+  ThreadId,
 } from "@t3tools/contracts";
 import { resolveSelectableModel } from "@t3tools/shared/model";
 
 const PROMPT_TITLE_LIMIT = 80;
+
+export function workflowMemberRowSubagent(
+  member: Pick<
+    RuntimeSubagent,
+    "childThreadId" | "model" | "title" | "progress" | "status" | "result" | "error"
+  >,
+  opening: Pick<WorkflowOpening, "driver" | "providerInstanceId">,
+  coordinatorThreadId: ThreadId,
+) {
+  return {
+    threadId: coordinatorThreadId,
+    childThreadId: member.childThreadId as ThreadId | null,
+    model: member.model,
+    origin: "provider_native" as const,
+    driver: opening.driver!,
+    providerInstanceId: opening.providerInstanceId!,
+    title: member.title,
+    prompt: member.progress ?? member.title,
+    status: member.status,
+    progress: undefined,
+    result: member.result ?? member.error,
+  };
+}
 
 export function resolveSubagentTraits(input: {
   readonly subagent: Pick<
