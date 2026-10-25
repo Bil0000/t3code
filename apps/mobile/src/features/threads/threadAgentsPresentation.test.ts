@@ -1,0 +1,145 @@
+import { ProviderDriverKind, ProviderInstanceId, type ModelSelection } from "@t3tools/contracts";
+import { describe, expect, it } from "vite-plus/test";
+import { resolveSubagentTraits } from "./threadAgentsPresentation";
+
+const instanceId = ProviderInstanceId.make("codex");
+const selection: ModelSelection = {
+  instanceId,
+  model: "gpt-test",
+  options: [
+    { id: "reasoningEffort", value: "high" },
+    { id: "serviceTier", value: "priority" },
+  ],
+};
+const subagent = {
+  providerInstanceId: instanceId,
+  model: "GPT Test",
+  origin: "app_owned" as const,
+  modelSelection: selection,
+};
+const provider = {
+  driver: ProviderDriverKind.make("codex"),
+  models: [
+    {
+      slug: "gpt-test",
+      name: "GPT Test",
+      isCustom: false,
+      capabilities: {
+        optionDescriptors: [
+          {
+            id: "serviceTier",
+            label: "Speed",
+            type: "select" as const,
+            options: [
+              { id: "default", label: "Normal" },
+              { id: "priority", label: "Fast" },
+              { id: "ultra", label: "Ultrafast" },
+            ],
+            currentValue: "priority",
+          },
+        ],
+      },
+    },
+  ],
+};
+
+describe("subagent traits", () => {
+  it("shows the agent's saved effort and speed, including model display names", () => {
+    expect(resolveSubagentTraits({ subagent, provider })).toBe("high · Fast");
+  });
+
+  it("uses an app-owned child's selection when the agent has no saved selection", () => {
+    expect(
+      resolveSubagentTraits({
+        subagent: { ...subagent, modelSelection: undefined },
+        provider,
+        childThread: { modelSelection: selection },
+      }),
+    ).toBe("high · Fast");
+  });
+
+  it("does not use a provider-managed child's selection", () => {
+    expect(
+      resolveSubagentTraits({
+        subagent: { ...subagent, origin: "provider_native", modelSelection: undefined },
+        provider,
+        childThread: { modelSelection: selection },
+      }),
+    ).toBe("");
+  });
+
+  it.each([
+    { ...selection, instanceId: ProviderInstanceId.make("other") },
+    { ...selection, model: "other" },
+  ])("hides settings from a different model or provider instance", (modelSelection) => {
+    expect(resolveSubagentTraits({ subagent: { ...subagent, modelSelection }, provider })).toBe("");
+  });
+
+  it("does not fill missing settings from catalog defaults", () => {
+    expect(
+      resolveSubagentTraits({
+        subagent: { ...subagent, modelSelection: { ...selection, options: [] } },
+        provider,
+      }),
+    ).toBe("");
+  });
+
+  it("keeps the saved selection ahead of later child settings", () => {
+    expect(
+      resolveSubagentTraits({
+        subagent,
+        provider,
+        childThread: {
+          modelSelection: { ...selection, options: [{ id: "reasoningEffort", value: "low" }] },
+        },
+      }),
+    ).toBe("high · Fast");
+  });
+
+  it("shows Claude effort and boolean fast mode", () => {
+    expect(
+      resolveSubagentTraits({
+        subagent: {
+          ...subagent,
+          modelSelection: {
+            ...selection,
+            options: [
+              { id: "effort", value: "max" },
+              { id: "fastMode", value: true },
+            ],
+          },
+        },
+        provider: {
+          ...provider,
+          driver: ProviderDriverKind.make("claudeAgent"),
+          models: [
+            {
+              ...provider.models[0]!,
+              capabilities: {
+                optionDescriptors: [
+                  { id: "fastMode", label: "Fast", type: "boolean", currentValue: false },
+                ],
+              },
+            },
+          ],
+        },
+      }),
+    ).toBe("max · Fast");
+  });
+
+  it.each([
+    ["ultra", "Ultrafast"],
+    ["default", "Normal"],
+    ["removed", ""],
+  ])("shows only known saved speed values: %s", (value, label) => {
+    expect(
+      resolveSubagentTraits({
+        subagent: {
+          ...subagent,
+          modelSelection: { ...selection, options: [{ id: "serviceTier", value }] },
+        },
+        provider,
+      }),
+    ).toBe(label);
+  });
+});

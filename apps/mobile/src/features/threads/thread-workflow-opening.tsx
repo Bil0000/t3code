@@ -59,6 +59,7 @@ function memberRowSubagent(
     threadId: coordinatorThreadId,
     childThreadId: member.childThreadId as ThreadId | null,
     model: member.model,
+    origin: member.childThreadId === null ? ("provider_native" as const) : ("app_owned" as const),
     driver: opening.driver!,
     providerInstanceId: opening.providerInstanceId!,
     title: member.title,

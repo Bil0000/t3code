@@ -12,13 +12,15 @@ import { cn } from "../../lib/cn";
 import { useEnvironmentServerConfig, useProject, useThreadShell } from "../../state/entities";
 import { subagentCardDetail } from "./subagent-card-presentation";
 import { SUBAGENT_TONE_TEXT_CLASS, SubagentStatusDot } from "./SubagentStatusDot";
-import { resolveSubagentRowPresentation } from "./threadAgentsPresentation";
+import { resolveSubagentRowPresentation, resolveSubagentTraits } from "./threadAgentsPresentation";
 
 type SubagentRowSubagent = Pick<
   OrchestrationV2Subagent,
   | "threadId"
   | "childThreadId"
   | "model"
+  | "modelSelection"
+  | "origin"
   | "driver"
   | "providerInstanceId"
   | "title"
@@ -112,6 +114,7 @@ function SubagentMetadata(props: {
     parentProject,
     childProject,
   });
+  const traits = resolveSubagentTraits({ subagent, provider, childThread: child });
   return (
     <View className="min-w-0 flex-row items-center gap-1.5">
       <ProviderIcon
@@ -123,6 +126,7 @@ function SubagentMetadata(props: {
         {provider ? `${resolveProviderInstanceDisplayName(provider)} · ` : ""}
         {modelLabel}
       </Text>
+      {traits ? <Text className="shrink-0 text-xs text-foreground-muted">· {traits}</Text> : null}
       {workspace.map(({ label, value }) => (
         // The row reads this label in place of the icon. collapsable keeps the
         // view (and label) from being flattened away without making it a
