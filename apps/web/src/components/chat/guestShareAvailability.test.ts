@@ -14,7 +14,7 @@ const fixtures = await vi.hoisted(async () => {
     configs: Atom.make(new Map<string, { settings: { guestSharingEnabled: boolean } }>()),
     permissions: Atom.family<string, Atom.Writable<boolean>>(() => Atom.make(true)),
     shells: Atom.family<string, Atom.Writable<{ temporary: boolean } | null>>(() =>
-      Atom.make(null),
+      Atom.make<{ temporary: boolean } | null>(null),
     ),
   };
 });
