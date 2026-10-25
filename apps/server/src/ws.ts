@@ -830,6 +830,7 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
     if (!state.allowed)
       return yield* new OrchestrationV2GetThreadProjectionError({
         threadId: input.threadId,
+        ...(state.discarded ? { reason: "thread_not_found" as const } : {}),
         message: "Thread is unavailable to this client.",
       });
     const storage = yield* Effect.serviceOption(TemporaryThreadStorage.TemporaryThreadStorage);
@@ -860,6 +861,7 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
                 if (!current.allowed)
                   return yield* new OrchestrationV2GetThreadProjectionError({
                     threadId: input.threadId,
+                    ...(current.discarded ? { reason: "thread_not_found" as const } : {}),
                     message: "Thread is unavailable to this client.",
                   });
                 const { afterSequence, ...rest } = input;
@@ -1448,6 +1450,7 @@ export const layerWsRpc = (
           if (!state.allowed)
             return yield* new OrchestrationV2GetThreadProjectionError({
               threadId: input.threadId,
+              ...(state.discarded ? { reason: "thread_not_found" as const } : {}),
               message: "Thread is unavailable to this client.",
             });
         },

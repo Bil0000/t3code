@@ -476,6 +476,119 @@ const layerConfigSources = Layer.mergeAll(
   Layer.provideMerge(NodeServices.layer),
 );
 
+it.effect.each(
+  [
+    { discarded: true, acceptTemporaryThreads: true },
+    { discarded: true, acceptTemporaryThreads: false },
+    { discarded: false, acceptTemporaryThreads: false },
+    { discarded: false, acceptTemporaryThreads: true },
+  ].flatMap((state) =>
+    [
+      { tag: ORCHESTRATION_V2_WS_METHODS.getThreadProjection },
+      { tag: ORCHESTRATION_V2_WS_METHODS.subscribeThread, acceptBoundedSnapshot: false },
+      { tag: ORCHESTRATION_V2_WS_METHODS.subscribeThread, acceptBoundedSnapshot: true },
+    ].map((request) => ({ ...state, ...request })),
+  ),
+)("marks only discarded temporary thread RPC reads as missing: %s", (state) =>
+  Effect.gen(function* () {
+    const services = yield* Layer.build(
+      Layer.mergeAll(
+        layerUnusedConfigRpcServices,
+        Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({}),
+        Layer.mock(ServerBrowser.ServerBrowser)({}),
+      ).pipe(Layer.provideMerge(layerConfigSources)),
+    );
+    const storage = Context.get(services, TemporaryThreadStorage.TemporaryThreadStorage);
+    const threadId = ThreadId.make("temporary-rpc-read");
+    yield* storage.register({ threadId });
+    if (state.discarded) yield* storage.discard(threadId);
+    const cause = new Orchestrator.OrchestratorProjectionError({ threadId });
+    let reads = 0;
+    const read = () => Effect.sync(() => reads++).pipe(Effect.andThen(Effect.fail(cause)));
+    const responses = yield* Queue.unbounded<Exit.Exit<unknown, unknown>>();
+    const server = yield* RpcServer.makeNoSerialization(
+      RpcGroup.make(
+        Rpc.make(ORCHESTRATION_V2_WS_METHODS.getThreadProjection, {
+          payload: OrchestrationV2RpcSchemas.getThreadProjection.input,
+          error: OrchestrationV2GetThreadProjectionError,
+        }),
+        Rpc.make(ORCHESTRATION_V2_WS_METHODS.subscribeThread, {
+          payload: OrchestrationV2RpcSchemas.subscribeThread.input,
+          error: OrchestrationV2GetThreadProjectionError,
+          stream: true,
+        }),
+      ),
+      {
+        ...WS_RPC_SERVER_OPTIONS,
+        onFromServer: (response) =>
+          response._tag === "Exit"
+            ? Queue.offer(responses, response.exit).pipe(Effect.asVoid)
+            : Effect.void,
+      },
+    ).pipe(
+      Effect.provide(
+        layerWsRpc(
+          {
+            sessionId: AuthSessionId.make("temporary-rpc-read"),
+            subject: "temporary-rpc-read",
+            method: "browser-session-cookie",
+            scopes: [],
+          },
+          {},
+          {},
+          Context.get(services, PreviewAutomationBroker.PreviewAutomationBroker),
+          Context.get(services, ServerBrowser.ServerBrowser),
+          yield* Effect.scope,
+        ).pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              Layer.mock(BackgroundPolicy.BackgroundPolicy)({ removeRpcClient: () => Effect.void }),
+              Layer.mock(EventLoopMonitor.EventLoopMonitor)({}),
+              Layer.mock(ExternalLauncher.ExternalLauncher)({}),
+              Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({}),
+              Layer.mock(DirectEndpoints.DirectEndpoints)({}),
+              Layer.mock(ProviderRegistry.ProviderRegistry)({}),
+              Layer.mock(UsageLimitSources.UsageLimitSources)({}),
+              Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+                namedProjectsRoot: process.cwd(),
+              }),
+              Layer.mock(ServerEnvironment.ServerEnvironment)({}),
+              Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
+              Layer.mock(ThreadManagement.ThreadManagementService)({
+                ensureLegacyTranscript: () => Effect.void,
+                getThreadSnapshot: read,
+                getThreadSnapshotWindow: read,
+              }),
+            ),
+          ),
+          Layer.provide(Layer.succeedContext(services)),
+        ),
+      ),
+    );
+    yield* server.write(0, {
+      _tag: "Request",
+      id: RpcMessage.RequestId("read"),
+      tag: state.tag,
+      payload: { threadId, ...state },
+      headers: Headers.empty,
+    });
+    const result = yield* Queue.take(responses);
+    assert.isTrue(Exit.isFailure(result));
+    if (Exit.isFailure(result)) {
+      const error = result.cause.reasons[0];
+      assert.equal(error?._tag, "Fail");
+      if (error?._tag === "Fail") {
+        assert.instanceOf(error.error, OrchestrationV2GetThreadProjectionError);
+        if (state.discarded) assert.deepInclude(error.error, { reason: "thread_not_found" });
+        else assert.notProperty(error.error, "reason");
+        if (state.acceptTemporaryThreads && !state.discarded)
+          assert.deepInclude(error.error, { cause });
+      }
+    }
+    assert.equal(reads, state.acceptTemporaryThreads && !state.discarded ? 1 : 0);
+  }).pipe(Effect.scoped),
+);
+
 it.effect.each([false, true])(
   "expires a reloaded socket view after handler setup returns with another tab=%s",
   (anotherTab) =>
