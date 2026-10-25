@@ -755,7 +755,9 @@ describe("environment shell synchronization", () => {
       expect(snapshots.length).toBeGreaterThan(0);
       expect(snapshots.at(-1)?.snapshotSequence).toBe(5);
       for (const snapshot of snapshots) {
-        expect([...snapshot.threads, ...snapshot.archivedThreads]).not.toContainEqual(temporary);
+        expect(
+          [...snapshot.threads, ...snapshot.archivedThreads].map((thread) => thread.id),
+        ).not.toContain(temporary.id);
       }
     }),
   );
