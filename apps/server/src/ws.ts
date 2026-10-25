@@ -402,13 +402,15 @@ export const persistChatAttachments = Effect.fn("ws.assets.persistChatAttachment
     }>;
   }) {
     const policy = yield* TemporaryResourcePolicy.make;
-    yield* policy
-      .assertDurable(input.threadId, "image attachments")
-      .pipe(
-        Effect.mapError(
-          (cause) => new PersistChatAttachmentsError({ message: cause.message, cause }),
-        ),
-      );
+    yield* policy.assertDurable(input.threadId, "image attachments").pipe(
+      Effect.mapError(
+        (cause) =>
+          new PersistChatAttachmentsError({
+            message: "Image attachments are unavailable for this thread.",
+            cause,
+          }),
+      ),
+    );
     const config = yield* ServerConfig.ServerConfig;
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -2210,14 +2212,17 @@ export const layerWsRpc = (
           ),
         [ORCHESTRATION_V2_WS_METHODS.getTurnItem]: (input) =>
           requireThreadRead(input).pipe(
-            Effect.andThen(threadManagement.getTurnItem(input)),
-            Effect.mapError(
-              (cause) =>
-                new OrchestrationV2GetThreadProjectionError({
-                  threadId: input.threadId,
-                  message: "Failed to load turn item",
-                  cause,
-                }),
+            Effect.andThen(
+              threadManagement.getTurnItem(input).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new OrchestrationV2GetThreadProjectionError({
+                      threadId: input.threadId,
+                      message: "Failed to load turn item",
+                      cause,
+                    }),
+                ),
+              ),
             ),
           ),
         [ORCHESTRATION_V2_WS_METHODS.getTurnDiff]: (input) =>
@@ -2488,7 +2493,7 @@ export const layerWsRpc = (
                     (cause) =>
                       new OrchestrationV2CommandOutputError({
                         threadId: input.threadId,
-                        message: cause.message,
+                        message: "Thread is unavailable to this client.",
                         cause,
                       }),
                   ),
@@ -3187,7 +3192,10 @@ export const layerWsRpc = (
           issueAttachmentUploadUrl(input).pipe(
             Effect.catchTags({
               TemporaryResourceError: (cause) =>
-                new OrchestrationV2TemporaryThreadError({ message: cause.message, cause }),
+                new OrchestrationV2TemporaryThreadError({
+                  message: "File attachments are unavailable for this thread.",
+                  cause,
+                }),
             }),
           ),
         [WS_METHODS.attachmentsDelete]: (input) => deletePendingAttachment(input.attachmentId),

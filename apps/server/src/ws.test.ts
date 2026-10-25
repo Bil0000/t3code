@@ -18,6 +18,8 @@ import {
   type OrchestrationV2WorktreeThreadIds,
   ThreadId,
   ProviderDriverKind,
+  TurnItemId,
+  TemporaryResourceError,
   WS_METHODS,
   WsServerRefreshProvidersRpc,
   WsSubscribeServerConfigRpc,
@@ -157,6 +159,7 @@ const isTurnDiffError = Schema.is(OrchestrationGetTurnDiffError);
 const isFullThreadDiffError = Schema.is(OrchestrationGetFullThreadDiffError);
 const isCheckpointTurnRangeUnavailableError = Schema.is(CheckpointTurnRangeUnavailableError);
 const isThreadProjectionError = Schema.is(OrchestrationV2GetThreadProjectionError);
+const isTemporaryResourceError = Schema.is(TemporaryResourceError);
 
 it.effect("rejects temporary image persistence before writing attachment bytes", () =>
   Effect.gen(function* () {
@@ -199,7 +202,10 @@ it.effect("rejects temporary image persistence before writing attachment bytes",
       ),
     );
     assert.strictEqual(result._tag, "Failure");
-    if (result._tag === "Failure") assert.include(result.failure.message, "Keep this thread");
+    if (result._tag === "Failure") {
+      assert.isTrue(isTemporaryResourceError(result.failure.cause));
+      assert.deepInclude(result.failure.cause, { resource: "image attachments" });
+    }
     assert.deepEqual(writes, []);
   }),
 );
@@ -1068,18 +1074,21 @@ it.effect.each(
 
 it.effect.each(
   [
-    { discarded: true, acceptTemporaryThreads: true },
-    { discarded: true, acceptTemporaryThreads: false },
-    { discarded: false, acceptTemporaryThreads: false },
-    { discarded: false, acceptTemporaryThreads: true },
+    { discarded: true, acceptTemporaryThreads: true, saved: false },
+    { discarded: true, acceptTemporaryThreads: false, saved: false },
+    { discarded: false, acceptTemporaryThreads: false, saved: false },
+    { discarded: false, acceptTemporaryThreads: true, saved: false },
+    { discarded: false, acceptTemporaryThreads: false, saved: true },
+    { discarded: false, acceptTemporaryThreads: true, saved: true },
   ].flatMap((state) =>
     [
       { tag: ORCHESTRATION_V2_WS_METHODS.getThreadProjection },
+      { tag: ORCHESTRATION_V2_WS_METHODS.getTurnItem },
       { tag: ORCHESTRATION_V2_WS_METHODS.subscribeThread, acceptBoundedSnapshot: false },
       { tag: ORCHESTRATION_V2_WS_METHODS.subscribeThread, acceptBoundedSnapshot: true },
     ].map((request) => ({ ...state, ...request })),
   ),
-)("marks only discarded temporary thread RPC reads as missing: %s", (state) =>
+)("preserves guard reasons for temporary thread RPC reads: %s", (state) =>
   Effect.gen(function* () {
     const services = yield* Layer.build(
       Layer.mergeAll(
@@ -1090,7 +1099,7 @@ it.effect.each(
     );
     const storage = Context.get(services, TemporaryThreadStorage.TemporaryThreadStorage);
     const threadId = ThreadId.make("temporary-rpc-read");
-    yield* storage.register({ threadId });
+    if (!state.saved) yield* storage.register({ threadId });
     if (state.discarded) yield* storage.discard(threadId);
     const cause = new Orchestrator.OrchestratorProjectionError({ threadId });
     let reads = 0;
@@ -1100,6 +1109,10 @@ it.effect.each(
       RpcGroup.make(
         Rpc.make(ORCHESTRATION_V2_WS_METHODS.getThreadProjection, {
           payload: OrchestrationV2RpcSchemas.getThreadProjection.input,
+          error: OrchestrationV2GetThreadProjectionError,
+        }),
+        Rpc.make(ORCHESTRATION_V2_WS_METHODS.getTurnItem, {
+          payload: OrchestrationV2RpcSchemas.getTurnItem.input,
           error: OrchestrationV2GetThreadProjectionError,
         }),
         Rpc.make(ORCHESTRATION_V2_WS_METHODS.subscribeThread, {
@@ -1148,6 +1161,8 @@ it.effect.each(
                 ensureLegacyTranscript: () => Effect.void,
                 getThreadSnapshot: read,
                 getThreadSnapshotWindow: read,
+                getTurnItem: () =>
+                  state.saved ? Effect.sync(() => reads++).pipe(Effect.as({ item: null })) : read(),
               }),
             ),
           ),
@@ -1159,23 +1174,38 @@ it.effect.each(
       _tag: "Request",
       id: RpcMessage.RequestId("read"),
       tag: state.tag,
-      payload: { threadId, ...state },
+      payload: { threadId, itemId: TurnItemId.make("item"), ...state },
       headers: Headers.empty,
     });
     const result = yield* Queue.take(responses);
+    if (state.saved && state.tag === ORCHESTRATION_V2_WS_METHODS.getTurnItem) {
+      assert.isTrue(Exit.isSuccess(result));
+      if (Exit.isSuccess(result)) assert.deepEqual(result.value, { item: null });
+      assert.equal(reads, 1);
+      return;
+    }
+    const allowed = state.saved || (state.acceptTemporaryThreads && !state.discarded);
     assert.isTrue(Exit.isFailure(result));
     if (Exit.isFailure(result)) {
       const error = result.cause.reasons[0];
       assert.equal(error?._tag, "Fail");
       if (error?._tag === "Fail") {
-        assert.instanceOf(error.error, OrchestrationV2GetThreadProjectionError);
-        if (state.discarded) assert.deepInclude(error.error, { reason: "thread_not_found" });
-        else assert.notProperty(error.error, "reason");
-        if (state.acceptTemporaryThreads && !state.discarded)
-          assert.deepInclude(error.error, { cause });
+        assert.isTrue(isThreadProjectionError(error.error));
+        if (isThreadProjectionError(error.error)) {
+          if (state.discarded) assert.equal(error.error.reason, "thread_not_found");
+          else assert.notProperty(error.error, "reason");
+          if (allowed) {
+            assert.deepInclude(error.error, { cause });
+            if (state.tag === ORCHESTRATION_V2_WS_METHODS.getTurnItem)
+              assert.equal(error.error.message, "Failed to load turn item");
+          } else {
+            assert.equal(error.error.message, "Thread is unavailable to this client.");
+            assert.notProperty(error.error, "cause");
+          }
+        }
       }
     }
-    assert.equal(reads, state.acceptTemporaryThreads && !state.discarded ? 1 : 0);
+    assert.equal(reads, allowed ? 1 : 0);
   }).pipe(Effect.scoped),
 );
 
