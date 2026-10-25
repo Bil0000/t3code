@@ -844,6 +844,14 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
         }),
       ),
       agentTarget: Effect.fn("DeviceService.agentTarget")(function* (input) {
+        yield* policy
+          .assertDurable(input.threadId, "device sessions")
+          .pipe(
+            Effect.mapError(
+              (error) =>
+                new DeviceHostUnavailableError({ hostId: input.hostId, reason: error.message }),
+            ),
+          );
         const host = yield* resolveHost(input.hostId);
         const ready = yield* agentReadinessIfSupported(input.hostId);
         if (!ready)
