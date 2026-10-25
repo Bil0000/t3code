@@ -24,7 +24,7 @@ export function resolveSubagentTraits(input: {
   readonly childThread?:
     | Pick<OrchestrationV2ThreadShell, "providerInstanceId" | "modelSelection">
     | undefined;
-}): string {
+}) {
   const { subagent, childThread } = input;
   const childSelection =
     subagent.origin === "app_owned" &&
@@ -51,7 +51,7 @@ export function resolveSubagentTraits(input: {
     selectedModel !== modelSlug ||
     selection.instanceId !== (childProvider?.instanceId ?? subagent.providerInstanceId)
   )
-    return "";
+    return { traits: "", providerInstanceId: subagent.providerInstanceId };
 
   const effort = formatModelSelectionEffort({ ...selection, model: modelSlug }, provider?.models);
   const descriptors =
@@ -88,7 +88,10 @@ export function resolveSubagentTraits(input: {
           ultrathinkPromptControlled: false,
         }).label
       : null;
-  return [effort, speedLabel].filter(Boolean).join(" · ");
+  return {
+    traits: [effort, speedLabel].filter(Boolean).join(" · "),
+    providerInstanceId: childProvider?.instanceId ?? subagent.providerInstanceId,
+  };
 }
 
 export type SubagentRowTone = "working" | "completed" | "failed" | "stopped";

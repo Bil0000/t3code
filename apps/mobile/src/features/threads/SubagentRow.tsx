@@ -95,7 +95,7 @@ function SubagentMetadata(props: {
 }) {
   const { environmentId, subagent } = props;
   const config = useEnvironmentServerConfig(environmentId);
-  const provider = config?.providers.find(
+  const sourceProvider = config?.providers.find(
     (candidate) => candidate.instanceId === subagent.providerInstanceId,
   );
   const parent = useThreadShell(scopeThreadRef(environmentId, subagent.threadId))?.source;
@@ -106,6 +106,17 @@ function SubagentMetadata(props: {
     parent ? scopeProjectRef(environmentId, parent.projectId) : null,
   );
   const childProject = useProject(child ? scopeProjectRef(environmentId, child.projectId) : null);
+  const { traits, providerInstanceId } = resolveSubagentTraits({
+    subagent,
+    provider: sourceProvider,
+    childThread: child,
+    childProvider: config?.providers.find(
+      (candidate) => candidate.instanceId === child?.providerInstanceId,
+    ),
+  });
+  const provider = config?.providers.find(
+    (candidate) => candidate.instanceId === providerInstanceId,
+  );
   const { modelLabel, workspace } = resolveSubagentMetadata({
     model: subagent.model,
     provider,
@@ -113,14 +124,6 @@ function SubagentMetadata(props: {
     childThread: child,
     parentProject,
     childProject,
-  });
-  const traits = resolveSubagentTraits({
-    subagent,
-    provider,
-    childThread: child,
-    childProvider: config?.providers.find(
-      (candidate) => candidate.instanceId === child?.providerInstanceId,
-    ),
   });
   return (
     <View className="min-w-0 flex-row items-center gap-1.5">
@@ -132,8 +135,8 @@ function SubagentMetadata(props: {
       <Text className="min-w-0 shrink text-xs text-foreground-muted" numberOfLines={1}>
         {provider ? `${resolveProviderInstanceDisplayName(provider)} · ` : ""}
         {modelLabel}
+        {traits ? ` · ${traits}` : ""}
       </Text>
-      {traits ? <Text className="shrink-0 text-xs text-foreground-muted">· {traits}</Text> : null}
       {workspace.map(({ label, value }) => (
         // The row reads this label in place of the icon. collapsable keeps the
         // view (and label) from being flattened away without making it a

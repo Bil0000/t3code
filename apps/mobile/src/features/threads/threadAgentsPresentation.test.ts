@@ -59,7 +59,7 @@ describe("subagent traits", () => {
           modelSelection: { ...selection, model: "missing-selection-model" },
         },
         provider,
-      }),
+      }).traits,
     ).toBe("");
   });
 
@@ -71,11 +71,11 @@ describe("subagent traits", () => {
           modelSelection: { ...selection, options: [{ id: "reasoningEffort", value: "removed" }] },
         },
         provider,
-      }),
+      }).traits,
     ).toBe("");
   });
   it("shows the agent's saved effort and speed, including model display names", () => {
-    expect(resolveSubagentTraits({ subagent, provider })).toBe("High · Fast");
+    expect(resolveSubagentTraits({ subagent, provider }).traits).toBe("High · Fast");
   });
 
   it("uses an app-owned child's selection when the agent has no saved selection", () => {
@@ -84,7 +84,7 @@ describe("subagent traits", () => {
         subagent: { ...subagent, modelSelection: undefined },
         provider,
         childThread: { providerInstanceId: instanceId, modelSelection: selection },
-      }),
+      }).traits,
     ).toBe("High · Fast");
   });
 
@@ -94,7 +94,7 @@ describe("subagent traits", () => {
         subagent: { ...subagent, origin: "provider_native", modelSelection: undefined },
         provider,
         childThread: { providerInstanceId: instanceId, modelSelection: selection },
-      }),
+      }).traits,
     ).toBe("");
   });
 
@@ -102,7 +102,9 @@ describe("subagent traits", () => {
     { ...selection, instanceId: ProviderInstanceId.make("other") },
     { ...selection, model: "other" },
   ])("hides settings from a different model or provider instance", (modelSelection) => {
-    expect(resolveSubagentTraits({ subagent: { ...subagent, modelSelection }, provider })).toBe("");
+    expect(
+      resolveSubagentTraits({ subagent: { ...subagent, modelSelection }, provider }).traits,
+    ).toBe("");
   });
 
   it("does not fill missing settings from catalog defaults", () => {
@@ -110,7 +112,7 @@ describe("subagent traits", () => {
       resolveSubagentTraits({
         subagent: { ...subagent, modelSelection: { ...selection, options: [] } },
         provider,
-      }),
+      }).traits,
     ).toBe("");
   });
 
@@ -123,7 +125,7 @@ describe("subagent traits", () => {
           providerInstanceId: instanceId,
           modelSelection: { ...selection, options: [{ id: "reasoningEffort", value: "low" }] },
         },
-      }),
+      }).traits,
     ).toBe("High · Fast");
   });
 
@@ -160,7 +162,7 @@ describe("subagent traits", () => {
             },
           ],
         },
-      }),
+      }).traits,
     ).toBe("Max · Fast");
   });
 
@@ -176,7 +178,7 @@ describe("subagent traits", () => {
           modelSelection: { ...selection, options: [{ id: "serviceTier", value }] },
         },
         provider,
-      }),
+      }).traits,
     ).toBe(label);
   });
 
@@ -218,34 +220,40 @@ describe("subagent traits", () => {
       childProvider,
       childThread: { providerInstanceId: childInstanceId, modelSelection: childSelection },
     };
-    expect(resolveSubagentTraits(input)).toBe("Max · Fast");
-    expect(resolveSubagentTraits({ ...input, subagent })).toBe("High · Fast");
+    expect(resolveSubagentTraits(input)).toEqual({
+      traits: "Max · Fast",
+      providerInstanceId: childInstanceId,
+    });
+    expect(resolveSubagentTraits({ ...input, subagent })).toEqual({
+      traits: "High · Fast",
+      providerInstanceId: instanceId,
+    });
     expect(
       resolveSubagentTraits({
         ...input,
         subagent: { ...input.subagent, origin: "provider_native" },
-      }),
+      }).traits,
     ).toBe("");
-    expect(resolveSubagentTraits({ ...input, childThread: undefined })).toBe("");
-    expect(resolveSubagentTraits({ ...input, childProvider: undefined })).toBe("");
+    expect(resolveSubagentTraits({ ...input, childThread: undefined }).traits).toBe("");
+    expect(resolveSubagentTraits({ ...input, childProvider: undefined }).traits).toBe("");
     expect(
       resolveSubagentTraits({
         ...input,
         childThread: { ...input.childThread, providerInstanceId: instanceId },
-      }),
+      }).traits,
     ).toBe("");
     expect(
-      resolveSubagentTraits({ ...input, childProvider: { ...childProvider, instanceId } }),
+      resolveSubagentTraits({ ...input, childProvider: { ...childProvider, instanceId } }).traits,
     ).toBe("");
     expect(
       resolveSubagentTraits({ ...input, subagent: { ...input.subagent, model: "another-model" } }),
-    ).toBe("");
+    ).toEqual({ traits: "", providerInstanceId: instanceId });
     expect(
       resolveSubagentTraits({
         subagent: { ...subagent, modelSelection: undefined },
         provider,
         childThread: { providerInstanceId: childInstanceId, modelSelection: selection },
-      }),
+      }).traits,
     ).toBe("");
   });
 });
