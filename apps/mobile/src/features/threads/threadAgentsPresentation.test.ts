@@ -106,7 +106,11 @@ describe("subagent traits", () => {
     ).toBe("");
   });
   it("shows the agent's saved effort and speed, including model display names", () => {
-    expect(resolveSubagentTraits({ subagent, provider }).traits).toBe("High · Fast");
+    expect(resolveSubagentTraits({ subagent, provider })).toEqual({
+      traits: "High",
+      speedIcon: "fast",
+      providerInstanceId: instanceId,
+    });
   });
 
   it("uses an app-owned child's selection when the agent has no saved selection", () => {
@@ -116,7 +120,7 @@ describe("subagent traits", () => {
         provider,
         childThread: { providerInstanceId: instanceId, modelSelection: selection },
       }).traits,
-    ).toBe("High · Fast");
+    ).toBe("High");
   });
 
   it("does not use a provider-managed child's selection", () => {
@@ -157,7 +161,7 @@ describe("subagent traits", () => {
           modelSelection: { ...selection, options: [{ id: "reasoningEffort", value: "low" }] },
         },
       }).traits,
-    ).toBe("High · Fast");
+    ).toBe("High");
   });
 
   it("shows Claude effort and boolean fast mode", () => {
@@ -194,14 +198,14 @@ describe("subagent traits", () => {
           ],
         },
       }).traits,
-    ).toBe("Max · Fast");
+    ).toBe("Max");
   });
 
   it.each([
-    ["ultra", "Ultrafast"],
-    ["default", "Normal"],
-    ["removed", ""],
-  ])("shows only known saved speed values: %s", (value, label) => {
+    ["ultra", "ultrafast"],
+    ["default", null],
+    ["removed", null],
+  ])("shows only known saved speed icons: %s", (value, icon) => {
     expect(
       resolveSubagentTraits({
         subagent: {
@@ -209,8 +213,8 @@ describe("subagent traits", () => {
           modelSelection: { ...selection, options: [{ id: "serviceTier", value }] },
         },
         provider,
-      }).traits,
-    ).toBe(label);
+      }).speedIcon,
+    ).toBe(icon);
   });
 
   it("uses a validated app-owned child's provider for cross-provider workflow traits", () => {
@@ -252,11 +256,13 @@ describe("subagent traits", () => {
       childThread: { providerInstanceId: childInstanceId, modelSelection: childSelection },
     };
     expect(resolveSubagentTraits(input)).toEqual({
-      traits: "Max · Fast",
+      traits: "Max",
+      speedIcon: "fast",
       providerInstanceId: childInstanceId,
     });
     expect(resolveSubagentTraits({ ...input, subagent })).toEqual({
-      traits: "High · Fast",
+      traits: "High",
+      speedIcon: "fast",
       providerInstanceId: instanceId,
     });
     expect(
@@ -278,7 +284,7 @@ describe("subagent traits", () => {
     ).toBe("");
     expect(
       resolveSubagentTraits({ ...input, subagent: { ...input.subagent, model: "another-model" } }),
-    ).toEqual({ traits: "", providerInstanceId: instanceId });
+    ).toEqual({ traits: "", speedIcon: null, providerInstanceId: instanceId });
     expect(
       resolveSubagentTraits({
         subagent: { ...subagent, modelSelection: undefined },

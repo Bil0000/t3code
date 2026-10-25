@@ -79,7 +79,7 @@ export function resolveSubagentTraits(input: {
     selectedModel !== modelSlug ||
     selection.instanceId !== (childProvider?.instanceId ?? subagent.providerInstanceId)
   )
-    return { traits: "", providerInstanceId: subagent.providerInstanceId };
+    return { traits: "", speedIcon: null, providerInstanceId: subagent.providerInstanceId };
 
   const effort = formatModelSelectionEffort({ ...selection, model: modelSlug }, provider?.models);
   const descriptors =
@@ -116,8 +116,11 @@ export function resolveSubagentTraits(input: {
           ultrathinkPromptControlled: false,
         }).label
       : null;
+  const speedIcon =
+    speedLabel === "Fast" ? "fast" : speedLabel === "Ultrafast" ? "ultrafast" : null;
   return {
-    traits: [effort, speedLabel].filter(Boolean).join(" · "),
+    traits: effort ?? "",
+    speedIcon,
     providerInstanceId: childProvider?.instanceId ?? subagent.providerInstanceId,
   };
 }

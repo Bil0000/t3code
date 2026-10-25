@@ -4,6 +4,8 @@ import { resolveSubagentMetadata } from "@t3tools/client-runtime/state/subagent-
 import type { EnvironmentId, OrchestrationV2Subagent } from "@t3tools/contracts";
 import type { ReactNode } from "react";
 import { View } from "react-native";
+import Svg, { Path } from "react-native-svg";
+import { withUniwind } from "uniwind";
 
 import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
@@ -13,6 +15,8 @@ import { useEnvironmentServerConfig, useProject, useThreadShell } from "../../st
 import { subagentCardDetail } from "./subagent-card-presentation";
 import { SUBAGENT_TONE_TEXT_CLASS, SubagentStatusDot } from "./SubagentStatusDot";
 import { resolveSubagentRowPresentation, resolveSubagentTraits } from "./threadAgentsPresentation";
+
+const ThemedSvg = withUniwind(Svg);
 
 type SubagentRowSubagent = Pick<
   OrchestrationV2Subagent,
@@ -106,7 +110,7 @@ function SubagentMetadata(props: {
     parent ? scopeProjectRef(environmentId, parent.projectId) : null,
   );
   const childProject = useProject(child ? scopeProjectRef(environmentId, child.projectId) : null);
-  const { traits, providerInstanceId } = resolveSubagentTraits({
+  const { traits, speedIcon, providerInstanceId } = resolveSubagentTraits({
     subagent,
     provider: sourceProvider,
     childThread: child,
@@ -125,6 +129,7 @@ function SubagentMetadata(props: {
     parentProject,
     childProject,
   });
+  const modelText = `${provider ? `${resolveProviderInstanceDisplayName(provider)} · ` : ""}${modelLabel}`;
   return (
     <View className="min-w-0 flex-row items-center gap-1.5">
       <ProviderIcon
@@ -132,10 +137,48 @@ function SubagentMetadata(props: {
         iconUrl={provider?.iconUrl}
         size={12}
       />
-      <Text className="min-w-0 shrink text-xs text-foreground-muted" numberOfLines={1}>
-        {provider ? `${resolveProviderInstanceDisplayName(provider)} · ` : ""}
-        {modelLabel}
-        {traits ? ` · ${traits}` : ""}
+      <Text
+        className="min-w-0 shrink text-xs text-foreground-muted"
+        numberOfLines={1}
+        accessibilityLabel={[
+          modelText,
+          speedIcon ? `${speedIcon === "ultrafast" ? "Ultrafast" : "Fast"} mode on` : null,
+          traits,
+        ]
+          .filter(Boolean)
+          .join(" · ")}
+      >
+        {modelText}
+        {traits || speedIcon ? " · " : ""}
+        {speedIcon ? (
+          <ThemedSvg
+            width={12}
+            height={12}
+            viewBox="0 0 24 24"
+            colorClassName="accent-foreground-muted"
+            fill="currentColor"
+            opacity={0.8}
+            accessibilityElementsHidden
+            importantForAccessibility="no"
+          >
+            {speedIcon === "ultrafast" ? (
+              <>
+                <Path d="m17 2-10 12h7l-1 8 10-12h-7l1-8Z" opacity={0.4} />
+                <Path d="m11 2-10 12h7l-1 8 10-12h-7l1-8Z" />
+              </>
+            ) : (
+              <Path
+                d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"
+                stroke="currentColor"
+                strokeWidth={2}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            )}
+          </ThemedSvg>
+        ) : null}
+        {speedIcon && traits ? " " : ""}
+        {traits}
       </Text>
       {workspace.map(({ label, value }) => (
         // Preserve the label against flattening without making it a separate accessibility stop.
