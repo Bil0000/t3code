@@ -5,11 +5,19 @@ import type { QueuedThreadMessage } from "./thread-outbox-model";
 import type { ThreadNavigationState } from "../features/threads/thread-route-state";
 
 const transport = vi.hoisted(() => ({
+  platform: "ios",
   send: async (_input: { input: { threadIds: string[] } }) => AsyncResult.success(undefined),
   write: async () => {},
 }));
 
-vi.mock("react-native", () => ({ AppState: { currentState: "active" }, Platform: { OS: "ios" } }));
+vi.mock("react-native", () => ({
+  AppState: { currentState: "active" },
+  Platform: {
+    get OS() {
+      return transport.platform;
+    },
+  },
+}));
 vi.mock("@react-navigation/native", () => ({ useNavigation: () => ({}) }));
 vi.mock("@t3tools/client-runtime/state/runtime", () => ({
   runAtomCommand: (
@@ -60,7 +68,8 @@ function deferred() {
   return { promise, resolve };
 }
 
-function setup(id: string) {
+function setup(id: string, platform = "ios") {
+  transport.platform = platform;
   const message: QueuedThreadMessage = {
     environmentId: EnvironmentId.make("env"),
     threadId: ThreadId.make(id),
@@ -248,6 +257,28 @@ describe("reserved temporary draft navigation", () => {
     expect(test.submitted()).toBe(0);
     expect(test.sent.at(-1)).toEqual([]);
   });
+
+  it.each(["ios", "android"])(
+    "retains queued work under workspace overlays on %s and releases it for Settings",
+    async (platform) => {
+      const test = setup(`overlays-${platform}`, platform);
+      await enqueueTemporaryDraftThread(test.message, test.getState, test.submit);
+      const chat = test.getState().routes[0]!;
+      for (const name of ["Connections", "SettingsAuth", "SettingsWaitlist"]) {
+        test.setState({ index: 1, routes: [chat, { name }] });
+        await reconcileTemporaryThreadViews();
+        expect(isTemporaryThreadViewOpen("env", test.message.threadId)).toBe(true);
+        expect(test.queued()).toEqual([test.message]);
+        expect(test.sent.at(-1)).toEqual([test.message.threadId]);
+      }
+      test.setState({ index: 1, routes: [chat, { name: "Settings" }] });
+      await reconcileTemporaryThreadViews();
+      expect(isTemporaryThreadViewOpen("env", test.message.threadId)).toBe(false);
+      expect(test.queued()).toEqual([]);
+      expect(test.sent.at(-1)).toEqual([]);
+      await test.leave();
+    },
+  );
 
   it("preserves queued work when Keep completes in the selected chat", async () => {
     const test = setup("keep");
