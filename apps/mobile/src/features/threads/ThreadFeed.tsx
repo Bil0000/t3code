@@ -1231,6 +1231,7 @@ function renderFeedEntry(
     | "threadId"
     | "workspaceRoot"
   > & {
+    readonly temporary: boolean;
     readonly copiedRowId: string | null;
     readonly expandedWorkRows: Record<string, boolean>;
     readonly workRowSizing: ReturnType<typeof deriveThreadWorkLogSizing>;
@@ -1309,10 +1310,7 @@ function renderFeedEntry(
     return <ThreadThinkingRow rowSizing={props.workRowSizing} iconSubtleColor={iconSubtleColor} />;
   }
 
-  if (
-    (entry.type === "html-render" || entry.type === "mcp-app") &&
-    isTemporaryThread(props.environmentId, props.threadId)
-  )
+  if ((entry.type === "html-render" || entry.type === "mcp-app") && props.temporary)
     return <Text className="text-xs text-foreground-muted">Keep thread to open media.</Text>;
   if (entry.type === "html-render") {
     return (
@@ -2094,6 +2092,9 @@ function useThreadFeedPresentation(
 
 export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const { listRef, onEndFollowEnabledChange, onHeaderMaterialVisibilityChange } = props;
+  const temporary =
+    useQuietThreadShell(scopeThreadRef(props.environmentId, props.threadId))?.temporary === true ||
+    isTemporaryThread(props.environmentId, props.threadId);
   const workflowOpening = useWorkflowOpening(props.environmentId, props.threadId);
   const deviceType = useDeviceType();
   const duoColumns = useNativeWorkspaceColumnsSupported() && isDuoDevice(deviceType);
@@ -2487,7 +2488,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     },
   };
   const renderMarkdownImage: MarkdownImageRenderer = (image) => {
-    if (isTemporaryThread(props.environmentId, props.threadId))
+    if (temporary)
       return <Text className="text-xs text-foreground-muted">Keep thread to open media.</Text>;
     const media = resolveMarkdownMediaPreview(image.href, {
       environmentId: props.environmentId,
@@ -2541,7 +2542,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     );
   };
   const renderViewedImage: MarkdownImageRenderer = (image) => {
-    if (isTemporaryThread(props.environmentId, props.threadId))
+    if (temporary)
       return <Text className="text-xs text-foreground-muted">Keep thread to open media.</Text>;
     const viewedImage = resolveViewedImageAsset(image.href, {
       threadId: props.threadId,
@@ -2592,6 +2593,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   // Include turn completion so unchanged message rows reveal their footer and spacing
   // even when the final message update arrives before the turn settles.
   const listAppearanceData = {
+    temporary,
     worktreeSetup: props.worktreeSetup,
     setupWorkingStartedAt: props.setupWorkingStartedAt,
     dispatchingMessageId: props.dispatchingMessageId,
@@ -3067,6 +3069,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       >
         <ThreadMediaVisibility>
           {renderFeedEntry(info, {
+            temporary,
             environmentId: props.environmentId,
             dispatchingMessageId: props.dispatchingMessageId,
             onEditPendingMessage: props.onEditPendingMessage,

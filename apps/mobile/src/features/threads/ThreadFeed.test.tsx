@@ -1,0 +1,287 @@
+import { act, createContext, type ComponentProps, type ReactNode } from "react";
+import { createRoot } from "react-dom/client";
+import * as NodeModule from "node:module";
+import { expect, it, vi } from "vite-plus/test";
+import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { setTemporaryThread } from "@t3tools/client-runtime/temporary-threads";
+
+const { JSDOM } = NodeModule.createRequire(import.meta.url)("jsdom") as {
+  JSDOM: new (html: string) => { window: { document: Document; close(): void } };
+};
+
+const state = vi.hoisted(() => ({
+  shell: { temporary: true },
+  listeners: new Set<() => void>(),
+}));
+vi.mock("react-native", () => ({
+  Platform: { OS: "android" },
+  View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+  Pressable: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+  Text: "span",
+  ScrollView: "div",
+  Image: { resolveAssetSource: () => null },
+  StyleSheet: { create: (styles: unknown) => styles, absoluteFill: {} },
+  useWindowDimensions: () => ({ width: 400, height: 800, fontScale: 1 }),
+}));
+vi.mock("react-native-reanimated", () => ({
+  default: {
+    View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+    ScrollView: "div",
+  },
+  FadeIn: { duration: () => ({}), delay: () => ({ duration: () => ({}) }) },
+  FadeInUp: { duration: () => ({}) },
+}));
+vi.mock("@react-navigation/native", () => ({
+  useNavigation: () => ({}),
+  useFocusEffect: () => {},
+}));
+vi.mock("@react-navigation/elements", () => ({ HeaderHeightContext: createContext(0) }));
+vi.mock("react-native-safe-area-context", () => ({
+  useSafeAreaInsets: () => ({ top: 0, bottom: 0 }),
+}));
+vi.mock("@legendapp/list/react-native", () => ({ useViewabilityAmount: () => 1 }));
+vi.mock("@legendapp/list/keyboard", () => ({
+  KeyboardAwareLegendList: (props: {
+    data: readonly { id: string }[];
+    renderItem: (info: { item: { id: string }; index: number }) => ReactNode;
+  }) =>
+    props.data.map((item, index) => <div key={item.id}>{props.renderItem({ item, index })}</div>),
+}));
+vi.mock("expo-haptics", () => ({}));
+vi.mock("../../lib/uuid", () => ({ uuidv4: () => "uuid" }));
+vi.mock("expo-image", () => ({ Image: "img" }));
+vi.mock("uniwind", () => ({ useResolveClassNames: () => ({}) }));
+vi.mock("../../state/entities", async () => {
+  const { useSyncExternalStore } = await import("react");
+  return {
+    useQuietThreadShell: () =>
+      useSyncExternalStore(
+        (listener) => {
+          state.listeners.add(listener);
+          return () => state.listeners.delete(listener);
+        },
+        () => state.shell,
+      ),
+    useLiveThreadLinkLabels: (markdown: string) => markdown,
+    useThreadChipIcons: () => new Map(),
+  };
+});
+vi.mock("../../state/use-thread-selection", () => ({
+  useThreadSelection: () => ({ selectedThread: state.shell }),
+}));
+vi.mock("../../lib/useUniwindTheme", () => ({
+  useUniwindTheme: () => new Proxy({}, { get: () => "#ffffff" }),
+}));
+vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
+  useAppearancePreferences: () => ({ themeAppearance: "light", appearance: { baseFontSize: 14 } }),
+}));
+vi.mock("../../native/SelectableMarkdownText", () => ({
+  SelectableMarkdownText: (props: {
+    renderImage: (image: { href: string; alt: string }) => ReactNode;
+  }) => props.renderImage({ href: "https://example.test/markdown.png", alt: "Markdown image" }),
+}));
+vi.mock("./ThreadMarkdownImage", () => ({
+  MarkdownImageAvailableWidthContext: createContext(400),
+  ThreadMarkdownImage: (props: { alt?: string }) => <img alt={props.alt} />,
+  ThreadMarkdownImageView: (props: { alt?: string }) => <img alt={props.alt} />,
+  ThreadMarkdownImageUnavailable: () => null,
+}));
+vi.mock("./ThreadMarkdownVideo", () => ({
+  ThreadMarkdownVideo: () => null,
+  ThreadMediaVisibleContext: createContext(true),
+}));
+vi.mock("./thread-work-log", () => ({
+  THREAD_DISCLOSURE_TRANSITION_MS: 0,
+  WORK_GROUP_TOGGLE_HEIGHT: 40,
+  collapsedWorkLogHeight: () => 40,
+  ThreadWorkLog: (props: { renderImage: (image: { href: string }) => ReactNode }) =>
+    props.renderImage({ href: "viewed.png" }),
+}));
+vi.mock("./HtmlRenderWebView", () => ({
+  ThreadHtmlRender: () => <div>HTML media</div>,
+  htmlRenderRowHeight: () => 100,
+}));
+vi.mock("./McpAppWebView", () => ({ ThreadMcpApp: () => <div>MCP media</div> }));
+vi.mock("../../lib/threadActivity", () => ({
+  createThreadFeedCache: () => ({}),
+  deriveThreadFeedPresentation: (feed: unknown) => feed,
+  threadFeedCompactionLabels: () => new Map(),
+  failedFeedRunIds: () => new Set(),
+  threadFeedRunIsUnsettled: () => false,
+  isContextCompactionActivityGroup: () => false,
+  isContextHandoffActivityGroup: () => false,
+  isSecretRequestActivityGroup: () => false,
+}));
+vi.mock("./pending-thread-feed", () => ({
+  appendPendingThreadMessages: (feed: unknown) => feed,
+  isCompactionCommandFeedEntry: () => false,
+}));
+vi.mock("@t3tools/client-runtime/work-log/presentation", () => ({
+  resolveViewedImageAsset: () => ({ resource: {}, alt: "Viewed image" }),
+}));
+vi.mock("../../components/FilePreviewGallery", () => ({
+  FilePreviewGallery: ({ children }: { children: ReactNode }) => children,
+  useFilePreviewGallery: () => ({}),
+}));
+vi.mock("../../components/ui/NativePresentation", () => ({
+  PresentationSource: ({ children }: { children: ReactNode }) => children,
+}));
+vi.mock("./thread-workflow-opening", () => ({
+  useWorkflowOpening: () => null,
+  ThreadWorkflowOpening: () => null,
+}));
+vi.mock("./useFileChipShare", () => ({ useFileChipShare: () => () => {} }));
+vi.mock("../../native/useMarkdownImageSource", () => ({
+  useMarkdownImageSource: () => async () => null,
+}));
+vi.mock("../review/ReviewCommentCard", () => ({
+  useReviewCommentColors: () => ({}),
+  ReviewCommentCard: () => null,
+}));
+vi.mock("../../state/assets", () => ({
+  assetEnvironment: {},
+  useAssetUrl: () => null,
+  useAssetUrlState: () => ({}),
+  useRefreshAssetUrl: () => () => {},
+}));
+vi.mock("../../state/session", () => ({
+  readEnvironmentScope: () => true,
+  usePreparedConnection: () => null,
+}));
+vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
+vi.mock("../../state/threads", () => ({ environmentThreadShells: {}, threadEnvironment: {} }));
+vi.mock("../../components/ui/Button", () => ({ Button: () => null }));
+vi.mock("../../components/ComposerContextSheet", () => ({ ComposerContextSheet: () => null }));
+vi.mock("../../components/ui/AppActivityIndicator", () => ({ AppActivityIndicator: () => null }));
+vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
+vi.mock("../../components/FilePreviewModal", () => ({ FilePreviewModal: () => null }));
+vi.mock("../../components/VideoPreviewModal", () => ({ VideoPreviewModal: () => null }));
+vi.mock("../../components/VideoAttachmentTile", () => ({ VideoAttachmentTile: () => null }));
+vi.mock("../../components/MediaVideoPlayer", () => ({ MediaVideoPlayer: () => null }));
+vi.mock("./CopyTextButton", () => ({ CopyTextButton: () => null }));
+vi.mock("../../components/ui/Menu", () => ({ Menu: () => null }));
+vi.mock("../../components/PierreEntryIcon", () => ({ PierreEntryIcon: () => null }));
+vi.mock("./thread-context-divider", () => ({ ThreadContextDivider: () => null }));
+vi.mock("./thread-handoff-row", () => ({
+  ThreadHandoffDivider: () => null,
+  ThreadHandoffRow: () => null,
+}));
+vi.mock("./SecretRequestCard", () => ({ SecretRequestCard: () => null }));
+vi.mock("./worktree-setup-card", () => ({
+  WorktreeWorkingHeader: () => null,
+  WorktreeSetupCard: () => null,
+}));
+vi.mock("../../state/projects", () => ({ projectEnvironment: () => null }));
+vi.mock("../../state/server", () => ({ serverEnvironment: () => null }));
+vi.mock("../../native/NativeScrollViewMarker", () => ({ NativeScrollViewMarker: () => null }));
+vi.mock("../../lib/composerContextClipboard", () => ({
+  writeComposerContextClipboard: () => null,
+}));
+vi.mock("../../lib/copyTextWithHaptic", () => ({ copyTextWithHaptic: () => null }));
+vi.mock("../../lib/openExternalUrl", () => ({ tryOpenExternalUrl: () => null }));
+vi.mock("../../lib/attachmentDownload", () => ({ downloadAndShareAttachment: () => null }));
+vi.mock("../review/reviewState", () => ({ setReviewSelectedSectionId: () => null }));
+vi.mock("../prompt-links/prompt-link-actions", () => ({ copyPromptLink: () => null }));
+vi.mock("../../native/useEnrichedLinkVariants", () => ({
+  enrichedContextLinkCustomization: () => null,
+  enrichedThreadLinkCustomization: () => null,
+  withChipIcon: () => null,
+}));
+vi.mock("./markdownCodeHighlightState", () => ({ useMarkdownCodeHighlight: () => null }));
+vi.mock("../../state/use-atom-query-runner", () => ({ useAtomQueryRunner: () => null }));
+vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => null }));
+vi.mock("../../state/query", () => ({ useEnvironmentQuery: () => null }));
+vi.mock("../../state/v2-item-support", () => ({ useV2ItemSupport: () => null }));
+vi.mock("./useOpenLinkedThread", () => ({ useOpenLinkedThread: () => null }));
+vi.mock("../../native/useOpenPullRequest", () => ({ useOpenPullRequest: () => null }));
+vi.mock("../../native/NativeWorkspaceColumns", () => ({
+  useNativeWorkspaceColumnsSupported: () => null,
+}));
+vi.mock("../../native/native-layout-metrics", () => ({ useDeviceType: () => null }));
+vi.mock("../layout/workspace-content-width", () => ({
+  useWorkspaceSettledContentWidth: () => 400,
+}));
+vi.mock("../../components/ui/AppText", () => ({
+  AppText: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
+}));
+
+import { ThreadFeed } from "./ThreadFeed";
+
+it.each([true, false])(
+  "opens existing media rows after Keep without a parent render with shell temporary=%s",
+  async (temporary) => {
+    const environmentId = EnvironmentId.make("env");
+    const threadId = ThreadId.make("thread");
+    state.shell = { temporary };
+    state.listeners.clear();
+    setTemporaryThread(environmentId, threadId, true);
+    const dom = new JSDOM("<html><body></body></html>");
+    vi.stubGlobal("window", dom.window);
+    vi.stubGlobal("document", dom.window.document);
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    const feed = [
+      { id: "html", type: "html-render", render: {} },
+      { id: "mcp", type: "mcp-app", app: { attachmentId: "mcp" } },
+      {
+        id: "image",
+        type: "message",
+        message: {
+          id: "image",
+          role: "assistant",
+          text: "Image",
+          createdAt: "2026-10-24T00:00:00Z",
+          updatedAt: "2026-10-24T00:00:00Z",
+        },
+      },
+      { id: "viewed", type: "activity-group", activities: [], continuesWorkLog: false },
+    ] as unknown as ComponentProps<typeof ThreadFeed>["feed"];
+    try {
+      await act(async () =>
+        root.render(
+          <ThreadFeed
+            environmentId={environmentId}
+            threadId={threadId}
+            threadTitle="Thread"
+            feed={feed}
+            queuedMessages={[]}
+            dispatchingMessageId={null}
+            onEditPendingMessage={() => {}}
+            contentPresentation={{ kind: "ready" }}
+            agentLabel="Codex"
+            latestRun={null}
+            activeWorkStartedAt={null}
+            listRef={{ current: null }}
+            freeze={{ value: false } as ComponentProps<typeof ThreadFeed>["freeze"]}
+            anchorMessageId={null}
+            submittedMessageId={null}
+            contentInsetEndAdjustment={
+              { value: 0 } as ComponentProps<typeof ThreadFeed>["contentInsetEndAdjustment"]
+            }
+            keyboardOffset={0}
+          />,
+        ),
+      );
+      expect(container.textContent?.match(/Keep thread to open media/g)).toHaveLength(4);
+      expect(container.querySelectorAll("img")).toHaveLength(0);
+      await act(async () => {
+        setTemporaryThread(environmentId, threadId, false);
+        state.shell = { temporary: false };
+        for (const listener of state.listeners) listener();
+      });
+      expect(container.textContent).not.toContain("Keep thread to open media");
+      expect(container.textContent).toContain("HTML media");
+      expect(container.textContent).toContain("MCP media");
+      expect(Array.from(container.querySelectorAll("img"), (image) => image.alt)).toEqual([
+        "Markdown image",
+        "Viewed image",
+      ]);
+    } finally {
+      await act(async () => root.unmount());
+      setTemporaryThread(environmentId, threadId, false);
+      vi.unstubAllGlobals();
+      dom.window.close();
+    }
+  },
+);
