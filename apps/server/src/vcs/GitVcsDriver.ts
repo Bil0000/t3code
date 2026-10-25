@@ -1366,17 +1366,40 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
 
     deleteCheckpointRefs: Effect.fn("GitVcsDriver.checkpoints.deleteCheckpointRefs")(
       function* (input) {
-        yield* Effect.forEach(
-          input.checkpointRefs,
-          (checkpointRef) =>
-            execute({
-              operation: "GitVcsDriver.checkpoints.deleteCheckpointRefs",
-              cwd: input.cwd,
-              args: ["update-ref", "-d", checkpointRef],
-              allowNonZeroExit: true,
-            }),
-          { discard: true },
-        );
+        const operation = "GitVcsDriver.checkpoints.deleteCheckpointRefs";
+        const prefixes = input.checkpointRefPrefixes ?? [];
+        if (
+          [...input.checkpointRefs, ...prefixes].some(
+            (ref) => !ref.startsWith("refs/t3/") || ref.includes("\0"),
+          )
+        ) {
+          return yield* new VcsUnsupportedOperationError({
+            operation,
+            kind: "git",
+            detail:
+              "Checkpoint refs and prefixes must be within refs/t3/ and contain no NUL bytes.",
+          });
+        }
+        const refs = new Set<string>(input.checkpointRefs);
+        if (prefixes.length > 0) {
+          const namespaces = prefixes.map((prefix) => `${prefix.replace(/\/+$/, "")}/`);
+          const result = yield* execute({
+            operation,
+            cwd: input.cwd,
+            args: ["for-each-ref", "--format=%(refname)", "--", ...namespaces],
+            outputMode: "error",
+          });
+          for (const ref of result.stdout.split("\n")) {
+            if (namespaces.some((prefix) => ref.startsWith(prefix))) refs.add(ref);
+          }
+        }
+        if (refs.size === 0) return;
+        yield* execute({
+          operation,
+          cwd: input.cwd,
+          args: ["update-ref", "--no-deref", "-z", "--stdin"],
+          stdin: `start\0${Array.from(refs, (ref) => `delete ${ref}\0\0`).join("")}prepare\0commit\0`,
+        });
       },
     ),
   };

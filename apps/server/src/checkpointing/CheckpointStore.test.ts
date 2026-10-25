@@ -3,7 +3,7 @@ import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
-import { ThreadId, type VcsError } from "@t3tools/contracts";
+import { CheckpointRef, ThreadId, type VcsError } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -113,6 +113,107 @@ it.layer(layerTest)("CheckpointStore.layer", (it) => {
       expect(yield* checkpointStore.isGitRepository(nested)).toBe(true);
     }),
   );
+  describe("deleteCheckpointRefs", () => {
+    it.effect(
+      "deletes exact checkpoint namespaces from a shared worktree and tolerates retries",
+      () =>
+        Effect.gen(function* () {
+          const tmp = yield* makeTmpDir();
+          yield* initRepoWithCommit(tmp);
+          const worktree = NodePath.join(yield* makeTmpDir(), "worktree");
+          yield* git(tmp, ["worktree", "add", "--detach", worktree]);
+          const checkpointStore = yield* CheckpointStore.CheckpointStore;
+          const checkpointRefPrefixes = [
+            "refs/t3/orchestration-v2/checkpoints/deleted-scope",
+            "refs/t3/checkpoints/deleted-thread/",
+          ];
+          const deletedRefs = [
+            "refs/t3/orchestration-v2/checkpoints/deleted-scope/ordinal/0",
+            "refs/t3/orchestration-v2/checkpoints/deleted-scope/ordinal/1",
+            "refs/t3/checkpoints/deleted-thread/turn/0",
+            "refs/t3/checkpoints/deleted-thread/turn/1",
+          ];
+          const retainedRefs = [
+            "refs/t3/checkpoints/initial",
+            checkpointRefForThreadTurn(ThreadId.make("legacy-thread"), 0),
+            checkpointRefForThreadTurn(ThreadId.make("legacy-thread"), 1),
+            "refs/t3/orchestration-v2/checkpoints/deleted-scope-other/ordinal/0",
+            "refs/t3/orchestration-v2/checkpoints/other-scope/ordinal/1",
+            "refs/t3/worktrees/shared",
+          ].toSorted();
+          const explicitRef = CheckpointRef.make("refs/t3/checkpoints/explicit/turn/0");
+          for (const ref of [...deletedRefs, ...retainedRefs, explicitRef]) {
+            yield* git(tmp, ["update-ref", ref, "HEAD"]);
+          }
+          yield* git(tmp, ["pack-refs", "--all"]);
+          yield* git(tmp, ["update-ref", "refs/heads/kept", "HEAD"]);
+          yield* git(tmp, [
+            "symbolic-ref",
+            "refs/t3/checkpoints/deleted-thread/symbolic",
+            "refs/heads/kept",
+          ]);
+
+          const input = { cwd: worktree, checkpointRefs: [], checkpointRefPrefixes };
+          yield* checkpointStore.deleteCheckpointRefs(input);
+          yield* checkpointStore.deleteCheckpointRefs({
+            cwd: worktree,
+            checkpointRefs: [explicitRef],
+          });
+          yield* checkpointStore.deleteCheckpointRefs(input);
+          yield* checkpointStore.deleteCheckpointRefs({ cwd: worktree, checkpointRefs: [] });
+
+          for (const cwd of [tmp, worktree]) {
+            expect(
+              (yield* git(cwd, ["for-each-ref", "--format=%(refname)", "refs/t3/"])).split("\n"),
+            ).toEqual(retainedRefs);
+            expect(yield* git(cwd, ["rev-parse", "refs/heads/kept"])).toBe(
+              yield* git(cwd, ["rev-parse", "HEAD"]),
+            );
+          }
+        }),
+    );
+    it.effect("fails without deleting any refs when a checkpoint ref is locked", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const checkpointStore = yield* CheckpointStore.CheckpointStore;
+        const checkpointRefs = [
+          checkpointRefForThreadTurn(ThreadId.make("locked-thread"), 0),
+          checkpointRefForThreadTurn(ThreadId.make("locked-thread"), 1),
+        ];
+        for (const ref of checkpointRefs) yield* git(tmp, ["update-ref", ref, "HEAD"]);
+        yield* writeTextFile(NodePath.join(tmp, ".git", `${checkpointRefs[1]}.lock`), "");
+
+        const error = yield* Effect.flip(
+          checkpointStore.deleteCheckpointRefs({ cwd: tmp, checkpointRefs }),
+        );
+        expect(error._tag).toBe("VcsProcessExitError");
+        for (const checkpointRef of checkpointRefs) {
+          expect(yield* checkpointStore.hasCheckpointRef({ cwd: tmp, checkpointRef })).toBe(true);
+        }
+      }),
+    );
+    it.effect("rejects refs and prefixes outside refs/t3 before deleting checkpoints", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const checkpointStore = yield* CheckpointStore.CheckpointStore;
+        const checkpointRef = checkpointRefForThreadTurn(ThreadId.make("kept-thread"), 0);
+        yield* git(tmp, ["update-ref", checkpointRef, "HEAD"]);
+        yield* git(tmp, ["update-ref", "refs/heads/kept", "HEAD"]);
+
+        for (const input of [
+          { checkpointRefs: [checkpointRef, CheckpointRef.make("refs/heads/kept")] },
+          { checkpointRefs: [checkpointRef], checkpointRefPrefixes: ["refs/heads/"] },
+          { checkpointRefs: [checkpointRef], checkpointRefPrefixes: ["refs/t3-other/"] },
+        ]) {
+          yield* Effect.flip(checkpointStore.deleteCheckpointRefs({ cwd: tmp, ...input }));
+          expect(yield* checkpointStore.hasCheckpointRef({ cwd: tmp, checkpointRef })).toBe(true);
+          expect(yield* git(tmp, ["show-ref", "--verify", "refs/heads/kept"])).not.toBe("");
+        }
+      }),
+    );
+  });
   describe("diffCheckpoints", () => {
     it.effect("returns full oversized checkpoint diffs without truncation", () =>
       Effect.gen(function* () {

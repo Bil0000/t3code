@@ -227,6 +227,12 @@ export const planThreadDeletion = Effect.fn("ThreadDeletion.planThreadDeletion")
     request: { type: "preview.cleanup" },
   });
   const attachmentIds = Array.from(new Set(input.attachmentIds));
+  effects.push({
+    id: `effect:${command.commandId}:checkpoint.cleanup`,
+    commandId: command.commandId,
+    threadId: command.threadId,
+    request: { type: "checkpoint.cleanup" },
+  });
   if (attachmentIds.length > 0) {
     effects.push({
       id: `effect:${command.commandId}:attachment.cleanup`,

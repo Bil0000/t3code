@@ -478,6 +478,17 @@ export const layerExecutor: Layer.Layer<
                     }),
                 ),
               );
+          case "checkpoint.cleanup":
+            return resourceCleanup.cleanupCheckpointRefs(effect.threadId).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationEffectExecutionError({
+                    effectId: effect.id,
+                    effectType: effect.request.type,
+                    cause,
+                  }),
+              ),
+            );
           case "scheduled-tasks.cleanup":
             return resourceCleanup.cleanupScheduledTasks(effect.threadId).pipe(
               Effect.mapError(

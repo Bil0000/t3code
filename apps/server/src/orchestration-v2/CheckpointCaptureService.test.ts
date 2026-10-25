@@ -377,7 +377,7 @@ it.layer(layerProjectionStoreTest)("CheckpointCaptureServiceV2", (it) => {
       }),
   );
 
-  it.effect("does not capture a stopped run that a rollback already discarded", () =>
+  it.effect.each(["rolled_back", "deleted"] as const)("skips %s runs", (state) =>
     Effect.gen(function* () {
       const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
       const now = yield* DateTime.now;
@@ -413,7 +413,7 @@ it.layer(layerProjectionStoreTest)("CheckpointCaptureServiceV2", (it) => {
           settledOverride: null,
           settledAt: null,
           lastVisitedAt: null,
-          deletedAt: null,
+          deletedAt: state === "deleted" ? now : null,
         },
       });
       const stoppedRun: OrchestrationV2Run = {
@@ -440,7 +440,7 @@ it.layer(layerProjectionStoreTest)("CheckpointCaptureServiceV2", (it) => {
         runId: stoppedRunId,
         providerInstanceId,
         occurredAt: now,
-        payload: { ...stoppedRun, status: "rolled_back" },
+        payload: { ...stoppedRun, status: state === "deleted" ? "cancelled" : "rolled_back" },
       });
 
       const committed = yield* Ref.make<ReadonlyArray<OrchestrationV2DomainEvent>>([]);
@@ -472,7 +472,7 @@ it.layer(layerProjectionStoreTest)("CheckpointCaptureServiceV2", (it) => {
         runId: stoppedRunId,
         scopeId,
       });
-      assert.equal(projected.run?.status, "rolled_back");
+      assert.equal(projected.run?.status, state === "deleted" ? "cancelled" : "rolled_back");
       assert.isNull(projected.run?.checkpointId ?? null);
     }),
   );

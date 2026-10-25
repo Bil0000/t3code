@@ -49,6 +49,7 @@ export interface VcsListAuthoredPathsInput {
 export interface VcsDeleteCheckpointRefsInput {
   readonly cwd: string;
   readonly checkpointRefs: ReadonlyArray<CheckpointRef>;
+  readonly checkpointRefPrefixes?: ReadonlyArray<string>;
 }
 
 export interface VcsCheckpointOps {

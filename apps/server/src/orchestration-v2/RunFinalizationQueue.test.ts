@@ -1,6 +1,8 @@
 import { assert, it } from "@effect/vitest";
 import { CheckpointScopeId, CommandId, GitCommandError, RunId, ThreadId } from "@t3tools/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
@@ -21,6 +23,66 @@ import * as RunFinalization from "./RunFinalizationService.ts";
 import * as RuntimeRequests from "./RuntimeRequestService.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 import * as ThreadTitles from "./ThreadTitleRegenerationService.ts";
+
+it.effect("waits for an in-flight capture before cleaning deleted-thread refs", () =>
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>();
+    const resume = yield* Deferred.make<void>();
+    const calls: string[] = [];
+    const threadId = ThreadId.make("thread:cleanup-order");
+    const layer = EffectWorker.layer.pipe(
+      Layer.provideMerge(
+        Layer.merge(
+          EffectOutbox.layer,
+          Layer.mock(EffectWorker.OrchestrationEffectExecutorV2)({
+            execute: (effect) =>
+              Effect.gen(function* () {
+                if (effect.request.type === "checkpoint.capture") {
+                  yield* Deferred.succeed(started, undefined);
+                  yield* Deferred.await(resume);
+                }
+                calls.push(effect.request.type);
+              }),
+          }),
+        ),
+      ),
+      Layer.provide(SqlitePersistence.layerMemory),
+    );
+    yield* Effect.gen(function* () {
+      const outbox = yield* EffectOutbox.EffectOutboxV2;
+      const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+      yield* outbox.enqueue([
+        {
+          id: "effect:cleanup-order:capture",
+          commandId: CommandId.make("command:capture"),
+          threadId,
+          request: {
+            type: "checkpoint.capture",
+            runId: RunId.make("run:capture"),
+            scopeId: CheckpointScopeId.make("scope:capture"),
+          },
+        },
+      ]);
+      const capture = yield* Effect.forkChild(worker.runOnce);
+      yield* Deferred.await(started);
+      yield* outbox.enqueue([
+        {
+          id: "effect:cleanup-order:cleanup",
+          commandId: CommandId.make("command:delete"),
+          threadId,
+          request: { type: "checkpoint.cleanup" },
+        },
+      ]);
+      assert.isTrue(
+        Option.isNone(yield* outbox.claimNext({ workerId: "other", leaseDurationMs: 1000 })),
+      );
+      yield* Deferred.succeed(resume, undefined);
+      yield* Fiber.join(capture);
+      assert.equal(yield* worker.drain(), 1);
+      assert.deepEqual(calls, ["checkpoint.capture", "checkpoint.cleanup"]);
+    }).pipe(Effect.provide(layer));
+  }),
+);
 
 it.effect.each([
   ["starts the next turn after a post-capture Git status failure", false],

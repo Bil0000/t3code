@@ -319,6 +319,7 @@ const layerScheduledTasksTest = ScheduledTaskService.layer.pipe(
   ),
 );
 const layerResourceCleanupTest = ResourceCleanupService.layer.pipe(
+  Layer.provide(Layer.merge(ProjectionStore.layer, ProjectStore.layer)),
   Layer.provideMerge(layerScheduledTasksTest),
   Layer.provide(
     Layer.mergeAll(

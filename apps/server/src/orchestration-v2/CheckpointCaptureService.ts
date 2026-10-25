@@ -65,6 +65,7 @@ export const layer: Layer.Layer<
       readonly runId: RunId;
       readonly scopeId: CheckpointScopeId;
     }) {
+      if ((yield* projections.getThread(input.threadId)).deletedAt !== null) return;
       const { run, rootNode, scope, providerThread, readyCheckpointOrdinals } =
         yield* projections.getCheckpointCaptureContext(input.threadId, input);
       // Stopped runs remain terminal; their checkpoint is the next message's rollback point.

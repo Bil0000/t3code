@@ -158,15 +158,21 @@ export class CheckpointServiceV2 extends Context.Service<
   CheckpointServiceV2Shape
 >()("t3/orchestration-v2/CheckpointService/CheckpointServiceV2") {}
 
+export const checkpointRefPrefixForScope = Effect.fn(
+  "CheckpointService.checkpointRefPrefixForScope",
+)(function* (scopeId: CheckpointScopeId) {
+  const crypto = yield* Crypto.Crypto;
+  const digest = yield* crypto
+    .digest("SHA-256", new TextEncoder().encode(scopeId))
+    .pipe(Effect.orDie);
+  const scopeKey = Hex.encode(digest).slice(0, 32);
+  return `${CHECKPOINT_REFS_PREFIX}/${Base64Url.encode(scopeKey)}/`;
+});
+
 export const checkpointRefForScopeOrdinal = Effect.fn("checkpointRefForScopeOrdinal")(
   function* (input: { readonly scopeId: CheckpointScopeId; readonly ordinalWithinScope: number }) {
-    const crypto = yield* Crypto.Crypto;
-    const digest = yield* crypto
-      .digest("SHA-256", new TextEncoder().encode(input.scopeId))
-      .pipe(Effect.orDie);
-    const scopeKey = Hex.encode(digest).slice(0, 32);
     return CheckpointRef.make(
-      `${CHECKPOINT_REFS_PREFIX}/${Base64Url.encode(scopeKey)}/ordinal/${input.ordinalWithinScope}`,
+      `${yield* checkpointRefPrefixForScope(input.scopeId)}ordinal/${input.ordinalWithinScope}`,
     );
   },
 );
