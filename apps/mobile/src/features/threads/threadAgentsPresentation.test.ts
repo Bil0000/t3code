@@ -27,6 +27,12 @@ const provider = {
       capabilities: {
         optionDescriptors: [
           {
+            id: "reasoningEffort",
+            label: "Effort",
+            type: "select" as const,
+            options: [{ id: "high", label: "High" }],
+          },
+          {
             id: "serviceTier",
             label: "Speed",
             type: "select" as const,
@@ -44,8 +50,32 @@ const provider = {
 };
 
 describe("subagent traits", () => {
+  it("does not match two models that are absent from the catalog", () => {
+    expect(
+      resolveSubagentTraits({
+        subagent: {
+          ...subagent,
+          model: "missing-agent-model",
+          modelSelection: { ...selection, model: "missing-selection-model" },
+        },
+        provider,
+      }),
+    ).toBe("");
+  });
+
+  it("hides an obsolete saved effort value", () => {
+    expect(
+      resolveSubagentTraits({
+        subagent: {
+          ...subagent,
+          modelSelection: { ...selection, options: [{ id: "reasoningEffort", value: "removed" }] },
+        },
+        provider,
+      }),
+    ).toBe("");
+  });
   it("shows the agent's saved effort and speed, including model display names", () => {
-    expect(resolveSubagentTraits({ subagent, provider })).toBe("high · Fast");
+    expect(resolveSubagentTraits({ subagent, provider })).toBe("High · Fast");
   });
 
   it("uses an app-owned child's selection when the agent has no saved selection", () => {
@@ -55,7 +85,7 @@ describe("subagent traits", () => {
         provider,
         childThread: { modelSelection: selection },
       }),
-    ).toBe("high · Fast");
+    ).toBe("High · Fast");
   });
 
   it("does not use a provider-managed child's selection", () => {
@@ -93,7 +123,7 @@ describe("subagent traits", () => {
           modelSelection: { ...selection, options: [{ id: "reasoningEffort", value: "low" }] },
         },
       }),
-    ).toBe("high · Fast");
+    ).toBe("High · Fast");
   });
 
   it("shows Claude effort and boolean fast mode", () => {
@@ -117,6 +147,12 @@ describe("subagent traits", () => {
               ...provider.models[0]!,
               capabilities: {
                 optionDescriptors: [
+                  {
+                    id: "effort",
+                    label: "Effort",
+                    type: "select",
+                    options: [{ id: "max", label: "Max" }],
+                  },
                   { id: "fastMode", label: "Fast", type: "boolean", currentValue: false },
                 ],
               },
@@ -124,7 +160,7 @@ describe("subagent traits", () => {
           ],
         },
       }),
-    ).toBe("max · Fast");
+    ).toBe("Max · Fast");
   });
 
   it.each([

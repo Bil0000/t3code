@@ -3,14 +3,14 @@ import {
   subagentDetailPreview,
 } from "@t3tools/client-runtime/state/subagent-display";
 import { isActiveSubagentStatus } from "@t3tools/client-runtime/state/subagentRuntime";
-import { REASONING_EFFORT_OPTION_IDS } from "@t3tools/client-runtime/state/thread-execution";
+import { formatModelSelectionEffort } from "@t3tools/client-runtime/state/thread-execution";
 import { buildTraitsTriggerDisplay } from "@t3tools/client-runtime/model-traits";
 import type {
   OrchestrationV2Subagent,
   OrchestrationV2ThreadShell,
   ServerProvider,
 } from "@t3tools/contracts";
-import { getModelSelectionStringOptionValue, resolveSelectableModel } from "@t3tools/shared/model";
+import { resolveSelectableModel } from "@t3tools/shared/model";
 
 const PROMPT_TITLE_LIMIT = 80;
 
@@ -34,14 +34,13 @@ export function resolveSubagentTraits(input: {
     : selection?.model.trim();
   if (
     !selection ||
+    modelSlug == null ||
     selectedModel !== modelSlug ||
     selection.instanceId !== subagent.providerInstanceId
   )
     return "";
 
-  const effort = REASONING_EFFORT_OPTION_IDS.map((id) =>
-    getModelSelectionStringOptionValue(selection, id),
-  ).find(Boolean);
+  const effort = formatModelSelectionEffort({ ...selection, model: modelSlug }, provider?.models);
   const descriptors =
     provider?.models.find((model) => model.slug === modelSlug)?.capabilities?.optionDescriptors ??
     [];
