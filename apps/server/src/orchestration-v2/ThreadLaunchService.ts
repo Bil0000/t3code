@@ -468,18 +468,20 @@ const make = Effect.gen(function* () {
       }
 
       // Do not rewrite reused worktrees; that could undo the original branch rename.
-      if (reused === undefined) {
-        yield* threads
-          .dispatch({
-            type: "thread.metadata.update",
-            commandId: CommandId.make(`${input.commandId}:workspace`),
-            threadId,
-            branch,
-            worktreePath,
-          })
-          .pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
-      }
-      workspaceRecorded = true;
+      yield* Effect.gen(function* () {
+        if (reused === undefined) {
+          yield* threads
+            .dispatch({
+              type: "thread.metadata.update",
+              commandId: CommandId.make(`${input.commandId}:workspace`),
+              threadId,
+              branch,
+              worktreePath,
+            })
+            .pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
+        }
+        workspaceRecorded = true;
+      }).pipe(Effect.uninterruptible);
 
       if (
         input.temporary !== true &&
@@ -683,10 +685,9 @@ const make = Effect.gen(function* () {
               .close({ threadId, terminalId: setupTerminalId, deleteHistory: true })
               .pipe(Effect.ignore);
           if (
-            input.temporary !== true &&
             tracked &&
             createdWorktreePath &&
-            ((cancelled && !runReleased) || !workspaceRecorded)
+            ((cancelled && !runReleased && input.temporary !== true) || !workspaceRecorded)
           ) {
             if (branchRename !== null) yield* Fiber.interrupt(branchRename);
             const removedPath = createdWorktreePath;

@@ -2271,6 +2271,128 @@ it.effect("passes temporary mode to creation without title metadata generation",
   );
 });
 
+it.effect.each([false, true])(
+  "cleans up only claimed temporary checkouts on cancellation before workspace recording, claimed=%s",
+  (claimed) =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const worktreePath = "/repo-worktrees/abandoned-temporary";
+      const harness = makeHarness({
+        createWorktree: (_input, options) =>
+          Effect.gen(function* () {
+            if (claimed) yield* options!.progress!.onWorktreeClaimed!(worktreePath);
+            yield* Deferred.succeed(entered, undefined);
+            return yield* Effect.never;
+          }),
+      });
+      const owned = new Set<ThreadId>();
+      const layerStorage = Layer.mock(TemporaryThreadStorage.TemporaryThreadStorage)({
+        register: ({ threadId }) =>
+          Effect.sync(() => {
+            owned.add(threadId);
+          }),
+        isTemporary: (threadId) => Effect.sync(() => owned.has(threadId)),
+        isDiscarded: () => Effect.succeed(false),
+        family: (threadId) => Effect.succeed([threadId]),
+      });
+      yield* Effect.gen(function* () {
+        const launches = yield* ThreadLaunch.ThreadLaunchService;
+        const tracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        const launched = yield* launches.launch({
+          ...launchInput({
+            command: "temporary-checkout",
+            thread: "temporary-checkout",
+            message: "Private text",
+            workspace: { type: "worktree", baseRef: "main" },
+          }),
+          temporary: true,
+        });
+        yield* Deferred.await(entered);
+        assert.isNull((yield* threads.getThreadProjection(launched.threadId)).thread.worktreePath);
+        assert.isTrue(yield* tracker.cancel(launched.threadId));
+        assert.deepEqual(
+          harness.removeWorktree.mock.calls,
+          claimed ? [[{ cwd: project.workspaceRoot, path: worktreePath, force: true }]] : [],
+        );
+        assert.equal(harness.runSetup.mock.calls.length, 0);
+        assert.isNull((yield* threads.getThreadProjection(launched.threadId)).thread.worktreePath);
+      }).pipe(
+        Effect.provide(
+          harness.layer.pipe(
+            Layer.provide(layerStorage),
+            Layer.provide(TemporaryThreadService.layerState),
+          ),
+        ),
+      );
+    }),
+);
+
+it.effect("keeps a temporary worktree when cancelled after workspace metadata commits", () =>
+  Effect.gen(function* () {
+    const committed = yield* Deferred.make<Fiber.Fiber<unknown, unknown>>();
+    const acknowledge = yield* Deferred.make<void>();
+    const harness = makeHarness();
+    const owned = new Set<ThreadId>();
+    const layerStorage = Layer.mock(TemporaryThreadStorage.TemporaryThreadStorage)({
+      register: ({ threadId }) =>
+        Effect.sync(() => {
+          owned.add(threadId);
+        }),
+      isTemporary: (threadId) => Effect.sync(() => owned.has(threadId)),
+      isDiscarded: () => Effect.succeed(false),
+      family: (threadId) => Effect.succeed([threadId]),
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const dispatch = threads.dispatch;
+      using _dispatch = vi.spyOn(threads, "dispatch").mockImplementation((command) =>
+        dispatch(command).pipe(
+          Effect.tap(() =>
+            command.type === "thread.metadata.update" &&
+            command.commandId === "temporary-recording:workspace"
+              ? Effect.gen(function* () {
+                  yield* Deferred.succeed(committed, yield* Effect.fiber);
+                  yield* Deferred.await(acknowledge);
+                })
+              : Effect.void,
+          ),
+        ),
+      );
+      const launched = yield* launches.launch({
+        ...launchInput({
+          command: "temporary-recording",
+          thread: "temporary-recording",
+          message: "Private text",
+          workspace: { type: "worktree", baseRef: "main" },
+        }),
+        temporary: true,
+      });
+      const preparation = yield* Deferred.await(committed);
+      assert.equal(
+        (yield* threads.getThreadProjection(launched.threadId)).thread.worktreePath,
+        "/repo-worktrees/feature",
+      );
+      preparation.interruptUnsafe();
+      yield* Deferred.succeed(acknowledge, undefined);
+      yield* Fiber.await(preparation);
+      assert.equal(harness.removeWorktree.mock.calls.length, 0);
+      assert.equal(
+        (yield* threads.getThreadProjection(launched.threadId)).thread.worktreePath,
+        "/repo-worktrees/feature",
+      );
+    }).pipe(
+      Effect.provide(
+        harness.layer.pipe(
+          Layer.provide(layerStorage),
+          Layer.provide(TemporaryThreadService.layerState),
+        ),
+      ),
+    );
+  }),
+);
+
 it.effect("cancels temporary setup and keeps the created user worktree", () =>
   Effect.gen(function* () {
     const entered = yield* Deferred.make<void>();
