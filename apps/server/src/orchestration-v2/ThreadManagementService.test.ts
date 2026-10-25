@@ -15,6 +15,18 @@ import {
   RunId,
   ThreadId,
 } from "@t3tools/contracts";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
+import * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
+import * as TemporaryThreadDiagnostics from "../observability/TemporaryThreadDiagnostics.ts";
+import * as CheckpointService from "./CheckpointService.ts";
+import * as CommandPolicy from "./CommandPolicy.ts";
+import * as ContextHandoffService from "./ContextHandoffService.ts";
+import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
+import * as ProviderSwitchService from "./ProviderSwitchService.ts";
+import * as RuntimePolicy from "./RuntimePolicy.ts";
+import * as ThreadForkService from "./ThreadForkService.ts";
+import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
 import * as Deferred from "effect/Deferred";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
@@ -34,6 +46,7 @@ import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as TemporaryThreadStorage from "./TemporaryThreadStorage.ts";
+import * as TemporaryThreadService from "./TemporaryThreadService.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import { layerStorage } from "./runtimeLayer.ts";
 
@@ -445,43 +458,185 @@ it.effect.each([
   }),
 );
 
-it.effect(
-  "registers temporary ownership before dispatch reaches any engine or receipt path",
-  () => {
-    const dispatched: Array<string> = [];
-    const threadId = ThreadId.make("thread:temporary-admission");
-    const owned = new Set<ThreadId>();
-    const layerTest = layerDispatchChokepointTest(ServerSettings.layerTest())(dispatched).pipe(
-      Layer.provide(
-        Layer.mock(TemporaryThreadStorage.TemporaryThreadStorage)({
-          register: ({ threadId: id }) =>
-            Effect.sync(() => {
-              owned.add(id);
-            }),
-        }),
-      ),
-    );
-    return Effect.gen(function* () {
-      const threads = yield* ThreadManagementService.ThreadManagementService;
-      yield* threads.dispatch({
-        type: "thread.create",
+const layerTemporaryCreateTest = ThreadManagementService.layerWithLegacyImporter.pipe(
+  Layer.provideMerge(Orchestrator.layer),
+  Layer.provide(
+    Layer.mergeAll(
+      NodeServices.layer,
+      IdAllocator.layer,
+      ProviderContinuationRequests.layer,
+      CommandPolicy.layer,
+      RuntimePolicy.layer,
+      ThreadForkService.layer,
+      ServerSettings.layerTest(),
+      Layer.mock(CheckpointService.CheckpointServiceV2)({}),
+      Layer.mock(ContextHandoffService.ContextHandoffServiceV2)({}),
+      Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({}),
+      Layer.mock(ProviderSwitchService.ProviderSwitchServiceV2)({}),
+      ProviderAdapterRegistry.layerFromAdapters([
+        {
+          instanceId: ProviderInstanceId.make("codex"),
+          driver: ProviderDriverKind.make("codex"),
+        } as ProviderAdapter.ProviderAdapterV2["Service"],
+      ]),
+      Layer.mock(LegacyV1ThreadImporter.LegacyV1ThreadImporter)({
+        ensureTranscript: () => Effect.die("Create must not hydrate a transcript"),
+      }),
+    ),
+  ),
+  Layer.provideMerge(TemporaryThreadService.layerState),
+  Layer.provideMerge(layerStorage.pipe(Layer.provide(SqlitePersistence.layerMemory))),
+);
+
+const temporaryCreateCommand = (threadId: ThreadId) => ({
+  type: "thread.create" as const,
+  threadId,
+  temporary: true,
+  commandId: CommandId.make(`${threadId}-create`),
+  projectId: ProjectId.make("project:temporary"),
+  title: "Temporary",
+  modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "test" },
+  runtimeMode: "full-access" as const,
+  interactionMode: "default" as const,
+  branch: null,
+  worktreePath: null,
+  createdBy: "user" as const,
+  creationSource: "web" as const,
+});
+
+it.effect.each(
+  ["missing-adapter", "rejected-replay", "command-conflict"].flatMap((failure) =>
+    [false, true].map((reserved) => ({ failure, reserved })),
+  ),
+)("failed temporary create preserves reservation=$reserved for $failure", ({ failure, reserved }) =>
+  Effect.gen(function* () {
+    const threads = yield* ThreadManagementService.ThreadManagementService;
+    const storage = yield* TemporaryThreadStorage.TemporaryThreadStorage;
+    const stores = yield* TemporaryThreadStorage.TemporaryThreadStores;
+    const diagnostics = yield* TemporaryThreadDiagnostics.TemporaryThreadDiagnostics;
+    const sink = yield* EventSink.EventSinkV2;
+    const threadId = ThreadId.make(`temporary-management-${failure}-${reserved}`);
+    const create = temporaryCreateCommand(threadId);
+    if (reserved) yield* storage.register({ threadId });
+    if (failure === "rejected-replay") {
+      yield* sink.commitRejectedCommand({
         threadId,
-        temporary: true,
-        commandId: CommandId.make("temporary-admission"),
-        projectId: ProjectId.make("project:temporary"),
-        title: "Temporary",
-        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "test" },
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        branch: null,
-        worktreePath: null,
-        createdBy: "user",
-        creationSource: "web",
+        commandId: create.commandId,
+        commandType: create.type,
+        rejectedAt: yield* DateTime.now,
+        error: "Previously rejected create",
       });
-      expect(owned.has(threadId)).toBe(true);
-      expect(dispatched).toEqual(["thread.create"]);
-    }).pipe(Effect.provide(layerTest));
-  },
+    } else if (failure === "command-conflict") {
+      yield* threads.dispatch({ ...create, threadId: ThreadId.make("existing-create") });
+      yield* storage.keep({
+        threadId: ThreadId.make("existing-create"),
+        commandId: CommandId.make("keep-existing-create"),
+      });
+    }
+    const error = yield* threads
+      .dispatch({
+        ...create,
+        ...(failure === "missing-adapter"
+          ? {
+              modelSelection: {
+                ...create.modelSelection,
+                instanceId: ProviderInstanceId.make("missing"),
+              },
+            }
+          : {}),
+      })
+      .pipe(Effect.flip);
+    expect(error._tag).toBe(
+      failure === "missing-adapter"
+        ? "OrchestratorDispatchError"
+        : failure === "rejected-replay"
+          ? "OrchestratorCommandPreviouslyRejectedError"
+          : "OrchestratorCommandIdConflictError",
+    );
+    expect(yield* storage.isTemporary(threadId)).toBe(reserved);
+    expect(yield* storage.isDiscarded(threadId)).toBe(false);
+    expect(diagnostics.hasTemporaryThreads()).toBe(reserved);
+    expect(diagnostics.canRecord()).toBe(!reserved);
+    expect(yield* stores.durable.projectionStore.getThreadShell(threadId)).toBeNull();
+    expect(yield* stores.volatile.projectionStore.getThreadShell(threadId)).toBeNull();
+    if (failure === "missing-adapter") {
+      expect(
+        Option.isNone(yield* stores.durable.commandReceipts.getByCommandId(create.commandId)),
+      ).toBe(true);
+      expect(
+        Option.isSome(yield* stores.volatile.commandReceipts.getByCommandId(create.commandId)),
+      ).toBe(reserved);
+    }
+  }).pipe(Effect.provide(layerTemporaryCreateTest)),
+);
+
+it.effect("temporary create stays volatile through replay and becomes durable on Keep", () =>
+  Effect.gen(function* () {
+    const threads = yield* ThreadManagementService.ThreadManagementService;
+    const storage = yield* TemporaryThreadStorage.TemporaryThreadStorage;
+    const stores = yield* TemporaryThreadStorage.TemporaryThreadStores;
+    const diagnostics = yield* TemporaryThreadDiagnostics.TemporaryThreadDiagnostics;
+    const threadId = ThreadId.make("temporary-management-keep");
+    const create = temporaryCreateCommand(threadId);
+    const accepted = yield* threads.dispatch(create);
+    expect(yield* threads.dispatch(create)).toMatchObject({ ...accepted, replayed: true });
+    expect(diagnostics.canRecord()).toBe(false);
+    for (const table of [
+      "orchestration_events",
+      "orchestration_command_receipts",
+      "orchestration_v2_projection_threads",
+      "orchestration_v2_effect_outbox",
+    ]) {
+      expect(yield* stores.durable.sql.unsafe(`SELECT * FROM ${table}`)).toEqual([]);
+    }
+    expect((yield* stores.volatile.projectionStore.getThread(threadId)).temporary).toBe(true);
+    yield* storage.keep({ threadId, commandId: CommandId.make("keep-management") });
+    yield* threads.dispatch(create);
+    expect((yield* stores.durable.projectionStore.getThread(threadId)).id).toBe(threadId);
+    expect(yield* storage.isTemporary(threadId)).toBe(false);
+    expect(diagnostics.canRecord()).toBe(true);
+  }).pipe(Effect.provide(layerTemporaryCreateTest)),
+);
+
+it.effect.each(
+  [false, true].flatMap((rejected) => [false, true].map((discarded) => ({ rejected, discarded }))),
+)(
+  "closed temporary family refuses receipt replay with rejection=$rejected, discarded=$discarded",
+  ({ rejected, discarded }) =>
+    Effect.gen(function* () {
+      const threads = yield* ThreadManagementService.ThreadManagementService;
+      const storage = yield* TemporaryThreadStorage.TemporaryThreadStorage;
+      const sink = yield* EventSink.EventSinkV2;
+      const threadId = ThreadId.make(`temporary-management-closed-${rejected}`);
+      const create = temporaryCreateCommand(threadId);
+      yield* threads.dispatch(create);
+      const command = rejected
+        ? { ...create, commandId: CommandId.make("closed-rejected") }
+        : create;
+      if (rejected)
+        yield* sink.commitRejectedCommand({
+          threadId,
+          commandId: command.commandId,
+          commandType: command.type,
+          rejectedAt: yield* DateTime.now,
+          error: "Prior rejection",
+        });
+      const lifecycle = yield* TemporaryThreadService.TemporaryThreadLifecycleState;
+      const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
+      expect(Option.isSome(yield* receipts.getByCommandId(command.commandId))).toBe(true);
+      if (discarded) yield* storage.discard(threadId);
+      else {
+        lifecycle.discarding.add(threadId);
+        yield* storage.markDiscarding(threadId);
+        expect(Option.isSome(yield* receipts.getByCommandId(command.commandId))).toBe(true);
+      }
+      const error = yield* threads.dispatch(command).pipe(Effect.flip);
+      expect(error).toMatchObject({
+        _tag: "OrchestratorDispatchError",
+        cause: "Temporary thread is closed.",
+      });
+      expect(yield* storage.isDiscarded(threadId)).toBe(discarded);
+    }).pipe(Effect.provide(layerTemporaryCreateTest)),
 );
 
 const createWaitThread = Effect.fn("test.createWaitThread")(function* (threadId: ThreadId) {

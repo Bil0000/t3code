@@ -57,7 +57,6 @@ import { DispatchModeLimit, exceededDispatchModeLimit } from "./DispatchModeLimi
 import { projectTurnItemForDetail } from "./WireProjection.ts";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import * as TemporaryThreadStorage from "./TemporaryThreadStorage.ts";
 
 export type ThreadManagementSendMode = "auto" | "queue" | "steer" | "restart";
 
@@ -537,9 +536,6 @@ const make = Effect.gen(function* () {
   const legacyImporter = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
-  const temporaryStorage = yield* Effect.serviceOption(
-    TemporaryThreadStorage.TemporaryThreadStorage,
-  );
 
   const assertProviderInstanceEnabled: ThreadManagementServiceShape["assertProviderInstanceEnabled"] =
     (input) =>
@@ -698,25 +694,6 @@ const make = Effect.gen(function* () {
   const dispatch: ThreadManagementServiceShape["dispatch"] = Effect.fn(
     "ThreadManagementService.dispatch",
   )(function* (command) {
-    if (command.type === "thread.create" && command.temporary === true) {
-      if (Option.isNone(temporaryStorage)) {
-        return yield* new Orchestrator.OrchestratorDispatchError({
-          commandId: command.commandId,
-          commandType: command.type,
-          cause: "Temporary storage is unavailable.",
-        });
-      }
-      yield* temporaryStorage.value.register({ threadId: command.threadId }).pipe(
-        Effect.mapError(
-          (cause) =>
-            new Orchestrator.OrchestratorDispatchError({
-              commandId: command.commandId,
-              commandType: command.type,
-              cause,
-            }),
-        ),
-      );
-    }
     yield* ensureCommandTranscripts(command);
     yield* assertDispatchTargetEnabled(command);
     return yield* orchestrator.dispatch(command);
