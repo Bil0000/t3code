@@ -20,11 +20,9 @@ import { useMarkdownCodeHighlight } from "./markdownCodeHighlightState";
 import { SubagentRow } from "./SubagentRow";
 import { WorkLogBlock } from "./work-log-layout";
 
-// A script longer than this many lines shows its head until opened.
 const FOLDED_SCRIPT_LINES = 10;
 const EMPTY_THREAD_ATOM = Atom.make<EnvironmentThread | null>(null);
 
-/** The workflow opening for a thread, or null; the parent's detail loads only for a workflow. */
 export function useWorkflowOpening(selectedThreadDetailRef: ScopedThreadRef | null) {
   const threadAtom =
     selectedThreadDetailRef === null
@@ -81,7 +79,6 @@ function memberRowSubagent(
 
 type WorkflowOpeningValue = NonNullable<ReturnType<typeof useWorkflowOpening>>;
 
-/** Replaces a workflow coordinator's script message: the plan, its agents, then the script. */
 export function ThreadWorkflowOpening(props: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
@@ -156,7 +153,6 @@ export function ThreadWorkflowOpening(props: {
   );
 }
 
-/** The script as highlighted code; a long one shows its head until opened. */
 function WorkflowScript(props: { readonly script: string }) {
   const [expanded, setExpanded] = useState(false);
   const { themeAppearance } = useAppearancePreferences();
@@ -170,7 +166,6 @@ function WorkflowScript(props: { readonly script: string }) {
   const lineCount = script.split("\n").length;
   const canFold = lineCount > FOLDED_SCRIPT_LINES;
   const shownLines = canFold && !expanded ? FOLDED_SCRIPT_LINES : lineCount;
-  // Tokens are keyed by their offset into the script, like the work log's REPL code.
   let offset = 0;
   const highlighted = lines?.slice(0, shownLines).flatMap((line, lineIndex) => {
     const separator = lineIndex > 0 ? "\n" : "";

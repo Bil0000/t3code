@@ -12,12 +12,16 @@ const { JSDOM } = NodeModule.createRequire(import.meta.url)("jsdom") as {
   JSDOM: new (html: string) => { window: { document: Document; close(): void } };
 };
 
-const state = vi.hoisted(() => ({
-  shell: { temporary: true },
-  listeners: new Set<() => void>(),
-  detailReads: vi.fn(),
-  projections: new Map<string, OrchestrationV2ThreadProjection>(),
-}));
+const state = await vi.hoisted(async () => {
+  const { Atom } = await import("effect/reactivity");
+  return {
+    shell: { temporary: true },
+    shellAtom: Atom.make({ temporary: true }),
+    listeners: new Set<() => void>(),
+    detailReads: vi.fn(),
+    projections: new Map<string, OrchestrationV2ThreadProjection>(),
+  };
+});
 vi.mock("react-native", () => ({
   Platform: { OS: "android" },
   View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
@@ -118,6 +122,7 @@ vi.mock("../../lib/threadActivity", () => ({
   isSecretRequestActivityGroup: () => false,
 }));
 vi.mock("./pending-thread-feed", () => ({
+  appendGuestPendingMessages: (feed: unknown) => feed,
   appendPendingThreadMessages: (feed: unknown) => feed,
   isCompactionCommandFeedEntry: () => false,
 }));
@@ -169,7 +174,7 @@ vi.mock("../../state/threads", async () => {
     }),
   );
   return {
-    environmentThreadShells: {},
+    environmentThreadShells: { quietThreadShellAtom: () => state.shellAtom },
     threadEnvironment: {},
     environmentThreadDetails: createEnvironmentThreadDetailAtoms((_, threadId) =>
       stateAtom(threadId),
@@ -236,7 +241,7 @@ import { ThreadFeed } from "./ThreadFeed";
 import { useWorkflowOpening } from "./thread-workflow-opening";
 
 it.each([true, false])(
-  "admits detail after launch and opens media after Keep with shell temporary=%s",
+  "admits workflow detail after launch and opens guest details and media after Keep with shell temporary=%s",
   async (temporary) => {
     const environmentId = EnvironmentId.make("env");
     const threadId = ThreadId.make("thread");
@@ -245,6 +250,7 @@ it.each([true, false])(
     state.detailReads.mockClear();
     state.projections.clear();
     const registry = AtomRegistry.make();
+    registry.set(state.shellAtom, state.shell);
     setTemporaryThread(environmentId, threadId, true);
     const dom = new JSDOM("<html><body></body></html>");
     vi.stubGlobal("window", dom.window);
@@ -302,6 +308,14 @@ it.each([true, false])(
       await act(async () =>
         root.render(
           <RegistryContext.Provider value={registry}>
+            <ThreadFeed {...feedView.props} threadTitle="Pending creation" />
+          </RegistryContext.Provider>,
+        ),
+      );
+      expect(state.detailReads).not.toHaveBeenCalled();
+      await act(async () =>
+        root.render(
+          <RegistryContext.Provider value={registry}>
             <ThreadFeed {...feedView.props} selectedThreadDetailRef={{ environmentId, threadId }} />
           </RegistryContext.Provider>,
         ),
@@ -312,6 +326,7 @@ it.each([true, false])(
       await act(async () => {
         setTemporaryThread(environmentId, threadId, false);
         state.shell = { temporary: false };
+        registry.set(state.shellAtom, state.shell);
         for (const listener of state.listeners) listener();
       });
       expect(container.textContent).not.toContain("Keep thread to open media");

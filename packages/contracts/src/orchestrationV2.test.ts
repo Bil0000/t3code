@@ -46,6 +46,33 @@ const decodeTemporaryViews = Schema.decodeUnknownSync(
 );
 
 describe("orchestration V2 contracts", () => {
+  it.each([
+    [
+      "family",
+      Schema.decodeUnknownSync(OrchestrationV2RpcSchemas.getThreadFamily.input),
+      { threadId: "thread-1" },
+    ],
+    [
+      "worktree",
+      Schema.decodeUnknownSync(OrchestrationV2RpcSchemas.getWorktreeThreadIds.input),
+      { worktreePath: "/repo" },
+    ],
+  ] as const)(
+    "preserves an optional boolean temporary read opt-in for %s",
+    (_name, decode, input) => {
+      expect(decode(input)).toEqual(input);
+      expect(decode({ ...input, acceptTemporaryThreads: true })).toEqual({
+        ...input,
+        acceptTemporaryThreads: true,
+      });
+      expect(decode({ ...input, acceptTemporaryThreads: false })).toEqual({
+        ...input,
+        acceptTemporaryThreads: false,
+      });
+      expect(() => decode({ ...input, acceptTemporaryThreads: "true" })).toThrow();
+    },
+  );
+
   it("keeps temporary subscription opt-in and storage cursors on the wire", () => {
     expect(
       decodeTemporaryShellInput({

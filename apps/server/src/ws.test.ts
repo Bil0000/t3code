@@ -2,10 +2,16 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
   AuthSessionId,
+  CommandId,
+  EventId,
+  ProviderInstanceId,
   EnvironmentId,
   ProjectId,
   MessageId,
   OrchestrationV2GetThreadProjectionError,
+  OrchestrationV2GetShellSnapshotError,
+  type OrchestrationV2ThreadFamily,
+  type OrchestrationV2WorktreeThreadIds,
   ThreadId,
   WS_METHODS,
   WsSubscribeServerConfigRpc,
@@ -13,10 +19,12 @@ import {
   OrchestrationV2RpcSchemas,
   OrchestrationV2TemporaryThreadError,
   type OrchestrationV2StoredEvent,
+  type OrchestrationV2ThreadShell,
   type OrchestrationProjectShell,
   type ServerConfig,
   type ServerConfigStreamEvent,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -80,6 +88,7 @@ import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as ReviewService from "./review/ReviewService.ts";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
+import * as GuestShareService from "./guest/GuestShareService.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
@@ -392,6 +401,71 @@ it.live.each(["thread", "shell"] as const)(
     }).pipe(Effect.scoped, Effect.provide(ReplayTestLayer)),
 );
 
+it.effect("shell snapshots leave idle subagent children out only for clients that ask", () =>
+  Effect.gen(function* () {
+    const shell = (id: string, parent: string | null, activityRunStatus: "running" | null) =>
+      ({
+        id: ThreadId.make(id),
+        archivedAt: null,
+        status: activityRunStatus ?? "completed",
+        activityRunStatus,
+        pendingRuntimeRequest: null,
+        pendingBackgroundTasks: [],
+        lineage: {
+          parentThreadId: parent === null ? null : ThreadId.make(parent),
+          relationshipToParent: parent === null ? null : "subagent",
+          rootThreadId: ThreadId.make("parent"),
+        },
+      }) as unknown as OrchestrationV2ThreadShell;
+    const threads = [
+      shell("parent", null, null),
+      shell("idle", "parent", null),
+      shell("live", "parent", "running"),
+    ];
+    const firstSnapshotThreadIds = (input: { readonly omitIdleSubagents?: boolean }) =>
+      subscribeOrchestrationV2Shell(input).pipe(
+        Effect.flatMap((stream) => stream.pipe(Stream.take(1), Stream.runCollect)),
+        Effect.map(([item]) =>
+          item?.kind === "snapshot" ? item.snapshot.threads.map((thread) => thread.id) : [],
+        ),
+        Effect.provideService(ThreadManagement.ThreadManagementService, {
+          readShellSnapshot: () =>
+            Effect.succeed(
+              Effect.succeed({
+                schemaVersion: 1,
+                snapshotSequence: 0,
+                threads,
+                archivedThreads: [],
+              }),
+            ),
+        } as unknown as ThreadManagement.ThreadManagementService["Service"]),
+        Effect.provideService(ProjectStore.ProjectStoreV2, {
+          listShells: () => Effect.succeed([]),
+        } as unknown as ProjectStore.ProjectStoreV2["Service"]),
+        Effect.provideService(ProjectService.ProjectService, {
+          getShell: () => Effect.succeedNone,
+        } as unknown as ProjectService.ProjectService["Service"]),
+        Effect.provideServiceEffect(
+          ProjectEnrichment.ProjectEnrichmentService,
+          PubSub.unbounded().pipe(
+            Effect.map(
+              (changes) =>
+                ({
+                  subscribeChanges: PubSub.subscribe(changes),
+                }) as unknown as ProjectEnrichment.ProjectEnrichmentService["Service"],
+            ),
+          ),
+        ),
+      );
+
+    assert.deepEqual(yield* firstSnapshotThreadIds({}), ["parent", "idle", "live"]);
+    assert.deepEqual(yield* firstSnapshotThreadIds({ omitIdleSubagents: true }), [
+      "parent",
+      "live",
+    ]);
+  }).pipe(Effect.scoped, Effect.provide(ReplayTestLayer)),
+);
+
 // Build the production RPC layer; unrelated capabilities fail if this test calls them.
 const layerUnusedConfigRpcServices = Layer.mergeAll(
   TemporaryThreadStorage.layer,
@@ -443,6 +517,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(ReviewService.ReviewService)({}),
   Layer.mock(ScheduledTasks.ScheduledTaskService)({}),
   Layer.mock(SecretRequests.SecretRequests)({}),
+  Layer.mock(GuestShareService.GuestShareService)({}),
   Layer.mock(ServerLifecycleEvents.ServerLifecycleEvents)({}),
   Layer.mock(ServerRuntimeStartup.ServerRuntimeStartup)({}),
   Layer.mock(ServerSelfUpdate.ServerSelfUpdate)({}),
@@ -474,6 +549,230 @@ const layerConfigSources = Layer.mergeAll(
     ),
   ),
   Layer.provideMerge(NodeServices.layer),
+);
+
+it.effect.each(["family", "worktree"] as const)(
+  "%s shell reads admit current temporary rows only with explicit opt-in",
+  (kind) =>
+    Effect.gen(function* () {
+      const services = yield* Layer.build(
+        Layer.mergeAll(
+          layerUnusedConfigRpcServices,
+          Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({}),
+          Layer.mock(ServerBrowser.ServerBrowser)({}),
+        ).pipe(Layer.provideMerge(layerConfigSources)),
+      );
+      const storage = Context.get(services, TemporaryThreadStorage.TemporaryThreadStorage);
+      const stores = Context.get(services, TemporaryThreadStorage.TemporaryThreadStores);
+      const projection = Context.get(services, ProjectionStore.ProjectionStoreV2);
+      const now = yield* DateTime.now;
+      const create = (id: string, parent: string | null) => ({
+        id: EventId.make(`create:${id}`),
+        type: "thread.created" as const,
+        threadId: ThreadId.make(id),
+        occurredAt: now,
+        payload: {
+          id: ThreadId.make(id),
+          createdBy: "user" as const,
+          creationSource: "web" as const,
+          projectId: ProjectId.make("absent-project"),
+          title: id,
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+          runtimeMode: "full-access" as const,
+          interactionMode: "default" as const,
+          branch: null,
+          worktreePath: "/shared-worktree",
+          activeProviderThreadId: null,
+          lineage: {
+            parentThreadId: parent === null ? null : ThreadId.make(parent),
+            relationshipToParent: parent === null ? null : ("subagent" as const),
+            rootThreadId: ThreadId.make(parent ?? id),
+          },
+          forkedFrom: null,
+          createdAt: now,
+          updatedAt: now,
+          archivedAt: null,
+          settledOverride: null,
+          settledAt: null,
+          lastVisitedAt: null,
+          deletedAt: null,
+        },
+      });
+      for (const id of ["saved", "saved-child", "private", "private-child"]) {
+        const parent = id.endsWith("-child") ? id.slice(0, -6) : null;
+        if (id.startsWith("private"))
+          yield* storage.register({
+            threadId: ThreadId.make(id),
+            ...(parent === null ? {} : { parentThreadId: ThreadId.make(parent) }),
+          });
+        yield* projection.apply(create(id, parent));
+      }
+      let keepDuringRead = false;
+      const responses =
+        yield* Queue.unbounded<
+          Exit.Exit<
+            OrchestrationV2ThreadFamily | OrchestrationV2WorktreeThreadIds,
+            OrchestrationV2GetShellSnapshotError
+          >
+        >();
+      const server = yield* RpcServer.makeNoSerialization(
+        RpcGroup.make(
+          Rpc.make(ORCHESTRATION_V2_WS_METHODS.getThreadFamily, {
+            payload: OrchestrationV2RpcSchemas.getThreadFamily.input,
+            success: OrchestrationV2RpcSchemas.getThreadFamily.output,
+            error: OrchestrationV2GetShellSnapshotError,
+          }),
+          Rpc.make(ORCHESTRATION_V2_WS_METHODS.getWorktreeThreadIds, {
+            payload: OrchestrationV2RpcSchemas.getWorktreeThreadIds.input,
+            success: OrchestrationV2RpcSchemas.getWorktreeThreadIds.output,
+            error: OrchestrationV2GetShellSnapshotError,
+          }),
+        ),
+        {
+          ...WS_RPC_SERVER_OPTIONS,
+          onFromServer: (response) =>
+            response._tag === "Exit"
+              ? Queue.offer(responses, response.exit).pipe(Effect.asVoid)
+              : Effect.void,
+        },
+      ).pipe(
+        Effect.provide(
+          layerWsRpc(
+            {
+              sessionId: AuthSessionId.make("shell-row-privacy"),
+              subject: "shell-row-privacy",
+              method: "browser-session-cookie",
+              scopes: [],
+            },
+            {},
+            {},
+            Context.get(services, PreviewAutomationBroker.PreviewAutomationBroker),
+            Context.get(services, ServerBrowser.ServerBrowser),
+            yield* Effect.scope,
+          ).pipe(
+            Layer.provide(
+              Layer.mergeAll(
+                Layer.mock(BackgroundPolicy.BackgroundPolicy)({
+                  removeRpcClient: () => Effect.void,
+                }),
+                Layer.mock(EventLoopMonitor.EventLoopMonitor)({}),
+                Layer.mock(ExternalLauncher.ExternalLauncher)({}),
+                Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({}),
+                Layer.mock(DirectEndpoints.DirectEndpoints)({}),
+                Layer.mock(ProviderRegistry.ProviderRegistry)({}),
+                Layer.mock(UsageLimitSources.UsageLimitSources)({}),
+                Layer.mock(ServerEnvironment.ServerEnvironment)({}),
+                Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
+                Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+                  namedProjectsRoot: process.cwd(),
+                }),
+                Layer.mock(ThreadManagement.ThreadManagementService)({
+                  readShellSnapshot: (options) =>
+                    projection.readShellSnapshot(options).pipe(
+                      Effect.map((decode) =>
+                        decode.pipe(
+                          Effect.tap(() => {
+                            if (!keepDuringRead) return Effect.void;
+                            keepDuringRead = false;
+                            return storage.keep({
+                              threadId: ThreadId.make("racing"),
+                              commandId: CommandId.make("keep-racing"),
+                            });
+                          }),
+                          Effect.mapError(
+                            (cause) =>
+                              new Orchestrator.OrchestratorProjectionError({
+                                threadId: ThreadId.make("thread:shell"),
+                                cause,
+                              }),
+                          ),
+                        ),
+                      ),
+                      Effect.mapError(
+                        (cause) =>
+                          new Orchestrator.OrchestratorProjectionError({
+                            threadId: ThreadId.make("thread:shell"),
+                            cause,
+                          }),
+                      ),
+                    ),
+                }),
+              ),
+            ),
+            Layer.provide(Layer.succeedContext(services)),
+          ),
+        ),
+      );
+      let request = 0;
+      const read = (acceptTemporaryThreads?: boolean, root = "private") =>
+        Effect.gen(function* () {
+          yield* server.write(0, {
+            _tag: "Request",
+            id: RpcMessage.RequestId(`shell:${request++}`),
+            tag:
+              kind === "family"
+                ? ORCHESTRATION_V2_WS_METHODS.getThreadFamily
+                : ORCHESTRATION_V2_WS_METHODS.getWorktreeThreadIds,
+            payload: {
+              ...(kind === "family"
+                ? { threadId: ThreadId.make(root) }
+                : { worktreePath: "/shared-worktree" }),
+              ...(acceptTemporaryThreads === undefined ? {} : { acceptTemporaryThreads }),
+            },
+            headers: Headers.empty,
+          });
+          const result = yield* Queue.take(responses);
+          const value = yield* result;
+          return (
+            "threadIds" in value ? value.threadIds : value.threads.map((row) => row.id)
+          ).toSorted();
+        });
+      const saved = kind === "family" ? [] : ["saved", "saved-child"];
+      for (const optIn of [undefined, false]) assert.deepEqual(yield* read(optIn), saved);
+      assert.deepEqual(
+        yield* read(false, "saved"),
+        kind === "family" ? ["saved-child"] : ["saved", "saved-child"],
+      );
+      const admitted =
+        kind === "family"
+          ? ["private-child"]
+          : ["private", "private-child", "saved", "saved-child"];
+      assert.deepEqual(yield* read(true), admitted);
+      yield* storage.keep({
+        threadId: ThreadId.make("private"),
+        commandId: CommandId.make("keep"),
+      });
+      yield* stores.volatile.projectionStore.apply(create("private-child", "private"));
+      for (const optIn of [undefined, false, true]) assert.deepEqual(yield* read(optIn), admitted);
+      yield* storage.register({ threadId: ThreadId.make("discarded") });
+      yield* storage.register({
+        threadId: ThreadId.make("discarded-child"),
+        parentThreadId: ThreadId.make("discarded"),
+      });
+      yield* projection.apply(create("discarded", null));
+      yield* projection.apply(create("discarded-child", "discarded"));
+      yield* storage.discard(ThreadId.make("discarded"));
+      yield* stores.volatile.projectionStore.apply(create("discarded", null));
+      yield* stores.volatile.projectionStore.apply(create("discarded-child", "discarded"));
+      for (const optIn of [undefined, false, true])
+        assert.deepEqual(yield* read(optIn, "discarded"), kind === "family" ? [] : admitted);
+      yield* storage.register({ threadId: ThreadId.make("racing") });
+      yield* storage.register({
+        threadId: ThreadId.make("racing-child"),
+        parentThreadId: ThreadId.make("racing"),
+      });
+      yield* projection.apply(create("racing", null));
+      yield* projection.apply(create("racing-child", "racing"));
+      keepDuringRead = true;
+      assert.deepEqual(yield* read(true, "racing"), kind === "family" ? [] : admitted);
+      assert.deepEqual(
+        yield* read(false, "racing"),
+        kind === "family"
+          ? ["racing-child"]
+          : ["private", "private-child", "racing", "racing-child", "saved", "saved-child"],
+      );
+    }).pipe(Effect.scoped),
 );
 
 it.effect.each(
@@ -934,7 +1233,6 @@ it.effect("thread resume across compacted history keeps message order and final 
         )
       `;
     }
-    // Only the event between a's first and newest is deleted.
     assert.equal((yield* maintenance.compactEventStore).deletedEventCount, 1);
 
     const items = yield* subscribeOrchestrationV2Thread({

@@ -92,6 +92,7 @@ import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as ProviderRegistryMock from "../provider/testUtils/providerRegistryMock.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
+import { CloudManagedEndpointRuntime } from "../cloud/ManagedEndpointRuntime.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 
@@ -653,6 +654,7 @@ it.effect("production runtime stops temporary launch preparation on the last vie
         Layer.mergeAll(
           WorktreeSetupTracker.layer,
           ProviderRegistryMock.layer(),
+          Layer.mock(CloudManagedEndpointRuntime)({}),
           Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({
             get: () => Effect.succeed(null),
           }),
@@ -2525,6 +2527,25 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.map((link) => link.number),
         [2, 3, 4],
       );
+      for (const [index, route] of ["pull", "pulls"].entries()) {
+        yield* orchestrator.dispatch({
+          type: "thread.pull-request.link",
+          commandId: CommandId.make(`gitcafe-pr-link-${index}`),
+          threadId,
+          host: "git.cafe",
+          repository: "pingdotgg/t3code",
+          number: 21353 + index,
+          url: `https://git.cafe/pingdotgg/t3code/${route}/${21353 + index}`,
+          source: "manual",
+        });
+      }
+      assert.isTrue((yield* maintenance.rebuild).valid);
+      assert.deepEqual(
+        (yield* orchestrator.getThreadShell(threadId))?.pullRequests
+          ?.filter((link) => link.host === "git.cafe")
+          .map((link) => link.url),
+        [21353, 21354].map((number) => `https://git.cafe/pingdotgg/t3code/pulls/${number}`),
+      );
     }),
   );
 
@@ -3012,12 +3033,10 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       yield* reactor.sweep;
       assert.deepEqual(yield* summaries, ["#12: checks passed"]);
 
-      // A restart keeps nothing in memory; the watch state is all it has.
       const restarted = yield* PullRequestWatchReactor.make.pipe(Effect.provide(host));
       yield* restarted.sweep;
       assert.deepEqual(yield* summaries, ["#12: checks passed"]);
 
-      // A new watch on the same pull request knows what the last one told.
       yield* watch(false, "stop");
       yield* watch(true, "again");
       yield* restarted.sweep;
@@ -3197,7 +3216,6 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       const started = (yield* watchOf)?.watch;
       assert.isDefined(started);
       if (started === undefined) return;
-      // Green checks were reported, and one more comment-only wake ends the watch.
       yield* orchestrator.dispatch({
         type: "thread.pull-request-watch.sync",
         commandId: CommandId.make("pr-watch-limit-told"),
@@ -3257,7 +3275,6 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       assert.isFalse(ended?.endedWatch?.passed);
       assert.deepEqual(yield* summaries, ["#13: new comments, stopped watching"]);
 
-      // The checks went pending after the last report, so passing again is news.
       status = "success";
       yield* TestClock.adjust("10 minutes");
       yield* watch("again");
@@ -3817,7 +3834,6 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
               occurredAt: now,
               payload: { ...original, status: "cancelled", completedAt: now },
             },
-            // A provider wake the restart cut before it started does not supersede it.
             {
               id: EventId.make("restart-cut-wake-event"),
               type: "run.created",
@@ -4316,8 +4332,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       assert.isTrue((yield* maintenance.rebuild).valid);
       yield* assertCancelled;
 
-      // Preparation may finish after archive. Even reopening must not let its
-      // late callbacks revive the cancelled run or its background activity.
+      // Late preparation callbacks must not revive archived runs, even after reopen.
       yield* orchestrator.dispatch({
         type: "thread.unarchive",
         commandId: CommandId.make("archive-preparing-unarchive"),
@@ -4663,7 +4678,6 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       assert.equal(yield* Queue.take(startedRunIds), (yield* runFor("late-wake")).id);
       assert.equal(millis((yield* runFor("late-wake")).workStartedAt), millis(queuedStartedAt));
 
-      // Runs sort in the order they started, including after a wake that ran ahead.
       const ordinals = yield* Effect.forEach(
         ["prompt", "early-wake", "queued", "late-wake"],
         (key) => Effect.map(runFor(key), (run) => run.ordinal),
@@ -5174,7 +5188,6 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         runId: (yield* runFor("active")).id,
         holdQueue: true,
       });
-      // The continuation starts while the older messages wait in the held queue.
       yield* dispatch("continue", true);
       yield* orchestrator.dispatch({
         type: "queue.resume",
@@ -5801,8 +5814,7 @@ it.layer(layerSharedApplicationDataPlaneTest)("snooze projection", (it) => {
       const firstSnoozedAt = firstProjection.thread.snoozedAt;
       assert.isNotNull(firstSnoozedAt);
 
-      // Repeating a calendar preset sends the same wake time. It must still
-      // restamp snoozedAt, or a failure that woke the thread keeps it awake.
+      // Restamp snoozedAt for identical wake times so previously waking failures do not keep the thread awake.
       yield* TestClock.adjust("1 second");
       yield* orchestrator.dispatch({
         type: "thread.snooze",
@@ -6134,8 +6146,6 @@ it.layer(Layer.fresh(layerSharedApplicationDataPlaneTest))("compact PR events", 
         (yield* orchestrator.getThreadShell(threadId))?.pullRequests,
         after?.pullRequests,
       );
-      // Later syncs of the same link supersede the ones between the first
-      // (kept for replay order) and the newest.
       for (const [commandId, title] of [
         ["compact-pr-sync-again", "Still open PR"],
         ["compact-pr-sync-merged", "Merged PR"],
@@ -6175,9 +6185,7 @@ it.layer(Layer.fresh(layerSharedApplicationDataPlaneTest))("compact PR events", 
         latest?.pullRequests,
       );
 
-      // A later visit is read state only: clients keep updatedAt from the
-      // rename, so compaction must keep the rename. Two visits supersede each
-      // other, and a later rename supersedes a visit.
+      // Visits preserve updatedAt, so compaction must retain earlier renames; later renames supersede visits.
       const threadEvents = () => sql<{ event_type: string }>`
         SELECT event_type FROM orchestration_events
         WHERE stream_id = ${threadId}
@@ -6354,9 +6362,7 @@ it.layer(layerTest)("usage-limit recovery", (it) => {
           OrchestrationV2Run,
           OrchestrationV2Run,
         ];
-        // A user stop holds the queue as the run ends (thread.turn.interrupt with
-        // holdQueue). Without the hold, the terminal-run worker may start the
-        // queued run before the resume below, depending on fiber scheduling.
+        // Hold the queue like user Stop so the terminal worker cannot start it before explicit resume.
         yield* events.write({
           events: [
             {
@@ -7005,7 +7011,6 @@ it.layer(layerTest)("usage-limit recovery", (it) => {
           threadId,
         });
         const resumed = yield* orchestrator.getThreadProjection(threadId);
-        // The held message ran after the continuation, so it now sorts after it.
         assert.deepEqual(
           resumed.runs.map((run) => run.id),
           [run.id, continuation.id, held.id],

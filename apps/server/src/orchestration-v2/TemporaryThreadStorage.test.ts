@@ -7,6 +7,7 @@ import {
   CommandId,
   MessageId,
   EventId,
+  GuestShareId,
   ProjectId,
   ProviderInstanceId,
   ProviderDriverKind,
@@ -91,6 +92,47 @@ const createThread = Effect.fn("test.createTemporaryThread")(function* (
 });
 
 const create = createThread(threadId, commandId);
+
+it.effect("looks up saved guest shares without exposing volatile invites", () =>
+  Effect.gen(function* () {
+    const storage = yield* TemporaryThreadStorage.TemporaryThreadStorage;
+    const stores = yield* TemporaryThreadStorage.TemporaryThreadStores;
+    const projection = yield* ProjectionStore.ProjectionStoreV2;
+    const savedId = ThreadId.make("saved-guest-share");
+    const savedShareId = GuestShareId.make("saved-share");
+    const temporaryShareId = GuestShareId.make("temporary-share");
+    yield* createThread(savedId, CommandId.make("create-saved-guest-share"));
+    yield* storage.register({ threadId });
+    yield* create;
+    const now = yield* DateTime.now;
+    for (const [id, shareId, store] of [
+      [savedId, savedShareId, stores.durable],
+      [threadId, temporaryShareId, stores.volatile],
+    ] as const) {
+      yield* store.projectionStore.apply({
+        id: EventId.make("share-" + id),
+        type: "thread.guest-share-updated",
+        threadId: id,
+        occurredAt: now,
+        payload: {
+          ...(yield* store.projectionStore.getThread(id)),
+          guestShare: {
+            id: shareId,
+            host: "env.t3.test",
+            createdAt: DateTime.formatIso(now),
+            expiresAt: DateTime.formatIso(DateTime.add(now, { hours: 24 })),
+            guestName: null,
+            messages: [],
+          },
+        },
+      });
+      assert.equal(yield* store.projectionStore.findGuestShareThreadId(shareId), id);
+    }
+    assert.equal(yield* projection.findGuestShareThreadId(savedShareId), savedId);
+    assert.isNull(yield* projection.findGuestShareThreadId(temporaryShareId));
+    assert.isNull(yield* projection.findGuestShareThreadId(GuestShareId.make("unknown-share")));
+  }).pipe(Effect.provide(layerTest)),
+);
 
 it.effect("routes the full temporary write away from durable SQL", () =>
   Effect.gen(function* () {

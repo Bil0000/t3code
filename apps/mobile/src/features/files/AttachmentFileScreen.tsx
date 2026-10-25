@@ -222,8 +222,7 @@ function SavedAttachmentFileScreen(props: AttachmentFileScreenProps) {
     setNativeViewer("open");
     setNativeOpen(true);
   }, [nativeViewer, uri]);
-  // The viewer mints its own fresh URL from the resource, so a link that expired while this
-  // screen sat in the background is never handed to Quick Look or ACTION_VIEW.
+  // Mint a fresh URL: cached URLs may expire in the background before Quick Look or ACTION_VIEW opens.
   const nativeSource = ((): FilePreviewSource | null => {
     const kind = nativeKind ?? "document";
     const base = { kind, name: params.name, mimeType: params.mimeType };
@@ -239,7 +238,6 @@ function SavedAttachmentFileScreen(props: AttachmentFileScreenProps) {
     const message = pendingNativeError.current;
     pendingNativeError.current = null;
     if (nativeViewer === null) {
-      // A file this screen renders itself: an explicit viewer failure is worth a word.
       if (message) Dialog.alert("Could not open document", message);
       return;
     }

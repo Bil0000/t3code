@@ -152,5 +152,17 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
       label: "environment-data:orchestration:archived-shell-snapshot",
       tag: ORCHESTRATION_V2_WS_METHODS.getArchivedShellSnapshot,
     }),
+    // Read right before deleting a worktree, so never served from cache.
+    worktreeThreadIds: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:orchestration:worktree-thread-ids",
+      tag: ORCHESTRATION_V2_WS_METHODS.getWorktreeThreadIds,
+      execute: (input) =>
+        request(ORCHESTRATION_V2_WS_METHODS.getWorktreeThreadIds, {
+          ...input,
+          acceptTemporaryThreads: true,
+        }),
+      staleTimeMs: 0,
+      idleTtlMs: 0,
+    }),
   };
 }

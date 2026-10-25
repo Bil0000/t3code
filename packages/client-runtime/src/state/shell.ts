@@ -47,12 +47,26 @@ export interface EnvironmentShellState {
   readonly snapshot: Option.Option<OrchestrationV2ShellSnapshot>;
   readonly status: EnvironmentShellStatus;
   readonly error: Option.Option<string>;
+  /**
+   * Changes with each authoritative snapshot (not enrichment refreshes); 0 until the first one.
+   * Thread families read for an older generation may miss changes from before the latest snapshot,
+   * so they are read again.
+   */
+  readonly generation: number;
+  /** Sequences of the thread removals applied since the latest authoritative snapshot. */
+  readonly removedAt: ReadonlyMap<ThreadId, number>;
 }
 
-const EMPTY_SHELL_STATE: EnvironmentShellState = {
+const EMPTY_REMOVALS: ReadonlyMap<ThreadId, number> = new Map();
+// Shared by every shell state, so a rebuilt one never reuses a generation another already used.
+let lastShellGeneration = 0;
+
+export const EMPTY_SHELL_STATE: EnvironmentShellState = {
   snapshot: Option.none(),
   status: "empty",
   error: Option.none(),
+  generation: 0,
+  removedAt: EMPTY_REMOVALS,
 };
 
 function shellStatusForSnapshot(
@@ -88,9 +102,9 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
   );
   const cachedSnapshot = Option.map(cached, withoutDeferredPullRequests);
   const state = yield* SubscriptionRef.make<EnvironmentShellState>({
+    ...EMPTY_SHELL_STATE,
     snapshot: cachedSnapshot,
     status: shellStatusForSnapshot(cachedSnapshot),
-    error: Option.none(),
   });
   const awaitingCompletion = yield* Ref.make(false);
   const lastAuthoritativeSession = yield* Ref.make<RpcSession | null>(null);
@@ -200,8 +214,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
         temporaryOverlay = item;
         if (Option.isSome(next.snapshot)) {
           next = {
-            status: next.status,
-            error: next.error,
+            ...next,
             snapshot: Option.some(applyShellStreamEvent(next.snapshot.value, item)),
           };
         }
@@ -214,6 +227,8 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
         }
         continue;
       }
+      const authoritative =
+        item.kind === "snapshot" && item.resolvedRepositoryIdentityRoots === undefined;
       const nextSnapshot =
         item.kind === "snapshot"
           ? mergeShellSnapshotProjects(
@@ -234,6 +249,11 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
             });
       if (nextSnapshot === null) continue;
       receivedSnapshot ||= item.kind === "snapshot";
+      const removal =
+        item.kind === "thread.removed" &&
+        Option.exists(next.snapshot, (snapshot) => item.sequence > snapshot.snapshotSequence)
+          ? item
+          : null;
       next = {
         snapshot: Option.some(
           item.kind === "snapshot" && temporaryOverlay !== undefined
@@ -242,6 +262,12 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
         ),
         status: waiting ? "synchronizing" : "live",
         error: Option.none(),
+        generation: authoritative ? ++lastShellGeneration : next.generation,
+        removedAt: authoritative
+          ? EMPTY_REMOVALS
+          : removal === null
+            ? next.removedAt
+            : new Map(next.removedAt).set(removal.threadId, removal.sequence),
       };
     }
     yield* Ref.set(awaitingCompletion, waiting);
@@ -354,9 +380,15 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
       ORCHESTRATION_V2_WS_METHODS.subscribeShell,
       Effect.fn("EnvironmentShellState.makeSubscribeInput")(function* (session) {
         yield* Ref.set(activeSubscriptionSession, session);
-        const supportsCompletionMarker = yield* session.initialConfig.pipe(
-          Effect.map((config) => config.shellResumeCompletionMarker === true),
-          Effect.orElseSucceed(() => false),
+        const { supportsCompletionMarker, omitIdleSubagents } = yield* session.initialConfig.pipe(
+          Effect.map((config) => ({
+            supportsCompletionMarker: config.shellResumeCompletionMarker === true,
+            omitIdleSubagents: config.shellThreadFamilies === true,
+          })),
+          Effect.orElseSucceed(() => ({
+            supportsCompletionMarker: false,
+            omitIdleSubagents: false,
+          })),
         );
         yield* Ref.set(awaitingCompletion, supportsCompletionMarker);
         yield* setSynchronizing;
@@ -382,7 +414,8 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
               }),
             ),
           );
-          const httpSnapshot = yield* snapshotLoader.load(prepared);
+          // HTTP and the socket must agree, or omitted children would return through the socket.
+          const httpSnapshot = yield* snapshotLoader.load(prepared, { omitIdleSubagents });
           if (Option.isSome(httpSnapshot)) {
             yield* cancelActiveFill;
             const previous = yield* SubscriptionRef.get(state);
@@ -404,9 +437,11 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
           }
         }
 
+        const omission = omitIdleSubagents ? { omitIdleSubagents: true as const } : {};
         if (!canResume || Option.isNone(current.snapshot)) {
           return {
             acceptTemporaryThreads: true,
+            ...omission,
             ...(supportsCompletionMarker ? { requestCompletionMarker: true as const } : {}),
           };
         }
@@ -420,6 +455,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
         return {
           acceptTemporaryThreads: true,
           afterSequence: current.snapshot.value.snapshotSequence,
+          ...omission,
           ...(supportsCompletionMarker ? { requestCompletionMarker: true as const } : {}),
         };
       }),
