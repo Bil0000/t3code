@@ -751,6 +751,295 @@ it.effect("production runtime stops temporary launch preparation on the last vie
   }),
 );
 
+const temporaryCreateCommand = (threadId: ThreadId) =>
+  ({
+    type: "thread.create",
+    commandId: CommandId.make(`${threadId}-create`),
+    threadId,
+    projectId: ProjectId.make("temporary-receipts-project"),
+    title: "Temporary",
+    modelSelection,
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    branch: null,
+    worktreePath: null,
+    createdBy: "user",
+    creationSource: "web",
+    temporary: true,
+  }) as const;
+
+it.layer(Layer.fresh(Layer.merge(layerTest, TemporaryThreadService.layerState)))(
+  "temporary create receipts",
+  (it) => {
+    it.effect("replays a rejected receipt without registering a temporary root", () =>
+      Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const sink = yield* EventSink.EventSinkV2;
+        const storage = yield* TemporaryThreadStorage.TemporaryThreadStorage;
+        const threadId = ThreadId.make("temporary-rejected-replay");
+        const commandId = CommandId.make("temporary-rejected-replay-create");
+        yield* sink.commitRejectedCommand({
+          threadId,
+          commandId,
+          commandType: "thread.create",
+          rejectedAt: yield* DateTime.now,
+          error: "Previously rejected create",
+        });
+        const error = yield* orchestrator
+          .dispatch(temporaryCreateCommand(threadId))
+          .pipe(Effect.flip);
+        assert.equal(error._tag, "OrchestratorCommandPreviouslyRejectedError");
+        assert.isFalse(yield* storage.isTemporary(threadId));
+        assert.isFalse(yield* storage.isDiscarded(threadId));
+      }),
+    );
+
+    it.effect.each([false, true])("replays a kept create with thread conflict=%s", (conflict) =>
+      Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const storage = yield* TemporaryThreadStorage.TemporaryThreadStorage;
+        const threadId = ThreadId.make(`temporary-kept-replay-${conflict}`);
+        const create = temporaryCreateCommand(threadId);
+        yield* orchestrator.dispatch(create);
+        yield* storage.keep({ threadId, commandId: CommandId.make(`${threadId}-keep`) });
+        const targetId = conflict ? ThreadId.make(`${threadId}-other`) : threadId;
+        const replay = orchestrator.dispatch({ ...create, threadId: targetId });
+        if (conflict) {
+          assert.equal(
+            (yield* replay.pipe(Effect.flip))._tag,
+            "OrchestratorCommandIdConflictError",
+          );
+        } else {
+          assert.isTrue((yield* replay).replayed);
+        }
+        assert.isFalse(yield* storage.isTemporary(targetId));
+        assert.isFalse(yield* storage.isDiscarded(targetId));
+      }),
+    );
+
+    it.effect.each(["cleanup-failed", "discarded"] as const)(
+      "rejects accepted create replay after %s",
+      (state) =>
+        Effect.gen(function* () {
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const storage = yield* TemporaryThreadStorage.TemporaryThreadStorage;
+          const stores = yield* TemporaryThreadStorage.TemporaryThreadStores;
+          const lifecycle = yield* TemporaryThreadService.TemporaryThreadLifecycleState;
+          const threadId = ThreadId.make(`temporary-closed-replay-${state}`);
+          const create = {
+            ...temporaryCreateCommand(threadId),
+            title: "Private create payload",
+          } as const;
+          yield* orchestrator.dispatch(create);
+          lifecycle.discarding.add(threadId);
+          yield* storage.markDiscarding(threadId);
+          if (state === "cleanup-failed") {
+            yield* stores.volatile.sql.unsafe(
+              "CREATE TEMP TRIGGER fail_create_cleanup BEFORE DELETE ON orchestration_events BEGIN SELECT RAISE(ABORT, 'cleanup failed'); END",
+            );
+            yield* storage.discard(threadId).pipe(Effect.flip);
+            yield* stores.volatile.sql.unsafe("DROP TRIGGER fail_create_cleanup");
+            assert.isTrue(
+              Option.isSome(
+                yield* stores.volatile.commandReceipts.getByCommandId(create.commandId),
+              ),
+            );
+          } else {
+            yield* storage.discard(threadId);
+            assert.isTrue(yield* storage.isDiscarded(threadId));
+          }
+          const error = yield* orchestrator.dispatch(create).pipe(Effect.flip);
+          assert.equal(error._tag, "OrchestratorDispatchError");
+          if (error._tag === "OrchestratorDispatchError") {
+            assert.equal(error.cause, "Temporary thread is closed.");
+          }
+        }),
+    );
+
+    it.effect.each([false, true])("failed create preserves prior reservation=%s", (reserved) =>
+      Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const storage = yield* TemporaryThreadStorage.TemporaryThreadStorage;
+        const stores = yield* TemporaryThreadStorage.TemporaryThreadStores;
+        const threadId = ThreadId.make(`temporary-invalid-create-${reserved}`);
+        if (reserved) yield* storage.register({ threadId });
+        const create = {
+          ...temporaryCreateCommand(threadId),
+          modelSelection: { ...modelSelection, instanceId: ProviderInstanceId.make("missing") },
+        };
+        const error = yield* orchestrator.dispatch(create).pipe(Effect.flip);
+        assert.equal(error._tag, "OrchestratorDispatchError");
+        assert.equal(yield* storage.isTemporary(threadId), reserved);
+        assert.isFalse(yield* storage.isDiscarded(threadId));
+        assert.isNull(yield* stores.durable.projectionStore.getThreadShell(threadId));
+        assert.isNull(yield* stores.volatile.projectionStore.getThreadShell(threadId));
+        assert.isTrue(
+          Option.isNone(yield* stores.durable.commandReceipts.getByCommandId(create.commandId)),
+        );
+        assert.equal(
+          Option.isSome(yield* stores.volatile.commandReceipts.getByCommandId(create.commandId)),
+          reserved,
+        );
+      }),
+    );
+  },
+);
+
+it.layer(Layer.fresh(Layer.merge(layerTest, TemporaryThreadService.layerState)))(
+  "temporary child finalization",
+  (it) => {
+    it.effect(
+      "finishes a cancelled child question while its user follow-up holds the family lock",
+      () =>
+        Effect.gen(function* () {
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const storage = yield* TemporaryThreadStorage.TemporaryThreadStorage;
+          const projection = yield* ProjectionStore.ProjectionStoreV2;
+          const lifecycle = yield* TemporaryThreadService.TemporaryThreadLifecycleState;
+          const parentId = ThreadId.make("temporary-lock-parent");
+          yield* seedProject({
+            projectId: ProjectId.make("temporary-lock-project"),
+            title: "Temporary locks",
+            workspaceRoot: process.cwd(),
+            defaultModelSelection: modelSelection,
+            createdAt: DateTime.formatIso(yield* DateTime.now),
+          });
+          yield* orchestrator.dispatch({
+            ...temporaryCreateCommand(parentId),
+            projectId: ProjectId.make("temporary-lock-project"),
+          });
+          yield* orchestrator.dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make("temporary-lock-start"),
+            threadId: parentId,
+            messageId: MessageId.make("temporary-lock-message"),
+            text: "Delegate",
+            attachments: [],
+            dispatchMode: { type: "start_immediately" },
+            createdBy: "user",
+            creationSource: "web",
+          });
+          const parent = yield* orchestrator.getThreadRecords(parentId, ["runs"]);
+          const parentRun = parent.runs[0]!;
+          yield* orchestrator.dispatch({
+            type: "delegated_task.request",
+            commandId: CommandId.make("temporary-lock-delegate"),
+            parentThreadId: parentId,
+            parentRunId: parentRun.id,
+            parentNodeId: parentRun.rootNodeId!,
+            task: "Ask a question",
+            modelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            createdBy: "agent",
+            creationSource: "mcp",
+          });
+          const task = (yield* orchestrator.getThreadRecords(parentId, ["subagents"]))
+            .subagents[0]!;
+          const childId = task.childThreadId!;
+          assert.isTrue(yield* storage.isTemporary(childId));
+          const child = yield* orchestrator.getThreadRecords(childId, ["runs"]);
+          const run = child.runs[0]!;
+          const now = yield* DateTime.now;
+          const requestId = RuntimeRequestId.make("temporary-lock-question");
+          for (const event of [
+            {
+              id: EventId.make("temporary-lock-run-cancelled"),
+              type: "run.updated",
+              threadId: childId,
+              occurredAt: now,
+              payload: { ...run, status: "cancelled", completedAt: now },
+            },
+            {
+              id: EventId.make("temporary-lock-question-pending"),
+              type: "runtime-request.updated",
+              threadId: childId,
+              occurredAt: now,
+              payload: {
+                id: requestId,
+                nodeId: run.rootNodeId!,
+                providerTurnId: null,
+                nativeRequestRef: null,
+                kind: "user_input",
+                status: "pending",
+                responseCapability: { type: "message" },
+                createdAt: now,
+                resolvedAt: null,
+              },
+            },
+          ] as const)
+            yield* projection.apply(event);
+          const finalizerReady = yield* Deferred.make<void>();
+          const userHasFamily = yield* Deferred.make<void>();
+          const cycle = yield* Deferred.make<void>();
+          const getRecords = projection.getThreadRecords;
+          using _records = vi
+            .spyOn(projection, "getThreadRecords")
+            .mockImplementation((threadId, records, options) => {
+              const read = getRecords(threadId, records, options);
+              return threadId === childId &&
+                records.length === 1 &&
+                records[0] === "runtimeRequests"
+                ? Deferred.succeed(finalizerReady, undefined).pipe(
+                    Effect.andThen(Deferred.await(userHasFamily)),
+                    Effect.andThen(read),
+                  )
+                : read;
+            });
+          const withLock = lifecycle.commands.withLock;
+          let familyRequests = 0;
+          const observeFamily: typeof withLock = (key, effect) => {
+            if (key !== parentId) return withLock(key, effect);
+            if (++familyRequests === 1) {
+              return withLock(
+                key,
+                Deferred.succeed(userHasFamily, undefined).pipe(Effect.andThen(effect)),
+              );
+            }
+            return Deferred.succeed(cycle, undefined).pipe(Effect.andThen(withLock(key, effect)));
+          };
+          using _family = vi
+            .spyOn(lifecycle.commands, "withLock")
+            .mockImplementation(observeFamily);
+          const finalizer = yield* orchestrator
+            .recoverDelegatedTask(childId, run.id)
+            .pipe(Effect.forkChild);
+          assert.isTrue(
+            yield* Effect.raceFirst(
+              Deferred.await(finalizerReady).pipe(Effect.as(true)),
+              Fiber.join(finalizer).pipe(Effect.as(false)),
+            ),
+          );
+          const followup = yield* orchestrator
+            .dispatch({
+              type: "message.dispatch",
+              commandId: CommandId.make("temporary-lock-followup"),
+              threadId: childId,
+              messageId: MessageId.make("temporary-lock-followup-message"),
+              text: "Continue",
+              attachments: [],
+              dispatchMode: { type: "start_immediately" },
+              createdBy: "user",
+              creationSource: "web",
+            })
+            .pipe(Effect.forkChild);
+          const completed = yield* Effect.raceFirst(
+            Effect.all([Fiber.join(finalizer), Fiber.join(followup)]).pipe(Effect.as(true)),
+            Deferred.await(cycle).pipe(Effect.as(false)),
+          );
+          assert.isTrue(completed, "Finalization and follow-up must finish without a lock cycle");
+          const updated = yield* orchestrator.getThreadRecords(childId, [
+            "runtimeRequests",
+            "runs",
+          ]);
+          assert.equal(updated.runtimeRequests[0]?.status, "resolved");
+          assert.equal(updated.runtimeRequests[0]?.decision, "cancel");
+          assert.lengthOf(updated.runs, 2);
+        }),
+    );
+  },
+);
+
 it.layer(Layer.fresh(layerTest))("global stored events", (it) => {
   it.effect.each(["genesis", "resume", "filtered"] as const)(
     "global stored events preserve durable replay: %s",

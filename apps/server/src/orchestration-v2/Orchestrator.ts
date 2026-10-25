@@ -11289,19 +11289,24 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             node.id === request.nodeId && node.runId !== null && resultRunIds.has(node.runId),
         )
       ) {
-        yield* dispatchWithReceipt({
-          type: "thread.user-input.dismiss",
-          commandId: CommandId.make(`command:system:delegated-task-question:${request.id}`),
-          threadId: childThreadId,
-          requestId: request.id,
-        }).pipe(
-          Effect.catchCause((cause) =>
-            Effect.logWarning("Failed to dismiss task question", {
+        yield* threadDispatch
+          .withLock(
+            childThreadId,
+            dispatchWithReceiptEffect({
+              type: "thread.user-input.dismiss",
+              commandId: CommandId.make(`command:system:delegated-task-question:${request.id}`),
+              threadId: childThreadId,
               requestId: request.id,
-              cause,
             }),
-          ),
-        );
+          )
+          .pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Failed to dismiss task question", {
+                requestId: request.id,
+                cause,
+              }),
+            ),
+          );
       }
     }
   });
@@ -11570,8 +11575,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     });
 
     if (
-      Option.isSome(temporaryStorage) &&
-      (yield* temporaryStorage.value.isTemporary(commandThreadId(command)))
+      (command.type === "thread.create" && command.temporary === true) ||
+      (Option.isSome(temporaryStorage) &&
+        (yield* temporaryStorage.value.isTemporary(commandThreadId(command))))
     ) {
       if (
         (command.type === "thread.create" && command.importedNativeThread !== undefined) ||
@@ -11965,18 +11971,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       "orchestration_v2.thread_id": commandThreadId(command),
     });
 
-    if (command.type === "thread.create" && command.temporary === true) {
-      if (Option.isNone(temporaryStorage)) {
-        return yield* new OrchestratorDispatchError({
-          commandId: command.commandId,
-          commandType: command.type,
-          cause: "Temporary storage is unavailable.",
-        });
-      }
-      yield* mapDispatchError(command)(
-        temporaryStorage.value.register({ threadId: command.threadId }),
-      );
-    }
     if (Option.isSome(temporaryStorage)) {
       const storage = temporaryStorage.value;
       const threadId = commandThreadId(command);
@@ -12094,6 +12088,18 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       } satisfies OrchestratorV2DispatchResult;
     }
 
+    if (
+      command.type === "thread.create" &&
+      command.temporary === true &&
+      Option.isNone(temporaryStorage)
+    ) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: "Temporary storage is unavailable.",
+      });
+    }
+
     // Recheck under the lock; the user may have raised modes since sender preflight.
     const limit = yield* DispatchModeLimit;
     if (limit !== undefined) {
@@ -12125,6 +12131,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       Effect.catch((cause) =>
         Effect.gen(function* () {
           if (cause._tag === "OrchestratorThreadAboveModeLimitError") return yield* cause;
+          if (
+            command.type === "thread.create" &&
+            command.temporary === true &&
+            Option.isSome(temporaryStorage) &&
+            !(yield* temporaryStorage.value.isTemporary(command.threadId))
+          )
+            return yield* cause;
           const rejectedAt = yield* DateTime.now;
           const receipt = yield* eventSink
             .commitRejectedCommand({
@@ -12159,6 +12172,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         }),
       ),
     );
+
+    if (
+      command.type === "thread.create" &&
+      command.temporary === true &&
+      Option.isSome(temporaryStorage)
+    ) {
+      yield* mapDispatchError(command)(
+        temporaryStorage.value.register({ threadId: command.threadId }),
+      );
+    }
 
     if (plan.events.length === 0 && plan.effects.length === 0) {
       // A settle that ended nothing still records its receipt: a replayed Stop
