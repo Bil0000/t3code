@@ -749,6 +749,171 @@ it.effect("production runtime stops temporary launch preparation on the last vie
   }),
 );
 
+it.layer(Layer.fresh(layerTest))("global stored events", (it) => {
+  it.effect.each(["genesis", "resume", "filtered"] as const)(
+    "global stored events preserve durable replay: %s",
+    (mode) =>
+      Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const sink = yield* EventSink.EventSinkV2;
+        const stores = yield* TemporaryThreadStorage.TemporaryThreadStores;
+        const threadId = ThreadId.make(`global-replay-${mode}`);
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make(`${threadId}-create`),
+          threadId,
+          projectId: ProjectId.make("global-replay-project"),
+          title: "Replay",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdBy: "user",
+          creationSource: "web",
+        });
+        const afterSequence = yield* sink.latestSequence();
+        yield* orchestrator.dispatch({
+          type: "thread.metadata.update",
+          commandId: CommandId.make(`${threadId}-rename`),
+          threadId,
+          title: "Renamed",
+        });
+        const input =
+          mode === "resume"
+            ? { afterSequence }
+            : { afterSequence: 0, eventType: "thread.metadata-updated" as const };
+        const expected = yield* stores.durable.eventStore
+          .read(mode === "genesis" ? undefined : input)
+          .pipe(Stream.runCollect);
+        assert.isAbove(expected.length, 0);
+        const marker = {
+          id: EventId.make(`${threadId}-live`),
+          type: "thread.metadata-updated" as const,
+          threadId,
+          occurredAt: yield* DateTime.now,
+          payload: (yield* orchestrator.getThreadProjection(threadId)).thread,
+        };
+        const read = stores.durable.eventStore.read;
+        const ready = yield* Deferred.make<void>();
+        using _read = vi
+          .spyOn(stores.durable.eventStore, "read")
+          .mockImplementation((cursor) =>
+            read(cursor).pipe(
+              Stream.onEnd(
+                cursor?.eventType === (mode === "filtered" ? input.eventType : undefined)
+                  ? Deferred.succeed(ready, undefined)
+                  : Effect.void,
+              ),
+            ),
+          );
+        const observer = yield* (
+          mode === "genesis"
+            ? orchestrator.streamStoredEvents
+            : orchestrator.streamStoredEventsFrom(input)
+        ).pipe(
+          Stream.takeUntil((stored) => stored.event.id === marker.id),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+        yield* Deferred.await(ready);
+        yield* sink.write({ events: [marker] });
+        const actual = yield* Fiber.join(observer);
+        assert.deepEqual(
+          actual.map((stored) => stored.event.id),
+          [...expected.map((stored) => stored.event.id), marker.id],
+        );
+      }),
+  );
+
+  it.effect("global stored events keep temporary history live-only through Keep", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const sink = yield* EventSink.EventSinkV2;
+      const storage = yield* TemporaryThreadStorage.TemporaryThreadStorage;
+      const stores = yield* TemporaryThreadStorage.TemporaryThreadStores;
+      const threadId = ThreadId.make("global-temporary-replay");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("global-temporary-create"),
+        threadId,
+        projectId: ProjectId.make("global-replay-project"),
+        title: "Temporary replay",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "user",
+        creationSource: "web",
+        temporary: true,
+      });
+      const live = {
+        id: EventId.make("global-temporary-live"),
+        type: "thread.metadata-updated" as const,
+        threadId,
+        occurredAt: yield* DateTime.now,
+        payload: (yield* orchestrator.getThreadProjection(threadId)).thread,
+      };
+      const keptId = EventId.make("global-temporary-kept-live");
+      const read = stores.volatile.eventStore.read;
+      const ready = yield* Deferred.make<void>();
+      const durableReady = yield* Deferred.make<void>();
+      const liveSeen = yield* Deferred.make<void>();
+      const durableRead = stores.durable.eventStore.read;
+      using _durableRead = vi
+        .spyOn(stores.durable.eventStore, "read")
+        .mockImplementation((cursor) =>
+          durableRead(cursor).pipe(
+            Stream.onEnd(
+              cursor?.eventType === undefined
+                ? Deferred.succeed(durableReady, undefined)
+                : Effect.void,
+            ),
+          ),
+        );
+      using _read = vi
+        .spyOn(stores.volatile.eventStore, "read")
+        .mockImplementation((cursor) =>
+          read(cursor).pipe(
+            Stream.onEnd(
+              cursor?.eventType === undefined ? Deferred.succeed(ready, undefined) : Effect.void,
+            ),
+          ),
+        );
+      const observer = yield* orchestrator.streamStoredEvents.pipe(
+        Stream.filter((stored) => stored.event.threadId === threadId),
+        Stream.tap((stored) =>
+          stored.event.id === live.id ? Deferred.succeed(liveSeen, undefined) : Effect.void,
+        ),
+        Stream.takeUntil((stored) => stored.event.id === keptId),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* Deferred.await(ready);
+      yield* Deferred.await(durableReady);
+      yield* sink.write({ events: [live] });
+      yield* Deferred.await(liveSeen);
+      yield* storage.keep({ threadId, commandId: CommandId.make("global-temporary-keep") });
+      yield* sink.write({
+        events: [
+          {
+            ...live,
+            id: keptId,
+            payload: (yield* orchestrator.getThreadProjection(threadId)).thread,
+          },
+        ],
+      });
+      const events = yield* Fiber.join(observer);
+      assert.deepEqual(
+        events.map((stored) => stored.event.id),
+        [live.id, keptId],
+      );
+      assert.isFalse(yield* storage.isTemporary(threadId));
+    }),
+  );
+});
+
 it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
   const seedFailingRollbackThread = (name: string) =>
     Effect.gen(function* () {

@@ -6,10 +6,8 @@ import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as Layer from "effect/Layer";
 import * as Effect from "effect/Effect";
 import * as Context from "effect/Context";
-import * as EventSink from "./EventSink.ts";
 import * as EventStore from "./EventStore.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
-import { streamLiveStoredEvents } from "./ShellStream.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as McpAppModelContext from "../mcpApps/McpAppModelContext.ts";
 import * as McpAppRequests from "../mcpApps/McpAppRequests.ts";
@@ -56,26 +54,7 @@ import * as ThreadForkService from "./ThreadForkService.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 
-export const layerStorage = Layer.effect(
-  EventSink.EventSinkV2,
-  Effect.gen(function* () {
-    const routed = yield* EventSink.EventSinkV2;
-    const stores = yield* TemporaryThreadStorage.TemporaryThreadStores;
-    return EventSink.EventSinkV2.of({
-      ...routed,
-      stream: (input) =>
-        input?.threadId === undefined
-          ? streamLiveStoredEvents(
-              [stores.durable.eventSink, stores.volatile.eventSink].map((store) => ({
-                latestSequence: () => store.latestSequence(),
-                stream: (cursor) => store.stream({ ...input, ...cursor }),
-              })),
-            )
-          : routed.stream(input),
-    });
-  }),
-).pipe(
-  Layer.provideMerge(TemporaryThreadStorage.layer),
+export const layerStorage = TemporaryThreadStorage.layer.pipe(
   Layer.provideMerge(TemporaryThreadDiagnostics.layer),
 );
 export const layerEventSink = Layer.suspend(() => layerStorage);
