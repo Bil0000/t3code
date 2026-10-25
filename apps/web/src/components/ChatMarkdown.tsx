@@ -149,7 +149,8 @@ import { readLocalApi } from "../localApi";
 import { cn } from "../lib/utils";
 import { resolveRemoteOpenState, useRemoteOpenResolution } from "../remoteOpen";
 import { useRightPanelStore } from "../rightPanelStore";
-import { readThreadShell, useProjects, useQuietThreadShell } from "../state/entities";
+import { readThreadShell, useProjects } from "../state/entities";
+import { environmentThreadShells } from "../state/threads";
 import { serverEnvironment } from "../state/server";
 import { shellEnvironment } from "../state/shell";
 import { assetEnvironment } from "../state/assets";
@@ -436,6 +437,13 @@ const markdownServerConfigFieldsAtom = Atom.family((environmentId: EnvironmentId
   }).pipe(Atom.withLabel("markdown-server-config-fields")),
 );
 
+const markdownTemporaryThreadAtom = Atom.family((ref: ScopedThreadRef | null) =>
+  Atom.make(
+    (get) =>
+      ref !== null && get(environmentThreadShells.quietThreadShellAtom(ref))?.temporary === true,
+  ),
+);
+
 function useChatMarkdownState({
   text,
   inline = false,
@@ -455,9 +463,9 @@ function useChatMarkdownState({
   headingLevelOffset = 0,
   sourceControlMedia = false,
 }: ChatMarkdownProps) {
-  const threadShell = useQuietThreadShell(threadRef ?? null);
+  const shellTemporary = useAtomValue(markdownTemporaryThreadAtom(threadRef ?? null));
   const temporary =
-    threadShell?.temporary === true ||
+    shellTemporary ||
     (threadRef !== undefined && isTemporaryThread(threadRef.environmentId, threadRef.threadId));
   const resolvedTheme = useRenderedAppearance();
   const markdownRef = useRef<HTMLElement>(null);

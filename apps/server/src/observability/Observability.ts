@@ -22,6 +22,8 @@ import * as ResourceAttribution from "../resourceTelemetry/ResourceAttribution.t
 import * as ServerLogger from "../serverLogger.ts";
 import * as BrowserTraceCollector from "./BrowserTraceCollector.ts";
 
+const operationalEventNames = new Set(TemporaryThreadDiagnostics.operationalLogMessages.values());
+
 export const layer = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
@@ -89,9 +91,7 @@ export const layer = Layer.unwrap(
             const event = span.event.bind(span);
             let hasOperationalSignal = false;
             span.event = (name, time, attributes) => {
-              hasOperationalSignal ||= Array.from(
-                TemporaryThreadDiagnostics.operationalLogMessages.values(),
-              ).includes(name);
+              hasOperationalSignal ||= operationalEventNames.has(name);
               event(name, time, attributes);
             };
             span.end = (time, exit) => {
