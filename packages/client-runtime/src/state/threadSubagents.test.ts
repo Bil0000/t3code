@@ -183,29 +183,7 @@ describe("deriveThreadTurnSubagents", () => {
     expect(turn?.subagents).toHaveLength(3);
   });
 
-  it("keeps settled workflows reachable after newer root runs finish", () => {
-    const turn = deriveThreadTurnSubagents({
-      runs: [finishedRun, run("run-2", "completed")],
-      subagents: [
-        subagent({ id: "workflow", status: "completed", workflow: { phases: [], agents: [] } }),
-        subagent({
-          id: "recent",
-          runId: RunId.make("run-2"),
-          status: "completed",
-          startedAt: at("2026-06-20T00:00:02.000Z"),
-          updatedAt: at("2026-06-20T00:00:09.000Z"),
-        }),
-      ],
-    });
-
-    expect(turn?.subagents.map((entry) => entry.id)).toEqual(["workflow", "recent"]);
-    expect(resolveSubagentPillSegment(turn)).toEqual({
-      label: "2 done",
-      accessibilityLabel: "2 agents done",
-    });
-  });
-
-  it("does not count idle agents as done alongside settled workflows", () => {
+  it("keeps settled workflows reachable without counting idle agents as done", () => {
     const turn = deriveThreadTurnSubagents({
       runs: [finishedRun, run("run-2", "completed")],
       subagents: [
@@ -219,6 +197,7 @@ describe("deriveThreadTurnSubagents", () => {
       ],
     });
 
+    expect(turn?.subagents.map((entry) => entry.id)).toEqual(["idle", "workflow"]);
     expect(resolveSubagentPillSegment(turn)).toEqual({
       label: "1 done",
       accessibilityLabel: "1 agent done",

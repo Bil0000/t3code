@@ -26,11 +26,6 @@ function orderKey(subagent: Subagent): number {
   return DateTime.toEpochMillis(subagent.startedAt ?? subagent.updatedAt);
 }
 
-/**
- * The pill and sheet include the active run's agents, or the most recently updated agent's run when idle.
- * Retain workflows and agents still working from other runs so their history stays reachable.
- * Exclude rolled-back runs, matching the Waiting strip.
- */
 export function deriveThreadTurnSubagents(
   projection: Pick<Projection, "runs" | "subagents">,
 ): ThreadTurnSubagents | null {
