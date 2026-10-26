@@ -372,7 +372,8 @@ it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
 it.effect("temporary telemetry payloads never enter an export batch", () =>
   Effect.gen(function* () {
     const diagnostics = yield* Diagnostics.TemporaryThreadDiagnostics;
-    const batches = yield* sendForTenMinutes(
+    const batches = yield* sendFor(
+      10,
       respondWithStatus(204),
       Effect.gen(function* () {
         const analytics = yield* AnalyticsService.AnalyticsService;
@@ -392,7 +393,8 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const diagnostics = yield* Diagnostics.TemporaryThreadDiagnostics;
-      const batches = yield* sendForTenMinutes(
+      const batches = yield* sendFor(
+        10,
         respondWithStatus(204),
         Effect.gen(function* () {
           const analytics = yield* AnalyticsService.AnalyticsService;
