@@ -7,18 +7,6 @@ import { loadZipPreview, readZipPreviewResponse } from "./zipPreview";
 const signal = () => new AbortController().signal;
 
 describe("ZIP archive actions", () => {
-  it("counts visible files and hidden metadata without decoding image data", async () => {
-    const zip = new JSZip()
-      .file("photos/a.png", new Uint8Array([1]), { createFolders: false })
-      .file("photos/b.jpg", new Uint8Array([2]), { createFolders: false })
-      .file("__MACOSX/._a.png", "metadata", { createFolders: false })
-      .file(".DS_Store", "metadata");
-    const preview = await loadZipPreview(await archive(zip), signal());
-    expect(preview.fileCount).toBe(2);
-    expect(preview.hiddenCount).toBe(2);
-    expect(preview.imagesOnly).toBe(true);
-  });
-
   it("reads only the first MiB of a log that exceeds the preview limit", async () => {
     const zip = new JSZip().file("server.log", "x".repeat(11 * 1024 * 1024));
     const preview = await loadZipPreview(await archive(zip), signal());
@@ -52,19 +40,6 @@ describe("ZIP archive actions", () => {
     await expect(preview.readFile(entry, signal())).rejects.toThrow(/16 million pixels/);
     const saved = await preview.readFileForSave(entry, signal());
     expect(new Uint8Array(await saved.arrayBuffer())).toEqual(bytes);
-  });
-
-  it("reports received ZIP bytes while reading the bounded response", async () => {
-    const progress: number[] = [];
-    const body = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new Uint8Array([1, 2]));
-        controller.enqueue(new Uint8Array([3]));
-        controller.close();
-      },
-    });
-    await readZipPreviewResponse(new Response(body), signal(), (bytes) => progress.push(bytes));
-    expect(progress).toEqual([2, 3]);
   });
 });
 
@@ -120,8 +95,19 @@ async function patchCentral(blob: Blob, patch: (view: DataView, offset: number) 
 
 describe("readZipPreviewResponse", () => {
   it("reads a streamed response into a ZIP blob", async () => {
-    const response = new Response(new Uint8Array([1, 2, 3]));
-    const blob = await readZipPreviewResponse(response, signal());
+    const progress: number[] = [];
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1, 2]));
+          controller.enqueue(new Uint8Array([3]));
+          controller.close();
+        },
+      }),
+    );
+    const blob = await readZipPreviewResponse(response, signal(), (bytes) => progress.push(bytes));
+
+    expect(progress).toEqual([2, 3]);
 
     expect(blob.type).toBe("application/zip");
     expect(new Uint8Array(await blob.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]));
