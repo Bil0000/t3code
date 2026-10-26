@@ -171,6 +171,7 @@ export function AttachmentFileView(props: {
   const pendingNativeError = useRef<string | null>(null);
   const { uri, content, renderedMode, activeMode, setRendered, share, sharing } = document;
   const hasNativeSource = nativeSource !== null;
+  // oxlint-disable-next-line t3code/react-effect-budget -- Present the native file viewer after its source URL resolves.
   useEffect(() => {
     if (nativeViewer !== "pending" || !uri) return;
     // oxlint-disable-next-line react/set-state-in-effect -- Presenting the viewer waits on the resolved file.

@@ -113,6 +113,7 @@ vi.mock("../../native/native-layout-metrics", () => ({
   useNativeLayoutMetrics: () => null,
   useDeviceType: () => "phone",
 }));
+vi.mock("../../native/NativeScrollViewMarker", () => ({ NativeScrollView: () => null }));
 vi.mock("../../native/StackHeader", () => ({ NativeStackScreenOptions: () => null }));
 vi.mock("expo-glass-effect", () => ({ isGlassEffectAPIAvailable: () => false }));
 vi.mock("../layout/AdaptiveWorkspaceLayout", () => ({

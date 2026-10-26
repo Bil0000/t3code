@@ -177,6 +177,7 @@ function ZipEntryPreview(props: {
   const [prefix, setPrefix] = useState<string | null>(null);
   const [prefixRequested, setPrefixRequested] = useState(false);
   const { archive, entry } = props;
+  // oxlint-disable-next-line t3code/react-effect-budget -- Read the selected ZIP entry and cancel extraction on cleanup.
   useEffect(() => {
     const controller = new AbortController();
     const read = prefixRequested
@@ -255,6 +256,7 @@ function ZipImageTile(props: {
 }) {
   const [url, setUrl] = useState<string | null>(null);
   const { archive, entry } = props;
+  // oxlint-disable-next-line t3code/react-effect-budget -- Create the thumbnail URL and release it when the tile leaves the list.
   useEffect(() => {
     const controller = new AbortController();
     let objectUrl: string | null = null;
@@ -315,6 +317,7 @@ function ZipImageGrid(props: {
 }) {
   const [columns, setColumns] = useState(1);
   const ref = useRef<HTMLDivElement>(null);
+  // oxlint-disable-next-line t3code/react-effect-budget -- Observe the grid width to fit its visible columns.
   useEffect(() => {
     const element = ref.current;
     if (!element) return;
@@ -389,6 +392,7 @@ function ZipArchiveBrowser(props: {
   const extraction = useRef<AbortController | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const { archive } = props;
+  // oxlint-disable-next-line t3code/react-effect-budget -- Cancel pending attachment extraction when the archive closes.
   useEffect(() => () => extraction.current?.abort(), []);
   const occupied = new Set(archive.entries.map((entry) => entry.path));
   const files = new Map<string, ZipPreviewEntry>();
@@ -426,6 +430,7 @@ function ZipArchiveBrowser(props: {
   });
   const search = useFileTreeSearch(model);
   const [filter, setFilter] = useState("");
+  // oxlint-disable-next-line t3code/react-effect-budget -- Synchronize the filter with the external file tree model.
   useEffect(() => {
     if (search.value !== filter) model.setSearch(filter);
   }, [filter, model, search.value]);
@@ -710,6 +715,7 @@ export default function ZipArchivePreview(props: {
   const [cancelled, setCancelled] = useState(false);
   const download = useRef<AbortController | null>(null);
   const { file, url, countKey } = props;
+  // oxlint-disable-next-line t3code/react-effect-budget -- Load the archive bytes and cancel the download on cleanup.
   useEffect(() => {
     const controller = new AbortController();
     download.current = controller;

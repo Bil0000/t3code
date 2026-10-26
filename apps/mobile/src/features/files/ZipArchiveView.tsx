@@ -25,6 +25,7 @@ import { EmptyState } from "../../components/ui/EmptyState";
 import { Progress } from "../../components/ui/Progress";
 import { Toolbar } from "../../components/ui/Toolbar";
 import { useNativeColumnLayoutMetrics } from "../../native/native-layout-metrics";
+import { NativeScrollView } from "../../native/NativeScrollViewMarker";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { writeGeneratedAttachmentFile } from "../../lib/attachmentDownload";
 import { attachmentDocumentPresentation } from "../../lib/attachmentDocumentPresentation";
@@ -108,6 +109,7 @@ function useZipArchive(input: {
   const [revision, setRevision] = useState(0);
   const controller = useRef<AbortController | null>(null);
   const { uri, isLocal, sizeBytes, refresh } = input;
+  // oxlint-disable-next-line t3code/react-effect-budget -- Load archive bytes and cancel the stream on cleanup.
   useEffect(() => {
     if (!uri) return;
     const abort = new AbortController();
@@ -351,6 +353,7 @@ function ZipArchiveList(props: {
   return (
     <View className="flex-1 bg-sheet">
       <LegendList
+        renderScrollComponent={Platform.OS === "ios" ? NativeScrollView : undefined}
         contentInsetStartAdjustment={props.headerInset}
         className="flex-1"
         data={rows}
@@ -547,6 +550,7 @@ function ZipEntryView(props: {
   const [rendered, setRendered] = useState(true);
   const [revision, setRevision] = useState(0);
   const { busy, run } = useFileActions(entry.name);
+  // oxlint-disable-next-line t3code/react-effect-budget -- Read the selected entry and release its cached file on cleanup.
   useEffect(() => {
     const controller = new AbortController();
     let release: (() => void) | undefined;

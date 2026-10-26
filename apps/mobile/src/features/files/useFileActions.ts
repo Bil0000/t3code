@@ -5,6 +5,7 @@ import * as Dialog from "../../components/ui/Dialog";
 export function useFileActions(name: string) {
   const [busy, setBusy] = useState<"save" | "attach" | null>(null);
   const actionController = useRef<AbortController | null>(null);
+  // oxlint-disable-next-line t3code/react-effect-budget -- Cancel file work when its view closes.
   useEffect(() => () => actionController.current?.abort(), []);
   const run = (action: "save" | "attach", task: (signal: AbortSignal) => Promise<void>) => {
     if (busy) return;
