@@ -5481,31 +5481,16 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         const withWorkflowMemberThreadIds = (
           workflow: OrchestrationV2SubagentWorkflow,
           coordinatorChildThreadId: ThreadId,
-          previous: OrchestrationV2SubagentWorkflow | undefined,
-        ): OrchestrationV2SubagentWorkflow => {
-          const runChanged =
-            previous?.runHandles?.runId !== undefined &&
-            workflow.runHandles?.runId !== undefined &&
-            previous.runHandles.runId !== workflow.runHandles.runId;
-          const previousThreads = new Map(
-            (runChanged ? [] : (previous?.agents ?? [])).map((member) => [
-              member.index,
-              member.childThreadId,
-            ]),
-          );
-          return {
-            ...workflow,
-            agents: workflow.agents.map((member) => ({
-              ...member,
-              childThreadId:
-                previousThreads.get(member.index) ??
-                idAllocator.derive.threadFromProviderThread({
-                  driver: CLAUDE_PROVIDER,
-                  nativeThreadId: `${coordinatorChildThreadId}${workflow.runHandles?.runId === undefined ? "" : `:run:${workflow.runHandles.runId}`}:agent:${member.index}`,
-                }),
-            })),
-          };
-        };
+        ): OrchestrationV2SubagentWorkflow => ({
+          ...workflow,
+          agents: workflow.agents.map((member) => ({
+            ...member,
+            childThreadId: idAllocator.derive.threadFromProviderThread({
+              driver: CLAUDE_PROVIDER,
+              nativeThreadId: `${coordinatorChildThreadId}:agent:${member.index}`,
+            }),
+          })),
+        });
 
         const emitSubagentConversationMessage = Effect.fnUntraced(function* (input: {
           readonly nativeItemId: string;
@@ -5569,9 +5554,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           for (const member of input.workflow.agents) {
             if ((yield* Ref.get(sessionSubagentsByTaskId)).get(taskId) !== input.coordinator)
               return;
-            const childThreadId = member.childThreadId;
-            if (childThreadId === undefined) continue;
-            const memberKey = `${childThreadId}:agent:${member.index}`;
+            const memberKey = `${input.coordinator.childThreadId}:agent:${member.index}`;
             const previous = seen.get(memberKey);
             const status =
               (member.state === "queued" || member.state === "running") &&
@@ -5627,6 +5610,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               driver: CLAUDE_PROVIDER,
               nativeItemId: `${memberKey}:thread-root`,
             });
+            const childThreadId = member.childThreadId;
+            if (childThreadId === undefined) continue;
+
             if (
               previous === undefined ||
               previous.label !== member.label ||
@@ -6008,7 +5994,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           const workflowWithThreads =
             workflow === undefined
               ? undefined
-              : withWorkflowMemberThreadIds(workflow, childThreadId, priorTask?.workflow);
+              : withWorkflowMemberThreadIds(workflow, childThreadId);
           const effort =
             existingSubagent === undefined
               ? (input.effort ??
@@ -7402,7 +7388,6 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           const workflowWithThreads = withWorkflowMemberThreadIds(
             workflow,
             registered.childThreadId,
-            registered.task.workflow,
           );
           const task = {
             ...registered.task,

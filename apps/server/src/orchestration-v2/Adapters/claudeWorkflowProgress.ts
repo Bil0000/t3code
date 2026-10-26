@@ -63,7 +63,7 @@ function parseAgent(entry: unknown): OrchestrationV2WorkflowAgent | null {
     ...optional("agentId", text(field(entry, "agentId"))),
     ...optional("phaseIndex", count(field(entry, "phaseIndex"))),
     ...optional("phaseTitle", text(field(entry, "phaseTitle"))),
-    ...optional("model", text(field(entry, "fallbackModel")) ?? text(field(entry, "model"))),
+    ...optional("model", text(field(entry, "model"))),
     ...optional("attempt", count(field(entry, "attempt"))),
     ...optional("totalTokens", count(field(entry, "tokens"))),
     ...optional("toolCalls", count(field(entry, "toolCalls"))),
@@ -133,17 +133,12 @@ export function mergeClaudeWorkflowProgress(input: {
     return undefined;
   }
   const reported = field(input.message, "usage");
-  const runChanged =
-    input.runHandles?.runId !== undefined &&
-    previous?.runHandles?.runId !== undefined &&
-    input.runHandles.runId !== previous.runHandles.runId;
-  const previousProgress = runChanged ? undefined : previous;
   const phasesByIndex = new Map(
-    (previousProgress?.phases ?? []).map((phase) => [phase.index, phase] as const),
+    (previous?.phases ?? []).map((phase) => [phase.index, phase] as const),
   );
   for (const phase of snapshot?.phases ?? []) phasesByIndex.set(phase.index, phase);
   const agentsByIndex = new Map(
-    (previousProgress?.agents ?? []).map((agent) => [agent.index, agent] as const),
+    (previous?.agents ?? []).map((agent) => [agent.index, agent] as const),
   );
   for (const agent of snapshot?.agents ?? []) {
     const prior = agentsByIndex.get(agent.index);
@@ -172,21 +167,15 @@ export function mergeClaudeWorkflowProgress(input: {
   }
   const runHandles =
     input.runHandles === undefined
-      ? previousProgress?.runHandles
-      : { ...previousProgress?.runHandles, ...input.runHandles };
+      ? previous?.runHandles
+      : { ...previous?.runHandles, ...input.runHandles };
   return {
     ...optional("name", input.name ?? previous?.name),
     ...optional("runHandles", runHandles),
     phases: Array.from(phasesByIndex.values()).sort((left, right) => left.index - right.index),
     agents: Array.from(agentsByIndex.values()).sort((left, right) => left.index - right.index),
-    ...optional(
-      "totalTokens",
-      count(field(reported, "total_tokens")) ?? previousProgress?.totalTokens,
-    ),
-    ...optional("toolCalls", count(field(reported, "tool_uses")) ?? previousProgress?.toolCalls),
-    ...optional(
-      "durationMs",
-      count(field(reported, "duration_ms")) ?? previousProgress?.durationMs,
-    ),
+    ...optional("totalTokens", count(field(reported, "total_tokens")) ?? previous?.totalTokens),
+    ...optional("toolCalls", count(field(reported, "tool_uses")) ?? previous?.toolCalls),
+    ...optional("durationMs", count(field(reported, "duration_ms")) ?? previous?.durationMs),
   };
 }

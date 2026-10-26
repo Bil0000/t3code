@@ -28,7 +28,7 @@ function orderKey(subagent: Subagent): number {
 
 /**
  * The pill and sheet include the active run's agents, or the most recently updated agent's run when idle.
- * Include agents still working from other runs so background work stays counted and reachable.
+ * Retain workflows and agents still working from other runs so their history stays reachable.
  * Exclude rolled-back runs, matching the Waiting strip.
  */
 export function deriveThreadTurnSubagents(
