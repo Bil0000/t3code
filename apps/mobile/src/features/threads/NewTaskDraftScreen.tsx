@@ -555,6 +555,7 @@ export function NewTaskDraftScreen(props: {
       (destinationProject?.environmentId === initialEnvironmentId &&
         destinationProject.id === initialProjectId);
     if (flow.temporary && shareId && cancelledIncomingShareId !== shareId) {
+      // oxlint-disable-next-line react/set-state-in-effect -- Cancel the external native share handoff before it can import into a temporary draft.
       setCancelledIncomingShareId(shareId);
       Dialog.alert(
         "Cannot import into temporary chat",
@@ -610,7 +611,6 @@ export function NewTaskDraftScreen(props: {
     let didConsumeShare = false;
     let needsDraftRestore = false;
     activeShareImportTokenRef.current = importToken;
-    // oxlint-disable-next-line react/set-state-in-effect -- Publishes the share import started by this effect before its async work runs.
     setImportingShareKey(importKey);
     void (async () => {
       await reserveShare(shareId, {

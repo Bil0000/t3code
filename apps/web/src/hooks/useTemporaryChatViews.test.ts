@@ -35,6 +35,7 @@ vi.mock("react", async (original) => ({
     return [state.slots[index]];
   },
   useEffect: (effect: () => void | (() => void)) => state.effects.push(effect),
+  useInsertionEffect: (effect: () => void | (() => void)) => state.effects.push(effect),
   useLayoutEffect: (effect: () => void) => state.effects.push(effect),
 }));
 vi.mock("../composerDraftStore", async (original) => {

@@ -512,6 +512,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
       currentModelSelection.instanceId,
       props.serverConfig?.providers ?? [],
       props.serverConfig?.usageLimitSources ?? [],
+      // oxlint-disable-next-line react/purity -- This command callback reads the time only after a user action.
       Date.now(),
     );
     onShowUsageLimits(report);
