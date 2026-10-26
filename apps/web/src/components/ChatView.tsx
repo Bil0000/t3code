@@ -106,6 +106,7 @@ import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { resolveThreadReferenceCopyTarget } from "@t3tools/client-runtime/thread-reference";
 import { resolveTerminalSessionLabel } from "@t3tools/shared/terminalLabels";
 import { useAtomValue } from "@effect/atom-react";
+import { MessageCircleDashedIcon } from "lucide-react";
 import { type SetStateAction, use, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { BackgroundThreadContext } from "./chat/backgroundThread";
 import { useLocation, useNavigate } from "@tanstack/react-router";
@@ -2585,6 +2586,15 @@ export default function ChatView(props: ChatViewProps) {
       }),
     ];
   })() as ComposerBannerStackItem[];
+  if (serverThread?.temporary === true || draftThread?.temporary === true) {
+    composerBannerItems.push({
+      id: "temporary-chat",
+      variant: "warning",
+      icon: <MessageCircleDashedIcon />,
+      title: "Temporary chat",
+      description: "Deleted when you leave. Save to keep it. File changes stay.",
+    });
+  }
 
   if (
     terminalUiLaunchContext !== null &&
@@ -3180,18 +3190,6 @@ export default function ChatView(props: ChatViewProps) {
               : {})}
           />
         </header>
-        {serverThread?.temporary === true || draftThread?.temporary === true ? (
-          <div className="shrink-0 px-3 pb-2 sm:px-5">
-            <div
-              role="note"
-              className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 rounded-lg border border-border/60 bg-muted/30 px-3 py-2 text-xs leading-relaxed text-muted-foreground"
-            >
-              <span className="font-medium text-foreground">Temporary chat</span>
-              <span>Deleted when you leave. Save to keep it. File changes stay.</span>
-            </div>
-          </div>
-        ) : null}
-
         <div className="relative flex min-h-0 min-w-0 flex-1">
           <ThreadFindCanvas
             findOptions={{
