@@ -1,6 +1,6 @@
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 import { useAtomValue } from "@effect/atom-react";
-import { scopeProjectRef } from "@t3tools/client-runtime/environment";
+import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { setTemporaryThread } from "@t3tools/client-runtime/temporary-threads";
 import { CommandId, type ScopedThreadRef } from "@t3tools/contracts";
 import { BookmarkIcon, MessageCircleDashedIcon } from "lucide-react";
@@ -8,14 +8,20 @@ import { useState } from "react";
 import {
   composerDraftHasUserContent,
   useComposerDraftStore,
+  type ComposerThreadDraftState,
   type DraftId,
 } from "../../composerDraftStore";
 import { randomUUID, newThreadId } from "../../lib/utils";
+import { selectThreadPanelOpen, useRightPanelStore } from "../../rightPanelStore";
 import { threadEnvironment } from "../../state/threads";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { Button } from "../ui/button";
 import { Toggle } from "../ui/toggle";
 import { toastManager } from "../ui/toast";
+
+function draftHasContext(draft: ComposerThreadDraftState | null | undefined) {
+  return composerDraftHasUserContent(draft ? { ...draft, prompt: "" } : undefined);
+}
 
 export function TemporaryChatControls({
   threadRef,
@@ -30,8 +36,8 @@ export function TemporaryChatControls({
 }) {
   const keep = useOrchestrationCommand(threadEnvironment.keep, { reportFailure: false });
   const canKeep = useAtomValue(threadEnvironment.keep.permissionAtom(threadRef.environmentId));
-  const hasContent = useComposerDraftStore((state) =>
-    composerDraftHasUserContent(state.getComposerDraft(draftId ?? threadRef) ?? undefined),
+  const hasContext = useComposerDraftStore((state) =>
+    draftHasContext(state.getComposerDraft(draftId ?? threadRef)),
   );
   const [saving, setSaving] = useState(false);
   const [commandId] = useState(() => CommandId.make(randomUUID()));
@@ -42,14 +48,25 @@ export function TemporaryChatControls({
     if (
       !draft ||
       (draft.temporary === true) === value ||
-      (value && composerDraftHasUserContent(store.getComposerDraft(draftId) ?? undefined))
+      (value && draftHasContext(store.getComposerDraft(draftId)))
     )
       return;
+    const previousRef = scopeThreadRef(draft.environmentId, draft.threadId);
+    const nextRef = scopeThreadRef(draft.environmentId, newThreadId());
+    const panels = useRightPanelStore.getState();
+    setTemporaryThread(nextRef.environmentId, nextRef.threadId, value);
+    for (const presentation of ["inline", "popover"] as const) {
+      panels.setThreadPanelOpen(
+        nextRef,
+        presentation,
+        selectThreadPanelOpen(panels.threadPanelVisibilityByThreadKey, previousRef, presentation),
+      );
+    }
     store.setLogicalProjectDraftThreadId(
       draft.logicalProjectKey,
       scopeProjectRef(draft.environmentId, draft.projectId),
       draftId,
-      { ...draft, threadId: newThreadId(), temporary: value },
+      { ...draft, threadId: nextRef.threadId, temporary: value },
     );
   };
   const keepThread = async () => {
@@ -80,7 +97,7 @@ export function TemporaryChatControls({
               size="sm"
               pressed={temporary}
               aria-pressed={temporary}
-              disabled={!canKeep || (!temporary && hasContent)}
+              disabled={!canKeep || (!temporary && hasContext)}
               onPressedChange={changeDraft}
               aria-label="Temporary chat"
             >
@@ -92,8 +109,8 @@ export function TemporaryChatControls({
               ? "This connection cannot change threads."
               : temporary
                 ? "Temporary chat is on. Turn off to keep this draft."
-                : hasContent
-                  ? "Choose Temporary before typing."
+                : hasContext
+                  ? "Remove attachments and context to turn on temporary chat."
                   : "Temporary chat. Deleted when you leave. File changes stay."}
           </TooltipPopup>
         </Tooltip>

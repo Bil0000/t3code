@@ -45,6 +45,7 @@ import {
   useComposerDraftStore,
 } from "../../composerDraftStore";
 import { TemporaryChatControls } from "./TemporaryChatControls";
+import { selectThreadPanelOpen, useRightPanelStore } from "../../rightPanelStore";
 
 const environmentId = EnvironmentId.make("temporary-toggle");
 const draftId = DraftId.make("routed-draft");
@@ -54,6 +55,7 @@ type ControlProps = {
   children?: ReactNode;
   onPressedChange?: (checked: boolean) => void;
   onClick?: () => void;
+  disabled?: boolean;
 };
 
 function findControl(
@@ -74,6 +76,7 @@ function setup(temporary = false, projectId = ProjectId.make("project")) {
   state.navigate.mockReset().mockResolvedValue(undefined);
   state.keep.mockReset().mockResolvedValue(AsyncResult.success(undefined));
   state.toast.mockReset();
+  useRightPanelStore.setState({ threadPanelVisibilityByThreadKey: {} });
   useComposerDraftStore.setState({
     draftsByThreadKey: {},
     draftThreadsByThreadKey: {},
@@ -101,6 +104,7 @@ function setup(temporary = false, projectId = ProjectId.make("project")) {
     projectRef,
     [Symbol.dispose]() {
       useComposerDraftStore.persist.clearStorage();
+      useRightPanelStore.persist.clearStorage();
       vi.useRealTimers();
     },
   };
@@ -181,18 +185,67 @@ it("uses a fresh saved reservation when Temporary is turned off", async () => {
   expect(state.navigate).not.toHaveBeenCalled();
 });
 
-it("keeps a saved draft with user text in saved mode", async () => {
-  using app = setup();
-  app.store.setPrompt(draftId, "existing saved prompt");
-  app.toggle(true);
-  expect(app.store.getDraftSession(draftId)?.temporary).toBe(false);
-  expect(app.store.getDraftSession(draftId)?.threadId).toBe(originalThreadId);
-  await vi.runOnlyPendingTimersAsync();
-  const persisted = await useComposerDraftStore.persist
-    .getOptions()
-    .storage?.getItem(COMPOSER_DRAFT_STORAGE_KEY);
-  expect(JSON.stringify(persisted)).toContain("existing saved prompt");
-});
+it.each(["project", "No project"])(
+  "makes typed %s text temporary and removes it from the draft writer",
+  async (project) => {
+    using app = setup(false, ProjectId.make(project));
+    app.store.setPrompt(draftId, "existing typed prompt");
+    await vi.runOnlyPendingTimersAsync();
+    const storage = useComposerDraftStore.persist.getOptions().storage;
+    expect(JSON.stringify(await storage?.getItem(COMPOSER_DRAFT_STORAGE_KEY))).toContain(
+      "existing typed prompt",
+    );
+    const control = findControl(
+      TemporaryChatControls({
+        threadRef: scopeThreadRef(environmentId, originalThreadId),
+        draftId,
+        temporary: false,
+        isServerThread: false,
+      }),
+      "onPressedChange",
+    );
+    expect(control?.disabled).toBe(false);
+    app.toggle(true);
+    expect(app.store.getDraftSession(draftId)?.temporary).toBe(true);
+    expect(app.store.getComposerDraft(draftId)?.prompt).toBe("existing typed prompt");
+    await vi.runOnlyPendingTimersAsync();
+    expect(JSON.stringify(await storage?.getItem(COMPOSER_DRAFT_STORAGE_KEY))).not.toContain(
+      "existing typed prompt",
+    );
+  },
+);
+
+it.each([
+  { presentation: "inline", open: false },
+  { presentation: "popover", open: true },
+] as const)(
+  "preserves the $presentation workspace card when toggling Temporary",
+  async ({ presentation, open }) => {
+    using app = setup();
+    useRightPanelStore
+      .getState()
+      .setThreadPanelOpen(scopeThreadRef(environmentId, originalThreadId), presentation, open);
+    for (const temporary of [true, false]) {
+      app.toggle(temporary);
+      const draft = app.store.getDraftSession(draftId);
+      if (!draft) throw new Error("Routed draft is missing");
+      expect(
+        selectThreadPanelOpen(
+          useRightPanelStore.getState().threadPanelVisibilityByThreadKey,
+          scopeThreadRef(environmentId, draft.threadId),
+          presentation,
+        ),
+      ).toBe(open);
+      if (temporary) {
+        const options = useRightPanelStore.persist.getOptions();
+        if (!options.name) throw new Error("Right panel storage name is missing");
+        expect(JSON.stringify(await options.storage?.getItem(options.name))).not.toContain(
+          draft.threadId,
+        );
+      }
+    }
+  },
+);
 
 it("keeps the live thread identity when Keep succeeds", async () => {
   using app = setup(true);
