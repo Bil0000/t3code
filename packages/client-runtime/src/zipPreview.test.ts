@@ -72,7 +72,14 @@ describe("ZIP byte core", () => {
     const templateView = new DataView(template.buffer, template.byteOffset, template.byteLength);
     const start = 30 + templateView.getUint16(26, true) + templateView.getUint16(28, true);
     const oldDirectory = templateView.getUint32(template.length - 6, true);
-    const compressed = NodeZlib.deflateRawSync(new Uint8Array(65 * 1024 * 1024), { level: 1 });
+    const storedPrefix = NodeZlib.deflateRawSync(new Uint8Array(31 * 1024 * 1024), {
+      level: 0,
+      finishFlush: NodeZlib.constants.Z_SYNC_FLUSH,
+    });
+    const compressed = Buffer.concat([
+      storedPrefix,
+      NodeZlib.deflateRawSync(new Uint8Array(34 * 1024 * 1024), { level: 1 }),
+    ]);
     const directory = start + compressed.length;
     const bytes = new Uint8Array(directory + template.length - oldDirectory);
     bytes.set(template.subarray(0, start));
