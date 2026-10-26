@@ -1,12 +1,11 @@
 import * as Dialog from "../../components/ui/Dialog";
-/* oxlint-disable react/no-array-index-key -- Captured table rows and columns have stable positions and may contain identical values. */
 import type { EnvironmentId } from "@t3tools/contracts";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Platform, ScrollView, View } from "react-native";
+import { Platform, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { AppText as Text } from "../../components/ui/AppText";
 import { AudioFilePreview } from "./AudioFilePreview";
+import { DelimitedFilePreview } from "./DelimitedFilePreview";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { ScreenContent } from "../../components/ui/ScreenContent";
 import { FilePreviewModal, type FilePreviewSource } from "../../components/FilePreviewModal";
@@ -91,41 +90,7 @@ function AttachmentFileBody(props: {
           </FilePreviewNotice>
         ) : null}
         {table && document.activeMode === "table" ? (
-          <ScrollView className="flex-1" contentInsetAdjustmentBehavior="automatic">
-            {table.truncated ? (
-              <FilePreviewNotice>
-                Table limited to the first 100 rows and 30 columns. Source shows the rest.
-              </FilePreviewNotice>
-            ) : null}
-            <ScrollView horizontal>
-              <View>
-                {table.rows.map((row, rowIndex) => (
-                  <View
-                    key={rowIndex}
-                    className={rowIndex === 0 ? "flex-row bg-subtle" : "flex-row"}
-                  >
-                    {row.map((cell, columnIndex) => (
-                      <View
-                        key={columnIndex}
-                        className="w-48 border-r border-b border-border px-3 py-2"
-                      >
-                        <Text
-                          selectable
-                          className={
-                            rowIndex === 0
-                              ? "text-sm font-t3-semibold text-foreground"
-                              : "text-sm text-foreground"
-                          }
-                        >
-                          {cell}
-                        </Text>
-                      </View>
-                    ))}
-                  </View>
-                ))}
-              </View>
-            </ScrollView>
-          </ScrollView>
+          <DelimitedFilePreview table={table} />
         ) : document.activeMode === "markdown" && props.environmentId ? (
           <FileMarkdownPreview
             cwd=""
@@ -137,6 +102,7 @@ function AttachmentFileBody(props: {
           />
         ) : (
           <SourceFileSurface
+            selectable
             contents={content.text}
             path={props.name}
             headerInsetTop={content.truncated ? 0 : undefined}

@@ -1,3 +1,4 @@
+import { AsyncResult } from "effect/reactivity";
 import { act, type ComponentProps, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, onTestFinished, vi } from "vite-plus/test";
@@ -16,7 +17,10 @@ const server = vi.hoisted(() => ({
 vi.mock("../../state/entities", () => ({
   useEnvironmentServerConfig: () => ({ environment: { capabilities: server.capabilities } }),
 }));
-vi.mock("../../state/assets", () => ({ useRefreshAssetUrl: () => server.refresh }));
+vi.mock("../../state/assets", () => ({
+  useRefreshAssetUrl: () => server.refresh,
+  useFreshAssetUrl: () => AsyncResult.success({ url: "file:///first.zip", authorizedAt: 0 }),
+}));
 
 vi.mock("react-native", () => {
   const Slot = (props: { readonly children?: ReactNode }) => <div>{props.children}</div>;
