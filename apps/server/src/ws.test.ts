@@ -817,13 +817,10 @@ it.effect.each(["family", "worktree"] as const)(
         });
       const saved = kind === "family" ? [] : ["saved", "saved-child"];
       for (const optIn of [undefined, false]) assert.deepEqual(yield* read(optIn), saved);
-      assert.deepEqual(
-        yield* read(false, "saved"),
-        kind === "family" ? ["saved-child"] : ["saved", "saved-child"],
-      );
+      assert.deepEqual(yield* read(false, "saved"), ["saved", "saved-child"]);
       const admitted =
         kind === "family"
-          ? ["private-child"]
+          ? ["private", "private-child"]
           : ["private", "private-child", "saved", "saved-child"];
       assert.deepEqual(yield* read(true), admitted);
       yield* storage.keep({
@@ -856,7 +853,7 @@ it.effect.each(["family", "worktree"] as const)(
       assert.deepEqual(
         yield* read(false, "racing"),
         kind === "family"
-          ? ["racing-child"]
+          ? ["racing", "racing-child"]
           : ["private", "private-child", "racing", "racing-child", "saved", "saved-child"],
       );
       checkLockOrder = true;

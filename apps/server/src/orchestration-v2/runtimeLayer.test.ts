@@ -36,6 +36,7 @@ import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
@@ -73,6 +74,7 @@ import * as ProjectStore from "./ProjectStore.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as RuntimeLayer from "./runtimeLayer.ts";
 import * as CommandOutputHub from "./CommandOutputHub.ts";
+import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
 import { shellStreamItemFromThreadShell } from "./ShellStream.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
@@ -651,15 +653,14 @@ it.effect("production runtime stops temporary launch preparation on the last vie
     const production = RuntimeLayer.layerProduction.pipe(
       Layer.provide(
         Layer.mergeAll(
+          AnalyticsService.AnalyticsService.layerTest,
           WorktreeSetupTracker.layer,
           ProviderRegistryMock.layer(),
           Layer.mock(CloudManagedEndpointRuntime)({}),
           Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({
             get: () => Effect.succeed(null),
           }),
-          Layer.mock(ServerSecretStore.ServerSecretStore)({
-            getOrCreateRandom: () => Effect.succeed(new Uint8Array(32)),
-          }),
+          ServerSecretStore.layer,
           Layer.mock(TerminalManager.TerminalManager)({ close: () => Effect.void }),
           Layer.mock(PreviewManager.PreviewManager)({ close: () => Effect.void }),
           Layer.mock(GitVcsDriver.GitVcsDriver)({}),

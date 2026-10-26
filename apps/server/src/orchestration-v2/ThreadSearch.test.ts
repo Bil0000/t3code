@@ -1090,11 +1090,11 @@ it.effect("routes agent search to saved threads and finds imported messages afte
     yield* storage.register({ threadId: temporary });
     yield* Effect.forEach(
       [
-        thread(titled, project, { title: "Needle" }),
+        thread(titled, project, { title: "Needle", settledAt: at(1) }),
         thread(messageOnly, project),
         message(messageOnly, "saved-needle", "user", "needle in saved message"),
         thread(elsewhere, otherProject, { title: "Needle elsewhere" }),
-        thread(temporary, project, { title: "Needle temporary" }),
+        thread(temporary, project, { title: "Needle temporary", settledAt: at(1) }),
         message(temporary, "temporary-needle", "user", "needle in imported message"),
       ],
       projections.apply,
@@ -1117,7 +1117,15 @@ it.effect("routes agent search to saved threads and finds imported messages afte
         [messageOnly, "user"],
       ],
     );
+    const olderRequest = {
+      query: "needle",
+      before: DateTime.formatIso(at(30)),
+      projectIds: [project],
+      messageThreadIds: [temporary],
+    };
+    assert.deepEqual(yield* search.searchOlderSettled(olderRequest), [titled]);
     yield* storage.keep({ threadId: temporary, commandId: CommandId.make("keep-agent-search") });
+    assert.sameMembers([...(yield* search.searchOlderSettled(olderRequest))], [titled, temporary]);
     const kept = yield* search.searchThreads({ query: "imported", projectId: project });
     assert.deepEqual(
       kept.matches.map((match) => [match.threadId, match.source, match.snippet]),

@@ -189,6 +189,7 @@ vi.mock("../../components/FilePreviewModal", () => ({ FilePreviewModal: () => nu
 vi.mock("../../components/VideoPreviewModal", () => ({ VideoPreviewModal: () => null }));
 vi.mock("../../components/VideoAttachmentTile", () => ({ VideoAttachmentTile: () => null }));
 vi.mock("../../components/MediaVideoPlayer", () => ({ MediaVideoPlayer: () => null }));
+vi.mock("./ThreadInlineFilePreview", () => ({ ThreadInlineFilePreview: () => null }));
 vi.mock("./CopyTextButton", () => ({ CopyTextButton: () => null }));
 vi.mock("../../components/ui/Menu", () => ({ Menu: () => null }));
 vi.mock("../../components/PierreEntryIcon", () => ({ PierreEntryIcon: () => null }));
@@ -278,7 +279,7 @@ it.each([true, false])(
       <ThreadFeed
         environmentId={environmentId}
         threadId={threadId}
-        selectedThreadDetailRef={null}
+        detailRef={null}
         threadTitle="Thread"
         feed={feed}
         queuedMessages={[]}
@@ -291,7 +292,6 @@ it.each([true, false])(
         listRef={{ current: null }}
         freeze={{ value: false } as ComponentProps<typeof ThreadFeed>["freeze"]}
         anchorMessageId={null}
-        submittedMessageId={null}
         contentInsetEndAdjustment={
           { value: 0 } as ComponentProps<typeof ThreadFeed>["contentInsetEndAdjustment"]
         }
@@ -316,7 +316,7 @@ it.each([true, false])(
       await act(async () =>
         root.render(
           <RegistryContext.Provider value={registry}>
-            <ThreadFeed {...feedView.props} selectedThreadDetailRef={{ environmentId, threadId }} />
+            <ThreadFeed {...feedView.props} detailRef={{ environmentId, threadId }} />
           </RegistryContext.Provider>,
         ),
       );

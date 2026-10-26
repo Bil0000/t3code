@@ -463,9 +463,13 @@ const make = Effect.gen(function* () {
         ),
       );
     }),
-    isTemporary: (id) => Effect.sync(() => temporary(id)),
-    isDiscarded: (id) => Effect.sync(() => owners.get(id)?.state === "discarded"),
-    family: (id) => Effect.sync(() => family(id)),
+    isTemporary: Effect.fn("TemporaryThreadStorage.isTemporary")((id) =>
+      Effect.sync(() => temporary(id)),
+    ),
+    isDiscarded: Effect.fn("TemporaryThreadStorage.isDiscarded")((id) =>
+      Effect.sync(() => owners.get(id)?.state === "discarded"),
+    ),
+    family: Effect.fn("TemporaryThreadStorage.family")((id) => Effect.sync(() => family(id))),
     subscribeThreadRunUpdates: Effect.fn("TemporaryThreadStorage.subscribeThreadRunUpdates")(
       function* (threadId) {
         const subscription = yield* PubSub.subscribe(changeBus);
@@ -485,7 +489,9 @@ const make = Effect.gen(function* () {
         );
       },
     ),
-    generation: (id) => Effect.sync(() => owners.get(id)?.generation ?? "durable"),
+    generation: Effect.fn("TemporaryThreadStorage.generation")((id) =>
+      Effect.sync(() => owners.get(id)?.generation ?? "durable"),
+    ),
     changes: Stream.fromPubSub(changeBus),
     markDiscarding: Effect.fn("TemporaryThreadStorage.markDiscarding")(function* (id) {
       yield* locked(
@@ -682,8 +688,8 @@ const make = Effect.gen(function* () {
     return rows.length > 0;
   });
   const eventSink = EventSink.EventSinkV2.of({
-    write: (input) =>
-      writeSink(eventIds(input.events), (s) =>
+    write: Effect.fnUntraced(function* (input) {
+      return yield* writeSink(eventIds(input.events), (s) =>
         nativeOwnedElsewhere(s, input.unlessNativeThreadOwned).pipe(
           Effect.flatMap((owned) =>
             owned
@@ -691,44 +697,53 @@ const make = Effect.gen(function* () {
               : s.eventSink.write({ ...input, events: input.events.map(markTemporary) }),
           ),
         ),
-      ),
-    writeWithEffects: (input) =>
-      writeSink([...eventIds(input.events), ...input.effects.map((e) => e.threadId)], (s) =>
-        nativeOwnedElsewhere(s, input.unlessNativeThreadOwned).pipe(
-          Effect.flatMap((owned) =>
-            owned
-              ? Effect.succeed([])
-              : s.eventSink.writeWithEffects({ ...input, events: input.events.map(markTemporary) }),
+      );
+    }),
+    writeWithEffects: Effect.fnUntraced(function* (input) {
+      return yield* writeSink(
+        [...eventIds(input.events), ...input.effects.map((e) => e.threadId)],
+        (s) =>
+          nativeOwnedElsewhere(s, input.unlessNativeThreadOwned).pipe(
+            Effect.flatMap((owned) =>
+              owned
+                ? Effect.succeed([])
+                : s.eventSink.writeWithEffects({
+                    ...input,
+                    events: input.events.map(markTemporary),
+                  }),
+            ),
           ),
-        ),
-      ),
-    writeIfRunCurrent: (input) =>
-      writeSink(
+      );
+    }),
+    writeIfRunCurrent: Effect.fnUntraced(function* (input) {
+      return yield* writeSink(
         [
           input.threadId,
           ...eventIds(input.events),
           ...(input.effects ?? []).map((e) => e.threadId),
         ],
         (s) => s.eventSink.writeIfRunCurrent({ ...input, events: input.events.map(markTemporary) }),
-      ),
-    writeIfProviderThreadOwner: (input) =>
-      locked(
-        Effect.gen(function* () {
-          const s = yield* providerTarget(input.providerThreadId);
-          const destination = yield* assertWritable(eventIds(input.events));
-          if (input.events.length > 0 && s !== destination)
-            return yield* new TemporaryThreadStorageError({
-              operation: "mixed-provider-store",
-              threadId: input.events[0]!.threadId,
-            });
-          return yield* s.eventSink.writeIfProviderThreadOwner({
-            ...input,
-            events: input.events.map(markTemporary),
+      );
+    }),
+    writeIfProviderThreadOwner: Effect.fnUntraced(
+      function* (input) {
+        const s = yield* providerTarget(input.providerThreadId);
+        const destination = yield* assertWritable(eventIds(input.events));
+        if (input.events.length > 0 && s !== destination)
+          return yield* new TemporaryThreadStorageError({
+            operation: "mixed-provider-store",
+            threadId: input.events[0]!.threadId,
           });
-        }),
-      ).pipe(Effect.mapError(sinkError)),
-    writeIfProviderThreadUnchanged: (input) =>
-      writeSink(
+        return yield* s.eventSink.writeIfProviderThreadOwner({
+          ...input,
+          events: input.events.map(markTemporary),
+        });
+      },
+      locked,
+      Effect.mapError(sinkError),
+    ),
+    writeIfProviderThreadUnchanged: Effect.fnUntraced(function* (input) {
+      return yield* writeSink(
         [
           ...(input.expected.appThreadId === null ? [] : [input.expected.appThreadId]),
           ...eventIds(input.events),
@@ -738,9 +753,10 @@ const make = Effect.gen(function* () {
             ...input,
             events: input.events.map(markTemporary),
           }),
-      ),
-    commitCommand: (input) =>
-      writeSink(
+      );
+    }),
+    commitCommand: Effect.fnUntraced(function* (input) {
+      return yield* writeSink(
         [input.threadId, ...eventIds(input.events), ...input.effects.map((e) => e.threadId)],
         (s) =>
           assertCommandOwner(s, input.commandId, input.threadId).pipe(
@@ -748,24 +764,31 @@ const make = Effect.gen(function* () {
               s.eventSink.commitCommand({ ...input, events: input.events.map(markTemporary) }),
             ),
           ),
-      ),
-    commitRejectedCommand: (input) =>
-      writeSink([input.threadId], (s) =>
+      );
+    }),
+    commitRejectedCommand: Effect.fnUntraced(function* (input) {
+      return yield* writeSink([input.threadId], (s) =>
         assertCommandOwner(s, input.commandId, input.threadId).pipe(
           Effect.andThen(s.eventSink.commitRejectedCommand(input)),
         ),
-      ),
-    commitProjectCommand: (input) =>
-      locked(
+      );
+    }),
+    commitProjectCommand: Effect.fnUntraced(function* (input) {
+      return yield* locked(
         durable.eventSink.commitProjectCommand(input).pipe(
           Effect.tap(() => mirrorProjects()),
           Effect.mapError(sinkError),
         ),
-      ),
-    commitRejectedProjectCommand: (input) =>
-      locked(durable.eventSink.commitRejectedProjectCommand(input)),
-    latestSequence: (input) =>
-      locked(Effect.suspend(() => target(input?.threadId).eventSink.latestSequence(input))),
+      );
+    }),
+    commitRejectedProjectCommand: Effect.fnUntraced(function* (input) {
+      return yield* locked(durable.eventSink.commitRejectedProjectCommand(input));
+    }),
+    latestSequence: Effect.fnUntraced(function* (input) {
+      return yield* locked(
+        Effect.suspend(() => target(input?.threadId).eventSink.latestSequence(input)),
+      );
+    }),
     readByCommandId: (input) =>
       Stream.unwrap(
         commandTarget(input.commandId).pipe(
@@ -798,15 +821,16 @@ const make = Effect.gen(function* () {
   });
   const eventStore = EventStore.EventStoreV2.of({
     ...durable.eventStore,
-    append: (input) =>
-      withWrite(eventIds(input.events), (s) =>
+    append: Effect.fnUntraced(function* (input) {
+      return yield* withWrite(eventIds(input.events), (s) =>
         s.eventStore.append({ ...input, events: input.events.map(markTemporary) }),
       ).pipe(
         Effect.mapError(
           (cause) =>
             new EventStore.EventStoreAppendEventsError({ eventCount: input.events.length, cause }),
         ),
-      ),
+      );
+    }),
     read: (input) =>
       Stream.unwrap(Effect.sync(() => target(input?.threadId).eventStore.read(input))),
     readByCommandId: (input) =>
@@ -816,10 +840,13 @@ const make = Effect.gen(function* () {
           Effect.mapError((cause) => new EventStore.EventStoreReadEventsError({ cause })),
         ),
       ),
-    latestSequence: (input) =>
-      locked(Effect.suspend(() => target(input?.threadId).eventStore.latestSequence(input))),
-    publishCommitted: (events) =>
-      Effect.all(
+    latestSequence: Effect.fnUntraced(function* (input) {
+      return yield* locked(
+        Effect.suspend(() => target(input?.threadId).eventStore.latestSequence(input)),
+      );
+    }),
+    publishCommitted: Effect.fnUntraced(function* (events) {
+      return yield* Effect.all(
         [
           durable.eventStore.publishCommitted(
             events.filter((e) => !("event" in e) || !temporary(e.event.threadId)),
@@ -829,7 +856,8 @@ const make = Effect.gen(function* () {
           ),
         ],
         { discard: true },
-      ),
+      );
+    }),
   });
 
   const projectionStore = ProjectionStore.ProjectionStoreV2.of({
@@ -838,25 +866,34 @@ const make = Effect.gen(function* () {
       Stream.unwrap(
         Effect.sync(() => target(input.threadId).projectionStore.searchThreadStream(input)),
       ),
-    searchThread: (input) =>
-      withThread(input.threadId, (s) => s.projectionStore.searchThread(input)),
-    apply: (event) =>
-      withWrite([event.threadId], (s) => s.projectionStore.apply(markTemporary(event))).pipe(
+    searchThread: Effect.fnUntraced(function* (input) {
+      return yield* withThread(input.threadId, (s) => s.projectionStore.searchThread(input));
+    }),
+    apply: Effect.fnUntraced(function* (event) {
+      return yield* withWrite([event.threadId], (s) =>
+        s.projectionStore.apply(markTemporary(event)),
+      ).pipe(
         Effect.mapError(
           (cause) =>
             new ProjectionStore.ProjectionStoreApplyEventError({ eventType: event.type, cause }),
         ),
-      ),
-    getTurnItem: (input) => withThread(input.threadId, (s) => s.projectionStore.getTurnItem(input)),
-    isNodeStored: (node) => withThread(node.threadId, (s) => s.projectionStore.isNodeStored(node)),
-    getThread: (id) =>
-      withThread(id, (s) =>
+      );
+    }),
+    getTurnItem: Effect.fnUntraced(function* (input) {
+      return yield* withThread(input.threadId, (s) => s.projectionStore.getTurnItem(input));
+    }),
+    isNodeStored: Effect.fnUntraced(function* (node) {
+      return yield* withThread(node.threadId, (s) => s.projectionStore.isNodeStored(node));
+    }),
+    getThread: Effect.fnUntraced(function* (id) {
+      return yield* withThread(id, (s) =>
         s.projectionStore
           .getThread(id)
           .pipe(Effect.map((thread) => (temporary(id) ? { ...thread, temporary: true } : thread))),
-      ),
-    getThreadShell: (id) =>
-      withThread(id, (s) =>
+      );
+    }),
+    getThreadShell: Effect.fnUntraced(function* (id) {
+      return yield* withThread(id, (s) =>
         s.projectionStore
           .getThreadShell(id)
           .pipe(
@@ -864,74 +901,117 @@ const make = Effect.gen(function* () {
               thread !== null && temporary(id) ? { ...thread, temporary: true } : thread,
             ),
           ),
-      ),
-    getThreadAttachmentIds: (...args) =>
-      withThread(args[0], (s) => s.projectionStore.getThreadAttachmentIds(...args)),
-    getThreadHistoryPage: (...args) =>
-      withThread(args[0], (s) => s.projectionStore.getThreadHistoryPage(...args)),
-    getTimelinePage: (...args) =>
-      withThread(args[0], (s) => s.projectionStore.getTimelinePage(...args)),
-    getMessageCount: (...args) =>
-      withThread(args[0], (s) => s.projectionStore.getMessageCount(...args)),
-    getNextTurnItemOrdinal: (...args) =>
-      withThread(args[0], (s) => s.projectionStore.getNextTurnItemOrdinal(...args)),
-    getThreadRecords: (...args) =>
-      withThread(args[0], (s) => s.projectionStore.getThreadRecords(...args)),
-    getTurnStartContext: (...args) =>
-      withThread(args[0], (s) => s.projectionStore.getTurnStartContext(...args)),
-    getTurnStartHistory: (...args) =>
-      withThread(args[0], (s) => s.projectionStore.getTurnStartHistory(...args)),
-    getThreadProjection: (...args) =>
-      withThread(args[0], (s) => s.projectionStore.getThreadProjection(...args)),
-    getRuntimeRecoveryProjection: (...args) =>
-      withThread(args[0], (s) => s.projectionStore.getRuntimeRecoveryProjection(...args)),
-    getPendingNativeUserInputs: (...args) =>
-      withThread(args[0], (s) => s.projectionStore.getPendingNativeUserInputs(...args)),
-    getPlan: (...args) => withThread(args[0], (s) => s.projectionStore.getPlan(...args)),
-    hasUnpairedRunInterruptRequest: (...args) =>
-      withThread(args[0], (s) => s.projectionStore.hasUnpairedRunInterruptRequest(...args)),
-    getRuntimeRequest: (...args) =>
-      withThread(args[0], (s) => s.projectionStore.getRuntimeRequest(...args)),
-    getProviderControlContext: (...args) =>
-      withThread(args[0], (s) => s.projectionStore.getProviderControlContext(...args)),
-    getRunningTurnContext: (...args) =>
-      withThread(args[0], (s) => s.projectionStore.getRunningTurnContext(...args)),
-    getThreadProviderContext: (...args) =>
-      withThread(args[0], (s) => s.projectionStore.getThreadProviderContext(...args)),
-    getRuntimeResponseContext: (...args) =>
-      withThread(args[0], (s) => s.projectionStore.getRuntimeResponseContext(...args)),
-    getCheckpointContext: (...args) =>
-      withThread(args[0], (s) => s.projectionStore.getCheckpointContext(...args)),
-    getCheckpointCaptureContext: (...args) =>
-      withThread(args[0], (s) => s.projectionStore.getCheckpointCaptureContext(...args)),
-    getCheckpointRollbackContext: (...args) =>
-      withThread(args[0], (s) => s.projectionStore.getCheckpointRollbackContext(...args)),
-    getRunMessage: (...args) =>
-      withThread(args[0], (s) => s.projectionStore.getRunMessage(...args)),
-    canStartQueuedRun: (...args) =>
-      withThread(args[0], (s) => s.projectionStore.canStartQueuedRun(...args)),
-    getThreadSnapshot: (...args) =>
-      withThread(args[0], (s) => s.projectionStore.getThreadSnapshot(...args)),
-    getThreadSnapshotWindow: (...args) =>
-      withThread(args[0], (s) => s.projectionStore.getThreadSnapshotWindow(...args)),
-    listActiveSubagentThreadIds: (...args) =>
-      locked(
+      );
+    }),
+    getThreadAttachmentIds: Effect.fnUntraced(function* (...args) {
+      return yield* withThread(args[0], (s) => s.projectionStore.getThreadAttachmentIds(...args));
+    }),
+    getThreadHistoryPage: Effect.fnUntraced(function* (...args) {
+      return yield* withThread(args[0], (s) => s.projectionStore.getThreadHistoryPage(...args));
+    }),
+    getTimelinePage: Effect.fnUntraced(function* (...args) {
+      return yield* withThread(args[0], (s) => s.projectionStore.getTimelinePage(...args));
+    }),
+    getMessageCount: Effect.fnUntraced(function* (...args) {
+      return yield* withThread(args[0], (s) => s.projectionStore.getMessageCount(...args));
+    }),
+    getNextTurnItemOrdinal: Effect.fnUntraced(function* (...args) {
+      return yield* withThread(args[0], (s) => s.projectionStore.getNextTurnItemOrdinal(...args));
+    }),
+    getThreadRecords: Effect.fnUntraced(function* (...args) {
+      return yield* withThread(args[0], (s) => s.projectionStore.getThreadRecords(...args));
+    }),
+    getTurnStartContext: Effect.fnUntraced(function* (...args) {
+      return yield* withThread(args[0], (s) => s.projectionStore.getTurnStartContext(...args));
+    }),
+    getTurnStartHistory: Effect.fnUntraced(function* (...args) {
+      return yield* withThread(args[0], (s) => s.projectionStore.getTurnStartHistory(...args));
+    }),
+    getThreadProjection: Effect.fnUntraced(function* (...args) {
+      return yield* withThread(args[0], (s) => s.projectionStore.getThreadProjection(...args));
+    }),
+    getRuntimeRecoveryProjection: Effect.fnUntraced(function* (...args) {
+      return yield* withThread(args[0], (s) =>
+        s.projectionStore.getRuntimeRecoveryProjection(...args),
+      );
+    }),
+    getPendingNativeUserInputs: Effect.fnUntraced(function* (...args) {
+      return yield* withThread(args[0], (s) =>
+        s.projectionStore.getPendingNativeUserInputs(...args),
+      );
+    }),
+    getPlan: Effect.fnUntraced(function* (...args) {
+      return yield* withThread(args[0], (s) => s.projectionStore.getPlan(...args));
+    }),
+    hasUnpairedRunInterruptRequest: Effect.fnUntraced(function* (...args) {
+      return yield* withThread(args[0], (s) =>
+        s.projectionStore.hasUnpairedRunInterruptRequest(...args),
+      );
+    }),
+    getRuntimeRequest: Effect.fnUntraced(function* (...args) {
+      return yield* withThread(args[0], (s) => s.projectionStore.getRuntimeRequest(...args));
+    }),
+    getProviderControlContext: Effect.fnUntraced(function* (...args) {
+      return yield* withThread(args[0], (s) =>
+        s.projectionStore.getProviderControlContext(...args),
+      );
+    }),
+    getRunningTurnContext: Effect.fnUntraced(function* (...args) {
+      return yield* withThread(args[0], (s) => s.projectionStore.getRunningTurnContext(...args));
+    }),
+    getThreadProviderContext: Effect.fnUntraced(function* (...args) {
+      return yield* withThread(args[0], (s) => s.projectionStore.getThreadProviderContext(...args));
+    }),
+    getRuntimeResponseContext: Effect.fnUntraced(function* (...args) {
+      return yield* withThread(args[0], (s) =>
+        s.projectionStore.getRuntimeResponseContext(...args),
+      );
+    }),
+    getCheckpointContext: Effect.fnUntraced(function* (...args) {
+      return yield* withThread(args[0], (s) => s.projectionStore.getCheckpointContext(...args));
+    }),
+    getCheckpointCaptureContext: Effect.fnUntraced(function* (...args) {
+      return yield* withThread(args[0], (s) =>
+        s.projectionStore.getCheckpointCaptureContext(...args),
+      );
+    }),
+    getCheckpointRollbackContext: Effect.fnUntraced(function* (...args) {
+      return yield* withThread(args[0], (s) =>
+        s.projectionStore.getCheckpointRollbackContext(...args),
+      );
+    }),
+    getRunMessage: Effect.fnUntraced(function* (...args) {
+      return yield* withThread(args[0], (s) => s.projectionStore.getRunMessage(...args));
+    }),
+    canStartQueuedRun: Effect.fnUntraced(function* (...args) {
+      return yield* withThread(args[0], (s) => s.projectionStore.canStartQueuedRun(...args));
+    }),
+    getThreadSnapshot: Effect.fnUntraced(function* (...args) {
+      return yield* withThread(args[0], (s) => s.projectionStore.getThreadSnapshot(...args));
+    }),
+    getThreadSnapshotWindow: Effect.fnUntraced(function* (...args) {
+      return yield* withThread(args[0], (s) => s.projectionStore.getThreadSnapshotWindow(...args));
+    }),
+    listActiveSubagentThreadIds: Effect.fnUntraced(function* (...args) {
+      return yield* locked(
         Effect.all([
           durable.projectionStore.listActiveSubagentThreadIds(...args),
           volatile.projectionStore.listActiveSubagentThreadIds(...args),
         ]).pipe(Effect.map(([disk, memory]) => [...disk, ...memory.filter((id) => temporary(id))])),
-      ),
-    getLimitRecoveryCandidates: (...args) =>
-      locked(
+      );
+    }),
+    getLimitRecoveryCandidates: Effect.fnUntraced(function* (...args) {
+      return yield* locked(
         Effect.all([
           durable.projectionStore.getLimitRecoveryCandidates(...args),
           volatile.projectionStore.getLimitRecoveryCandidates(...args),
         ]).pipe(
           Effect.map(([disk, memory]) => [...disk, ...memory.filter((row) => temporary(row.id))]),
         ),
-      ),
-    getThreadWorktreePaths: (...args) =>
-      locked(
+      );
+    }),
+    getThreadWorktreePaths: Effect.fnUntraced(function* (...args) {
+      return yield* locked(
         Effect.all([
           durable.projectionStore.getThreadWorktreePaths(...args),
           volatile.projectionStore.getThreadWorktreePaths(...args),
@@ -941,23 +1021,26 @@ const make = Effect.gen(function* () {
             ...memory.filter((row) => temporary(row.threadId)),
           ]),
         ),
-      ),
-    getRecoveryThreadIds: (...args) =>
-      locked(
+      );
+    }),
+    getRecoveryThreadIds: Effect.fnUntraced(function* (...args) {
+      return yield* locked(
         Effect.all([
           durable.projectionStore.getRecoveryThreadIds(...args),
           volatile.projectionStore.getRecoveryThreadIds(...args),
         ]).pipe(Effect.map(([disk, memory]) => [...disk, ...memory.filter((id) => temporary(id))])),
-      ),
-    getUnreadableThreadIds: (...args) =>
-      locked(
+      );
+    }),
+    getUnreadableThreadIds: Effect.fnUntraced(function* (...args) {
+      return yield* locked(
         Effect.all([
           durable.projectionStore.getUnreadableThreadIds(...args),
           volatile.projectionStore.getUnreadableThreadIds(...args),
         ]).pipe(Effect.map(([disk, memory]) => [...disk, ...memory.filter((id) => temporary(id))])),
-      ),
-    getSettlementCandidates: (id) =>
-      id === undefined
+      );
+    }),
+    getSettlementCandidates: Effect.fnUntraced(function* (id) {
+      return yield* id === undefined
         ? locked(
             Effect.all([
               durable.projectionStore.getSettlementCandidates(),
@@ -969,9 +1052,10 @@ const make = Effect.gen(function* () {
               ]),
             ),
           )
-        : withThread(id, (s) => s.projectionStore.getSettlementCandidates(id)),
-    getThreadsWithPullRequests: (id) =>
-      id === undefined
+        : withThread(id, (s) => s.projectionStore.getSettlementCandidates(id));
+    }),
+    getThreadsWithPullRequests: Effect.fnUntraced(function* (id) {
+      return yield* id === undefined
         ? locked(
             Effect.all([
               durable.projectionStore.getThreadsWithPullRequests(),
@@ -983,10 +1067,11 @@ const make = Effect.gen(function* () {
               ]),
             ),
           )
-        : withThread(id, (s) => s.projectionStore.getThreadsWithPullRequests(id)),
+        : withThread(id, (s) => s.projectionStore.getThreadsWithPullRequests(id));
+    }),
 
-    getShellSnapshot: (options) =>
-      locked(
+    getShellSnapshot: Effect.fnUntraced(function* (options) {
+      return yield* locked(
         Effect.all([
           durable.projectionStore.getShellSnapshot(options),
           volatile.projectionStore.getShellSnapshot(options),
@@ -1007,47 +1092,55 @@ const make = Effect.gen(function* () {
             ],
           })),
         ),
-      ),
-    readShellSnapshot: (options) =>
-      projectionStore.getShellSnapshot(options).pipe(Effect.map(Effect.succeed)),
+      );
+    }),
+    readShellSnapshot: Effect.fnUntraced(function* (options) {
+      return yield* projectionStore.getShellSnapshot(options).pipe(Effect.map(Effect.succeed));
+    }),
   });
   const applicationReceipts = ApplicationReceipts.OrchestrationCommandReceiptRepository.of({
-    insertIfAbsent: (receipt) =>
-      (receipt.aggregateKind === "thread"
-        ? withWrite([ThreadId.make(receipt.aggregateId)], (s) =>
-            s.applicationReceipts.insertIfAbsent(receipt),
-          )
-        : locked(durable.applicationReceipts.insertIfAbsent(receipt))
+    insertIfAbsent: Effect.fnUntraced(function* (receipt) {
+      return yield* (
+        receipt.aggregateKind === "thread"
+          ? withWrite([ThreadId.make(receipt.aggregateId)], (s) =>
+              s.applicationReceipts.insertIfAbsent(receipt),
+            )
+          : locked(durable.applicationReceipts.insertIfAbsent(receipt))
       ).pipe(
         Effect.mapError(
           (cause) =>
             new PersistenceSqlError({ operation: "TemporaryThreadStorage.receiptWrite", cause }),
         ),
-      ),
-    upsert: (receipt) =>
-      (receipt.aggregateKind === "thread"
-        ? withWrite([ThreadId.make(receipt.aggregateId)], (s) =>
-            s.applicationReceipts.upsert(receipt),
-          )
-        : locked(durable.applicationReceipts.upsert(receipt))
+      );
+    }),
+    upsert: Effect.fnUntraced(function* (receipt) {
+      return yield* (
+        receipt.aggregateKind === "thread"
+          ? withWrite([ThreadId.make(receipt.aggregateId)], (s) =>
+              s.applicationReceipts.upsert(receipt),
+            )
+          : locked(durable.applicationReceipts.upsert(receipt))
       ).pipe(
         Effect.mapError(
           (cause) =>
             new PersistenceSqlError({ operation: "TemporaryThreadStorage.receiptWrite", cause }),
         ),
-      ),
-    getByCommandId: (input) =>
-      locked(
+      );
+    }),
+    getByCommandId: Effect.fnUntraced(function* (input) {
+      return yield* locked(
         commandTarget(input.commandId).pipe(
           Effect.flatMap((s) => s.applicationReceipts.getByCommandId(input)),
         ),
-      ),
+      );
+    }),
   });
   const commandReceipts = CommandReceiptStore.CommandReceiptStoreV2.of({
-    insertIfAbsent: (receipt) =>
-      ("threadId" in receipt
-        ? withWrite([receipt.threadId], (s) => s.commandReceipts.insertIfAbsent(receipt))
-        : locked(durable.commandReceipts.insertIfAbsent(receipt))
+    insertIfAbsent: Effect.fnUntraced(function* (receipt) {
+      return yield* (
+        "threadId" in receipt
+          ? withWrite([receipt.threadId], (s) => s.commandReceipts.insertIfAbsent(receipt))
+          : locked(durable.commandReceipts.insertIfAbsent(receipt))
       ).pipe(
         Effect.mapError(
           (cause) =>
@@ -1056,11 +1149,13 @@ const make = Effect.gen(function* () {
               cause,
             }),
         ),
-      ),
-    upsert: (receipt) =>
-      ("threadId" in receipt
-        ? withWrite([receipt.threadId], (s) => s.commandReceipts.upsert(receipt))
-        : locked(durable.commandReceipts.upsert(receipt))
+      );
+    }),
+    upsert: Effect.fnUntraced(function* (receipt) {
+      return yield* (
+        "threadId" in receipt
+          ? withWrite([receipt.threadId], (s) => s.commandReceipts.upsert(receipt))
+          : locked(durable.commandReceipts.upsert(receipt))
       ).pipe(
         Effect.mapError(
           (cause) =>
@@ -1069,28 +1164,34 @@ const make = Effect.gen(function* () {
               cause,
             }),
         ),
-      ),
-    getByCommandId: (commandId) =>
-      locked(
+      );
+    }),
+    getByCommandId: Effect.fnUntraced(function* (commandId) {
+      return yield* locked(
         commandTarget(commandId).pipe(
           Effect.flatMap((s) => s.commandReceipts.getByCommandId(commandId)),
           Effect.mapError(
             (cause) => new CommandReceiptStore.CommandReceiptStoreReadError({ commandId, cause }),
           ),
         ),
-      ),
-    getProjectByCommandId: (commandId) =>
-      locked(durable.commandReceipts.getProjectByCommandId(commandId)),
+      );
+    }),
+    getProjectByCommandId: Effect.fnUntraced(function* (commandId) {
+      return yield* locked(durable.commandReceipts.getProjectByCommandId(commandId));
+    }),
   });
   const turnItemPositions = TurnItemPositionStore.TurnItemPositionStoreV2.of({
-    allocate: (input) =>
-      withWrite([input.threadId], (s) => s.turnItemPositions.allocate(input)).pipe(
+    allocate: Effect.fnUntraced(function* (input) {
+      return yield* withWrite([input.threadId], (s) => s.turnItemPositions.allocate(input)).pipe(
         Effect.mapError(
           (cause) => new TurnItemPositionStore.TurnItemPositionStoreError({ ...input, cause }),
         ),
-      ),
-    normalize: (item, ordinal) =>
-      withWrite([item.threadId], (s) => s.turnItemPositions.normalize(item, ordinal)).pipe(
+      );
+    }),
+    normalize: Effect.fnUntraced(function* (item, ordinal) {
+      return yield* withWrite([item.threadId], (s) =>
+        s.turnItemPositions.normalize(item, ordinal),
+      ).pipe(
         Effect.mapError(
           (cause) =>
             new TurnItemPositionStore.TurnItemPositionStoreError({
@@ -1099,42 +1200,45 @@ const make = Effect.gen(function* () {
               cause,
             }),
         ),
-      ),
+      );
+    }),
   });
   let claimVolatile = false;
   const outboxError = (cause: unknown) =>
     new EffectOutbox.EffectOutboxError({ operation: "route", cause });
   const effectOutbox = EffectOutbox.EffectOutboxV2.of({
     ...durable.effectOutbox,
-    enqueue: (effects) =>
-      withWrite(
+    enqueue: Effect.fnUntraced(function* (effects) {
+      return yield* withWrite(
         effects.map((e) => e.threadId),
         (s) => s.effectOutbox.enqueue(effects),
-      ).pipe(Effect.mapError(outboxError)),
-    get: (id) => locked(effectTarget(id).pipe(Effect.flatMap((s) => s.effectOutbox.get(id)))),
-    listByCommandId: (id) =>
-      locked(
+      ).pipe(Effect.mapError(outboxError));
+    }),
+    get: Effect.fnUntraced(function* (id) {
+      return yield* locked(effectTarget(id).pipe(Effect.flatMap((s) => s.effectOutbox.get(id))));
+    }),
+    listByCommandId: Effect.fnUntraced(function* (id) {
+      return yield* locked(
         Effect.all([
           durable.effectOutbox.listByCommandId(id),
           volatile.effectOutbox.listByCommandId(id),
         ]).pipe(
           Effect.map(([a, b]) => [...a, ...b.filter((effect) => temporary(effect.threadId))]),
         ),
-      ),
-    cancelUnsettled: (input) =>
-      withWrite([input.threadId], (s) => s.effectOutbox.cancelUnsettled(input)).pipe(
+      );
+    }),
+    cancelUnsettled: Effect.fnUntraced(function* (input) {
+      return yield* withWrite([input.threadId], (s) => s.effectOutbox.cancelUnsettled(input)).pipe(
         Effect.mapError(outboxError),
-      ),
-    claimNext: (input) =>
-      locked(
-        Effect.gen(function* () {
-          claimVolatile = !claimVolatile;
-          const first = claimVolatile ? volatile : durable;
-          const second = claimVolatile ? durable : volatile;
-          const found = yield* first.effectOutbox.claimNext(input);
-          return Option.isSome(found) ? found : yield* second.effectOutbox.claimNext(input);
-        }),
-      ),
+      );
+    }),
+    claimNext: Effect.fnUntraced(function* (input) {
+      claimVolatile = !claimVolatile;
+      const first = claimVolatile ? volatile : durable;
+      const second = claimVolatile ? durable : volatile;
+      const found = yield* first.effectOutbox.claimNext(input);
+      return Option.isSome(found) ? found : yield* second.effectOutbox.claimNext(input);
+    }, locked),
     nextClaimableAt: locked(
       Effect.all([
         durable.effectOutbox.nextClaimableAt,
@@ -1162,19 +1266,26 @@ const make = Effect.gen(function* () {
         yield* Deferred.succeed(signal, undefined);
       }
     }),
-    succeed: (input) =>
-      locked(
+    succeed: Effect.fnUntraced(function* (input) {
+      return yield* locked(
         effectTarget(input.effectId).pipe(Effect.flatMap((s) => s.effectOutbox.succeed(input))),
-      ),
-    retry: (input) =>
-      locked(effectTarget(input.effectId).pipe(Effect.flatMap((s) => s.effectOutbox.retry(input)))),
-    fail: (input) =>
-      locked(effectTarget(input.effectId).pipe(Effect.flatMap((s) => s.effectOutbox.fail(input)))),
+      );
+    }),
+    retry: Effect.fnUntraced(function* (input) {
+      return yield* locked(
+        effectTarget(input.effectId).pipe(Effect.flatMap((s) => s.effectOutbox.retry(input))),
+      );
+    }),
+    fail: Effect.fnUntraced(function* (input) {
+      return yield* locked(
+        effectTarget(input.effectId).pipe(Effect.flatMap((s) => s.effectOutbox.fail(input))),
+      );
+    }),
   });
   const applicationEvents = ApplicationEvents.OrchestrationEventStore.of({
     ...durable.applicationEvents,
-    appendAgentEvents: (input) =>
-      withWrite(eventIds(input.events), (s) =>
+    appendAgentEvents: Effect.fnUntraced(function* (input) {
+      return yield* withWrite(eventIds(input.events), (s) =>
         s.applicationEvents.appendAgentEvents({
           ...input,
           events: input.events.map(markTemporary),
@@ -1183,7 +1294,8 @@ const make = Effect.gen(function* () {
         Effect.mapError(
           (cause) => new PersistenceSqlError({ operation: "TemporaryThreadStorage.append", cause }),
         ),
-      ),
+      );
+    }),
     readAgentEvents: (input) =>
       Stream.unwrap(
         input?.commandId === undefined
@@ -1192,47 +1304,64 @@ const make = Effect.gen(function* () {
               Effect.map((s) => s.applicationEvents.readAgentEvents(input)),
             ),
       ),
-    latestAgentSequence: (id) =>
-      locked(Effect.suspend(() => target(id).applicationEvents.latestAgentSequence(id))),
-    getAgentReplayStats: (input) =>
-      withThread(input.threadId, (s) => s.applicationEvents.getAgentReplayStats(input)),
+    latestAgentSequence: Effect.fnUntraced(function* (id) {
+      return yield* locked(
+        Effect.suspend(() => target(id).applicationEvents.latestAgentSequence(id)),
+      );
+    }),
+    getAgentReplayStats: Effect.fnUntraced(function* (input) {
+      return yield* withThread(input.threadId, (s) =>
+        s.applicationEvents.getAgentReplayStats(input),
+      );
+    }),
     publishCommitted: eventStore.publishCommitted,
   });
   const providerSessionRuntime = ProviderSessionRuntime.ProviderSessionRuntimeRepository.of({
-    upsert: (input, options) =>
-      withWrite([input.threadId], (s) => s.providerSessionRuntime.upsert(input, options)).pipe(
+    upsert: Effect.fnUntraced(function* (input, options) {
+      return yield* withWrite([input.threadId], (s) =>
+        s.providerSessionRuntime.upsert(input, options),
+      ).pipe(
         Effect.mapError(
           (cause) =>
             new PersistenceSqlError({ operation: "TemporaryThreadStorage.runtimeUpsert", cause }),
         ),
-      ),
-    recordImportedTranscript: (input) =>
-      withWrite([input.threadId], (s) =>
+      );
+    }),
+    recordImportedTranscript: Effect.fnUntraced(function* (input) {
+      return yield* withWrite([input.threadId], (s) =>
         s.providerSessionRuntime.recordImportedTranscript(input),
       ).pipe(
         Effect.mapError(
           (cause) =>
             new PersistenceSqlError({ operation: "TemporaryThreadStorage.runtimeImport", cause }),
         ),
-      ),
-    getByThreadId: (input) =>
-      withThread(input.threadId, (s) => s.providerSessionRuntime.getByThreadId(input)),
-    deleteByThreadId: (input) =>
-      withWrite([input.threadId], (s) => s.providerSessionRuntime.deleteByThreadId(input)).pipe(
+      );
+    }),
+    getByThreadId: Effect.fnUntraced(function* (input) {
+      return yield* withThread(input.threadId, (s) =>
+        s.providerSessionRuntime.getByThreadId(input),
+      );
+    }),
+    deleteByThreadId: Effect.fnUntraced(function* (input) {
+      return yield* withWrite([input.threadId], (s) =>
+        s.providerSessionRuntime.deleteByThreadId(input),
+      ).pipe(
         Effect.mapError(
           (cause) =>
             new PersistenceSqlError({ operation: "TemporaryThreadStorage.runtimeDelete", cause }),
         ),
-      ),
-    list: (options) =>
-      locked(
+      );
+    }),
+    list: Effect.fnUntraced(function* (options) {
+      return yield* locked(
         Effect.all([
           durable.providerSessionRuntime.list(options),
           volatile.providerSessionRuntime.list(options),
         ]).pipe(
           Effect.map(([a, b]) => [...a, ...b.filter((effect) => temporary(effect.threadId))]),
         ),
-      ),
+      );
+    }),
   });
   return Context.empty().pipe(
     Context.add(TemporaryThreadStorage, storage),
