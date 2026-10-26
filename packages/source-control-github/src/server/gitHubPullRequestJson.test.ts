@@ -363,6 +363,7 @@ describe("pull request detail decoding", () => {
             baseRefName: "main",
             headRefOid: "abc123",
             isCrossRepository: false,
+            maintainerCanModify: true,
             headRepositoryOwner: null,
             headRepository: null,
             headRef: null,
@@ -394,6 +395,28 @@ describe("pull request detail decoding", () => {
     rollup: ReadonlyArray<Record<string, unknown>>,
     pullRequest?: Record<string, unknown>,
   ) => expectSuccess(decodePullRequestCoreJson(coreJson(rollup, pullRequest)));
+
+  it.each([
+    [{}, true],
+    [{ viewerDidAuthor: false }, false],
+    [{ isCrossRepository: false }, false],
+    [{ state: "CLOSED" }, false],
+    [{ headRepositoryOwner: { __typename: "Organization", login: "team" } }, false],
+    [{ headRepository: null }, false],
+    [{ headRef: null }, false],
+  ])("limits maintainer edits to the author's open personal fork: %j", (overrides, allowed) => {
+    const detail = detailOf([], {
+      maintainerCanModify: false,
+      isCrossRepository: true,
+      viewerDidAuthor: true,
+      headRepositoryOwner: { __typename: "User", login: "octocat" },
+      headRepository: { nameWithOwner: "octocat/t3code", viewerPermission: "ADMIN" },
+      headRef: { id: "REF_7" },
+      ...overrides,
+    });
+    expect(detail.maintainerCanModify).toBe(false);
+    expect(detail.canEditMaintainerEdits).toBe(allowed);
+  });
 
   const detailJson = JSON.stringify({
     comments: [{ id: "c1", body: "second", createdAt: "2026-07-04T00:00:00Z" }],

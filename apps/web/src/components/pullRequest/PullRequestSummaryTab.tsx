@@ -31,6 +31,7 @@ import { RelativeTime } from "~/components/RelativeTime";
 
 import { Button } from "../ui/button";
 import { PullRequestEditButton } from "./PullRequestEditButton";
+import { PullRequestMaintainerEdits } from "./PullRequestMaintainerEdits";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import {
   Menu,
@@ -384,6 +385,7 @@ export function PullRequestSummaryTab({
   detail,
   activityPending,
   checksStale = false,
+  canWriteSourceControl = false,
   activityError,
   pendingFinding,
   fixFindingLabel = "Fix in a thread",
@@ -399,6 +401,7 @@ export function PullRequestSummaryTab({
   detail: PullRequestDetailView;
   activityPending: boolean;
   checksStale?: boolean;
+  canWriteSourceControl?: boolean;
   activityError: string | null;
   pendingFinding?: string | null;
   fixFindingLabel?: string;
@@ -789,6 +792,18 @@ export function PullRequestSummaryTab({
             </div>
           )}
         </div>
+        {detail.capabilities.edit?.maintainerEdits === true &&
+        detail.viewerPermissions.maintainerEdits === true &&
+        detail.maintainerCanModify !== undefined ? (
+          <PullRequestMaintainerEdits
+            key={`${detail.url}:${detail.maintainerCanModify}`}
+            environmentId={environmentId}
+            reference={reference}
+            enabled={detail.maintainerCanModify}
+            allowed={canWriteSourceControl}
+            onSaved={onRefresh}
+          />
+        ) : null}
       </Section>
 
       <Section key={`checks:${detail.url}`} title="Checks" defaultOpen={false}>

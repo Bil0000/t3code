@@ -60,6 +60,7 @@ const coreResponse = (pullRequest: Readonly<Record<string, unknown>> = {}) => ({
         mergedAt: null,
         closedAt: null,
         isCrossRepository: false,
+        maintainerCanModify: true,
         headRepositoryOwner: null,
         headRepository: null,
         headRef: null,
@@ -694,6 +695,27 @@ it.effect(
 );
 
 layer("GitHubPullRequestApi.layer", (it) => {
+  it.effect.each([true, false])(
+    "sets maintainer edits to %s without rewriting PR text",
+    (enabled) =>
+      Effect.gen(function* () {
+        mockedExecute.mockImplementation((call) =>
+          Effect.succeed(
+            output(
+              encodeJson(
+                call.kind === "graphql" && matches(call, NODE_ID_QUERY) ? nodeIdAnswer("PR_7") : {},
+              ),
+            ),
+          ),
+        );
+        const api = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+        yield* api.updatePullRequest({ ...pullRequestInput, maintainerCanModify: enabled });
+        expect(variablesOf("mutation UpdatePullRequest")).toEqual([
+          { pullRequestId: "PR_7", maintainerCanModify: enabled },
+        ]);
+      }),
+  );
+
   it.effect.each(["mixed", "merges", "unavailable"] as const)(
     "reads stats only for displayed non-merge commits (%s)",
     (kind) =>

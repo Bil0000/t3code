@@ -110,6 +110,7 @@ import {
   PullRequestReadStatus,
 } from "./PullRequestPresentation";
 import { usePullRequestFilesSection } from "./PullRequestFiles";
+import { PullRequestMaintainerEdits } from "./PullRequestMaintainerEdits";
 import { PullRequestDescription } from "./PullRequestDescription";
 import { PullRequestMediaVisibleContext } from "./PullRequestMedia";
 import { PullRequestMarkdownRepository } from "./PullRequestMarkdown";
@@ -325,6 +326,15 @@ function PullRequestOverview(props: {
           footer={<PullRequestReactions params={props.params} />}
         />
       </Animated.View>
+      {pr.capabilities.edit?.maintainerEdits === true &&
+      pr.viewerPermissions.maintainerEdits === true &&
+      pr.maintainerCanModify !== undefined ? (
+        <PullRequestMaintainerEdits
+          key={`${pr.url}:${pr.maintainerCanModify}`}
+          params={props.params}
+          pr={pr}
+        />
+      ) : null}
     </View>
   );
 }

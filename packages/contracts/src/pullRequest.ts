@@ -242,6 +242,7 @@ export const PullRequestReviewCapabilities = Schema.Struct({
 export type PullRequestReviewCapabilities = typeof PullRequestReviewCapabilities.Type;
 
 export const PullRequestEditCapabilities = Schema.Struct({
+  maintainerEdits: Schema.optional(Schema.Boolean),
   changeRequest: Schema.Boolean,
   comment: Schema.Boolean,
 });
@@ -295,6 +296,7 @@ export const PullRequestViewerPermissions = Schema.Struct({
   updateMethods: Schema.optional(ForwardCompatibleArray(PullRequestUpdateMethod)),
   labels: Schema.optional(Schema.Boolean),
   editChangeRequest: Schema.optional(Schema.Boolean),
+  maintainerEdits: Schema.optional(Schema.Boolean),
 });
 export type PullRequestViewerPermissions = typeof PullRequestViewerPermissions.Type;
 
@@ -589,6 +591,7 @@ export const PullRequestDetail = Schema.Struct({
   autoMergeEnabled: Schema.optional(Schema.Boolean),
   autoMergeMethod: Schema.optional(PullRequestMergeMethod),
   workflowApprovalsRequired: Schema.optional(NonNegativeInt),
+  maintainerCanModify: Schema.optional(Schema.Boolean),
 });
 export type PullRequestDetail = typeof PullRequestDetail.Type;
 
@@ -743,6 +746,7 @@ export const PullRequestCommentInput = Schema.Struct({
 export type PullRequestCommentInput = typeof PullRequestCommentInput.Type;
 
 export const PullRequestUpdateInput = Schema.Struct({
+  maintainerCanModify: Schema.optional(Schema.Boolean),
   ...PullRequestRef.fields,
   title: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(1024))),
   body: Schema.optional(Schema.String.check(Schema.isMaxLength(65_536))),

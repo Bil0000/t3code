@@ -1736,6 +1736,7 @@ export function PullRequestDetailPanel({
                   detail={detail}
                   activityPending={activityPending}
                   checksStale={checksStale}
+                  canWriteSourceControl={canWriteSourceControl && environmentConnected}
                   activityError={activityError}
                   pendingFinding={handoff}
                   fixFindingLabel={handoffLabels.fixFinding}
