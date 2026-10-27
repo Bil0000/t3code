@@ -2241,61 +2241,79 @@ describe("EnvironmentThreads", () => {
 });
 
 describe("temporary thread persistence", () => {
-  it.effect("excludes a deleted temporary thread from later writes of captured snapshots", () =>
-    Effect.gen(function* () {
-      const stale = {
-        snapshotSequence: 8,
-        projection: {
-          ...BASE_PROJECTION,
-          thread: { ...BASE_PROJECTION.thread, title: "DELETED_TEMPORARY_SENTINEL" },
-        },
-      };
-      const capturedShell = {
-        ...v2ShellSnapshot,
-        threads: [
-          { ...v2ShellSnapshot.threads[0]!, id: THREAD_ID, title: stale.projection.thread.title },
-          {
-            ...v2ShellSnapshot.threads[0]!,
-            id: ThreadId.make("saved-neighbor"),
-            title: "Saved neighbor",
+  it.effect.each([false, true])(
+    "cleans deleted temporary snapshots after sync failure=%s",
+    (failDuringSync) =>
+      Effect.gen(function* () {
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => forgetTemporaryThread(TARGET.environmentId, THREAD_ID)),
+        );
+        const stale = {
+          snapshotSequence: 8,
+          projection: {
+            ...BASE_PROJECTION,
+            thread: { ...BASE_PROJECTION.thread, title: "DELETED_TEMPORARY_SENTINEL" },
           },
-        ],
-      };
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const harness = yield* makeHarness();
-          yield* Queue.offer(
-            harness.inputs,
-            snapshot(
-              {
-                ...stale.projection,
-                thread: { ...stale.projection.thread, temporary: true },
-              },
-              8,
-            ),
-          );
-          yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.data));
-          const update = deleted(9);
-          yield* Queue.offer(harness.inputs, update);
-          yield* awaitThreadState(harness.observed, (value) => value.status === "deleted");
-        }),
-      );
-      yield* Effect.addFinalizer(() =>
-        Effect.sync(() => forgetTemporaryThread(TARGET.environmentId, THREAD_ID)),
-      );
-      setTemporaryThread(TARGET.environmentId, THREAD_ID, false);
-      const encoded = yield* makeStoredShellSnapshotEncoder({ yieldToHost: Effect.void })({
-        schemaVersion: ORCHESTRATION_CACHE_SCHEMA_VERSION,
-        environmentId: TARGET.environmentId,
-        snapshot: capturedShell,
-      });
-      expect(encoded).not.toContain("DELETED_TEMPORARY_SENTINEL");
-      expect(
-        JSON.parse(encoded).snapshot.threads.map((thread: { title: string }) => thread.title),
-      ).toEqual(["Saved neighbor"]);
-      expect(canPersistThreadSnapshot(stale, TARGET.environmentId)).toBe(false);
-      expect(capturedShell.threads).toHaveLength(2);
-    }),
+        };
+        const capturedShell = {
+          ...v2ShellSnapshot,
+          threads: [
+            { ...v2ShellSnapshot.threads[0]!, id: THREAD_ID, title: stale.projection.thread.title },
+            {
+              ...v2ShellSnapshot.threads[0]!,
+              id: ThreadId.make("saved-neighbor"),
+              title: "Saved neighbor",
+            },
+          ],
+        };
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const harness = yield* makeHarness();
+            yield* Queue.offer(
+              harness.inputs,
+              snapshot(
+                {
+                  ...stale.projection,
+                  thread: { ...stale.projection.thread, temporary: true },
+                },
+                8,
+              ),
+            );
+            yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.data));
+            const update = deleted(9);
+            yield* Queue.offer(harness.inputs, update);
+            yield* awaitThreadState(harness.observed, (value) => value.status === "deleted");
+            if (failDuringSync) return yield* Effect.fail("sync failure");
+          }),
+        );
+        setTemporaryThread(TARGET.environmentId, THREAD_ID, false);
+        const encoded = yield* makeStoredShellSnapshotEncoder({ yieldToHost: Effect.void })({
+          schemaVersion: ORCHESTRATION_CACHE_SCHEMA_VERSION,
+          environmentId: TARGET.environmentId,
+          snapshot: capturedShell,
+        });
+        expect(encoded).not.toContain("DELETED_TEMPORARY_SENTINEL");
+        expect(
+          JSON.parse(encoded).snapshot.threads.map((thread: { title: string }) => thread.title),
+        ).toEqual(["Saved neighbor"]);
+        expect(canPersistThreadSnapshot(stale, TARGET.environmentId)).toBe(false);
+        expect(capturedShell.threads).toHaveLength(2);
+      }).pipe(
+        Effect.scoped,
+        Effect.result,
+        Effect.tap((result) =>
+          Effect.sync(() => {
+            if (result._tag === "Failure") expect(result.failure).toBe("sync failure");
+            expect(result._tag).toBe(failDuringSync ? "Failure" : "Success");
+            expect(
+              canPersistThreadSnapshot(
+                { snapshotSequence: 8, projection: BASE_PROJECTION },
+                TARGET.environmentId,
+              ),
+            ).toBe(true);
+          }),
+        ),
+      ),
   );
 
   it.effect("keeps the full sentinel in RAM without queued or finalizer disk writes", () =>
