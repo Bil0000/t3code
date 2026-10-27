@@ -28,6 +28,26 @@ vi.mock(import("pdfjs-dist/build/pdf.worker.min.mjs?url"), async () => {
   };
 });
 
+// The Word engine compiles about 30 MB of WebAssembly in a fresh worker per document, which took
+// 10-17 s per test on loaded CI runners. These tests cover fetching, preparation and remounts, so
+// the stand-in shows the prepared body's text instead of laying it out.
+vi.mock(import("./office/WordDocument"), async () => {
+  const { use } = await import("react");
+  const { default: Zip } = await import("jszip");
+  const texts = new WeakMap<ArrayBuffer, Promise<string>>();
+  const read = (bytes: ArrayBuffer) =>
+    Zip.loadAsync(bytes)
+      .then((zip) => zip.file("word/document.xml")!.async("string"))
+      .then((xml) => xml.replace(/<[^>]+>/g, " "));
+  return {
+    default: ({ bytes }: { bytes: ArrayBuffer }) => {
+      let text = texts.get(bytes);
+      if (!text) texts.set(bytes, (text = read(bytes)));
+      return <pre>{use(text)}</pre>;
+    },
+  };
+});
+
 import { AttachmentFilePreview } from "./AttachmentFilePreview";
 import { WorkspaceLargeTextPreview } from "./FilePreviewPanel";
 import LargeTextViewer from "./LargeTextViewer";
@@ -522,18 +542,18 @@ describe("large text preview recovery", () => {
           state(`${changed}#updated`, "two");
           await screen.rerender(preview("file-edit"));
           await expect.element(screen.getByText(/1,000 lines/)).toBeInTheDocument();
-          expect(workers).toHaveLength(2);
+          await vi.waitFor(() => expect(workers).toHaveLength(2));
           expect(screen.container.textContent).toContain("changed");
           return;
         }
         await screen.rerender(preview("first", 1));
         await expect.element(screen.getByText(/1,000 lines/)).toBeInTheDocument();
-        expect(workers).toHaveLength(2);
+        await vi.waitFor(() => expect(workers).toHaveLength(2));
         expect(screen.container.textContent).toContain("changed");
         state(`${original}#legacy`);
         await screen.rerender(preview("legacy-edit", 1));
         await expect.element(screen.getByText(/1,000 lines/)).toBeInTheDocument();
-        expect(workers).toHaveLength(3);
+        await vi.waitFor(() => expect(workers).toHaveLength(3));
         expect(screen.container.textContent).toContain("original");
         assetUrlState.mockReturnValue({ _tag: "Failure" });
         await screen.rerender(preview("legacy-edit", 1));
@@ -543,9 +563,7 @@ describe("large text preview recovery", () => {
           state(`${changed}#retried`);
           return changed;
         });
-        await act(() =>
-          screen.container.querySelector<HTMLButtonElement>('[role="alert"] button')!.click(),
-        );
+        await screen.getByRole("button", { name: "Try again" }).click();
         expect(refresh).toHaveBeenCalledOnce();
         await screen.rerender(preview("legacy-edit", 1));
         await expect.element(screen.locator).toMatchTextContent(/changed/);
@@ -1471,7 +1489,11 @@ it.each([
   expect(await bounded.file("word/styles.xml")!.async("string")).toBe(
     await archive.file("word/styles.xml")!.async("string"),
   );
-  if (scenario === "default template styles") expect(markup).toContain("styled cell");
+  expect(bounded.file("word/styles.xml")).not.toBeNull();
+  if (scenario === "default template styles") {
+    expect(markup).toContain("styled cell");
+    expect(await bounded.file("word/styles.xml")!.async("string")).toContain('w:styleId="Table99"');
+  }
   if (ordinary) {
     expect(markup).toMatch(/<w:headerReference/);
     expect(markup).toMatch(/<w:footerReference/);
@@ -1932,6 +1954,8 @@ describe("attachment HTML preview recovery", () => {
     await act(async () => button!.click());
   };
   const alert = (screen: Screen) => screen.container.querySelector('[role="alert"]');
+  // The app's connection runtime keeps polling environment discovery through the same global
+  // fetch while these tests run, so only the attachment's own requests are counted.
   const attachmentFetches = () =>
     vi
       .mocked(fetch)
