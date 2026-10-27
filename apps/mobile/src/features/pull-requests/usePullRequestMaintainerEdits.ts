@@ -1,4 +1,4 @@
-import { useAtomRefresh } from "@effect/atom-react";
+import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import { canEditPullRequestMaintainerEdits } from "@t3tools/client-runtime/pull-request-editing";
 import type { PullRequestDetail } from "@t3tools/contracts";
 import { AsyncResult } from "effect/reactivity";
@@ -7,14 +7,16 @@ import * as Dialog from "../../components/ui/Dialog";
 import { composerPullRequests } from "../../state/pull-requests";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { pullRequestTarget, type PullRequestParams } from "./usePullRequestDiff";
-import { usePullRequestPermissions } from "./usePullRequestPermissions";
+import { usePullRequestConnected } from "./usePullRequestConnected";
 
 export function usePullRequestMaintainerEdits(
   params: PullRequestParams,
   pr: PullRequestDetail | null,
 ) {
   const target = pullRequestTarget(params);
-  const permissions = usePullRequestPermissions(params, pr);
+  const connected = usePullRequestConnected(target.environmentId);
+  const canUpdate = useAtomValue(composerPullRequests.update.permissionAtom(target.environmentId));
+  const allowed = connected && canUpdate;
   const update = useAtomCommand(composerPullRequests.update, { reportFailure: false });
   const refresh = useAtomRefresh(composerPullRequests.detail(target));
   const key = `${pr?.url}:${pr?.maintainerCanModify}`;
@@ -27,7 +29,7 @@ export function usePullRequestMaintainerEdits(
   const inFlight = useRef(false);
   const visible = pr !== null && canEditPullRequestMaintainerEdits(pr);
   const save = async (next: boolean) => {
-    if (!visible || !permissions.canEditChangeRequest || inFlight.current) return;
+    if (!visible || !allowed || inFlight.current) return;
     const previous = value;
     inFlight.current = true;
     setSaving(true);
@@ -49,7 +51,7 @@ export function usePullRequestMaintainerEdits(
   return {
     visible,
     value,
-    disabled: !permissions.canEditChangeRequest || saving,
+    disabled: !allowed || saving,
     subtitle: saving
       ? "Saving…"
       : "Maintainers can push to this branch and access fork workflow secrets.",
