@@ -21,6 +21,7 @@ import {
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Schema from "effect/Schema";
+import * as Struct from "effect/Struct";
 import { Tool, Toolkit } from "effect/ai";
 
 import * as ThreadSearch from "../../../orchestration-v2/ThreadSearch.ts";
@@ -187,7 +188,7 @@ const ThreadSearchTool = Tool.make("t3_thread_search", {
   description:
     "Search active threads by title, branch, PR, project, then message text. Skips subagent threads. `projectId`: one project, else yours, else all outside a thread. Not exhaustive.",
   parameters: Schema.Struct({
-    ...OrchestrationSearchThreadsInput.fields,
+    ...Struct.omit(OrchestrationSearchThreadsInput.fields, ["acceptTemporaryThreads"]),
     projectId: Schema.optional(ProjectId),
   }),
   success: Schema.Struct({
