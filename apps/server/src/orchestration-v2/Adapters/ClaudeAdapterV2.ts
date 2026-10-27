@@ -6034,13 +6034,16 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           ) {
             return;
           }
+          const knownToolUseIds = yield* Ref.get(sessionSubagentTaskIdsByToolUseId);
           const previousWorkflowLaunchToolUseId =
             existingSubagent?.workflowLaunchToolUseId ?? existingSubagent?.runToolUseId;
           const workflowToolUseId =
-            input.reopen === true &&
             input.toolUseId !== undefined &&
-            findToolCall(input.context, input.toolUseId)?.toolName === "SendMessage"
-              ? previousWorkflowLaunchToolUseId
+            (input.toolUseId === existingSubagent?.runToolUseId ||
+              (input.reopen === true &&
+                !knownToolUseIds.has(input.toolUseId) &&
+                findToolCall(input.context, input.toolUseId)?.toolName === "SendMessage"))
+              ? (previousWorkflowLaunchToolUseId ?? input.toolUseId)
               : input.toolUseId;
           const newWorkflowLaunch =
             existingSubagent?.task.workflow !== undefined &&
@@ -6050,8 +6053,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           if (
             newWorkflowLaunch &&
             input.toolUseId !== undefined &&
-            (input.status !== "running" ||
-              (yield* Ref.get(sessionSubagentTaskIdsByToolUseId)).has(input.toolUseId))
+            (input.status !== "running" || knownToolUseIds.has(input.toolUseId))
           )
             return;
           // Resume task_started uses the SendMessage tool_use_id and sent message as its prompt.
@@ -7503,8 +7505,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               entry.task_id === taskId,
           );
           const startToolUseId = text(field(bufferedStart, "tool_use_id"));
+          const knownToolUseIds = yield* Ref.get(sessionSubagentTaskIdsByToolUseId);
           const isResume =
             startToolUseId !== undefined &&
+            (startToolUseId === registered.runToolUseId || !knownToolUseIds.has(startToolUseId)) &&
             (settledTurnByNativeThread.get(nativeThreadId)?.toolCalls.get(startToolUseId)
               ?.toolName === "SendMessage" ||
               bufferedMessages.some((entry) =>
@@ -7517,17 +7521,17 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           const startedToolUseId = isResume
             ? (previousWorkflowLaunchToolUseId ?? undefined)
             : startToolUseId;
-          const toolUseId = message.tool_use_id ?? startedToolUseId;
+          const toolUseId =
+            message.tool_use_id !== undefined &&
+            (message.tool_use_id === registered.runToolUseId ||
+              (isResume && message.tool_use_id === startToolUseId))
+              ? (previousWorkflowLaunchToolUseId ?? message.tool_use_id)
+              : (message.tool_use_id ?? startedToolUseId);
           const newLaunch =
             toolUseId !== undefined &&
             previousWorkflowLaunchToolUseId !== null &&
             toolUseId !== previousWorkflowLaunchToolUseId;
-          if (
-            newLaunch &&
-            toolUseId !== undefined &&
-            (yield* Ref.get(sessionSubagentTaskIdsByToolUseId)).has(toolUseId)
-          )
-            return;
+          if (newLaunch && toolUseId !== undefined && knownToolUseIds.has(toolUseId)) return;
           const workflow = mergeClaudeWorkflowProgress({
             previous: registered.task.workflow,
             newLaunch,
@@ -9165,7 +9169,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           if (
             subagent?.task.workflow !== undefined &&
             workflowLaunchToolUseId != null &&
-            workflowLaunchToolUseId !== toolUseId
+            workflowLaunchToolUseId !== toolUseId &&
+            subagent.runToolUseId !== toolUseId
           )
             return [];
           yield* Ref.update(sessionSubagentTaskIdsByToolUseId, (current) =>
