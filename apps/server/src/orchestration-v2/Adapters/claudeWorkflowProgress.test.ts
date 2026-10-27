@@ -1,3 +1,4 @@
+import { ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { mergeClaudeWorkflowProgress } from "./claudeWorkflowProgress.ts";
@@ -147,8 +148,14 @@ describe("mergeClaudeWorkflowProgress", () => {
     });
     expect(first?.agents[0]?.completedAt).toBe(2010);
     expect(first?.agents[1]).not.toHaveProperty("completedAt");
+    const childThreadId = ThreadId.make("workflow-member-1");
     const second = mergeClaudeWorkflowProgress({
-      previous: first,
+      previous: first && {
+        ...first,
+        agents: first.agents.map((member) =>
+          member.index === 1 ? { ...member, childThreadId } : member,
+        ),
+      },
       message: snapshotFrame([
         { type: "workflow_agent", index: 1, label: "alpha:one", state: "start", attempt: 2 },
       ]),
@@ -161,6 +168,7 @@ describe("mergeClaudeWorkflowProgress", () => {
         attempt: 2,
         phaseIndex: 1,
         phaseTitle: "Alpha",
+        childThreadId,
       },
       first?.agents[1],
     ]);

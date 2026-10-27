@@ -164,6 +164,7 @@ export function mergeClaudeWorkflowProgress(input: {
               ? {
                   ...optional("phaseIndex", prior.phaseIndex),
                   ...optional("phaseTitle", prior.phaseTitle),
+                  ...optional("childThreadId", prior.childThreadId),
                 }
               : prior),
             ...agent,
