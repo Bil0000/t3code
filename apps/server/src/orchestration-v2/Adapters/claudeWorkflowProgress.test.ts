@@ -27,6 +27,26 @@ const agent = (overrides: Record<string, unknown>) => ({
 });
 
 describe("mergeClaudeWorkflowProgress", () => {
+  it("resets phases, members, handles and usage for a different run", () => {
+    const previous = mergeClaudeWorkflowProgress({
+      previous: undefined,
+      name: "Review",
+      runHandles: { runId: "old", transcriptDir: "/old", scriptPath: "/old.ts" },
+      message: snapshotFrame([phase(1, "Old"), agent({ state: "done" })], {
+        total_tokens: 100,
+        tool_uses: 2,
+        duration_ms: 50,
+      }),
+    });
+
+    expect(
+      mergeClaudeWorkflowProgress({ previous, runHandles: { runId: "new" }, message: {} }),
+    ).toEqual({ name: "Review", runHandles: { runId: "new" }, phases: [], agents: [] });
+    expect(
+      mergeClaudeWorkflowProgress({ previous, runHandles: { runId: "old" }, message: {} }),
+    ).toEqual(previous);
+  });
+
   it("maps provider agent states and per-member metrics", () => {
     const workflow = mergeClaudeWorkflowProgress({
       previous: undefined,

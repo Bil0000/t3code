@@ -132,13 +132,18 @@ export function mergeClaudeWorkflowProgress(input: {
   ) {
     return undefined;
   }
+  const runChanged =
+    input.runHandles?.runId !== undefined &&
+    previous?.runHandles?.runId !== undefined &&
+    input.runHandles.runId !== previous.runHandles.runId;
+  const previousProgress = runChanged ? undefined : previous;
   const reported = field(input.message, "usage");
   const phasesByIndex = new Map(
-    (previous?.phases ?? []).map((phase) => [phase.index, phase] as const),
+    (previousProgress?.phases ?? []).map((phase) => [phase.index, phase] as const),
   );
   for (const phase of snapshot?.phases ?? []) phasesByIndex.set(phase.index, phase);
   const agentsByIndex = new Map(
-    (previous?.agents ?? []).map((agent) => [agent.index, agent] as const),
+    (previousProgress?.agents ?? []).map((agent) => [agent.index, agent] as const),
   );
   for (const agent of snapshot?.agents ?? []) {
     const prior = agentsByIndex.get(agent.index);
@@ -167,15 +172,21 @@ export function mergeClaudeWorkflowProgress(input: {
   }
   const runHandles =
     input.runHandles === undefined
-      ? previous?.runHandles
-      : { ...previous?.runHandles, ...input.runHandles };
+      ? previousProgress?.runHandles
+      : { ...previousProgress?.runHandles, ...input.runHandles };
   return {
     ...optional("name", input.name ?? previous?.name),
     ...optional("runHandles", runHandles),
     phases: Array.from(phasesByIndex.values()).sort((left, right) => left.index - right.index),
     agents: Array.from(agentsByIndex.values()).sort((left, right) => left.index - right.index),
-    ...optional("totalTokens", count(field(reported, "total_tokens")) ?? previous?.totalTokens),
-    ...optional("toolCalls", count(field(reported, "tool_uses")) ?? previous?.toolCalls),
-    ...optional("durationMs", count(field(reported, "duration_ms")) ?? previous?.durationMs),
+    ...optional(
+      "totalTokens",
+      count(field(reported, "total_tokens")) ?? previousProgress?.totalTokens,
+    ),
+    ...optional("toolCalls", count(field(reported, "tool_uses")) ?? previousProgress?.toolCalls),
+    ...optional(
+      "durationMs",
+      count(field(reported, "duration_ms")) ?? previousProgress?.durationMs,
+    ),
   };
 }
