@@ -997,7 +997,7 @@ describe("AssetAccess", () => {
       const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-workspace-download-" });
       const bytes = new Uint8Array(1024 * 1024 + 16).fill(97);
       bytes.set([0xef, 0xbb, 0xbf, 13, 10, 0xff, 0xc0, 0]);
-      for (const name of ["source.ts", "page.html", "empty.bin"]) {
+      for (const name of ["source.ts", "page.html", "empty.bin", "clip.mp4"]) {
         const expected = name === "empty.bin" ? new Uint8Array() : bytes;
         const filePath = path.join(root, name);
         yield* fs.writeFile(filePath, expected);

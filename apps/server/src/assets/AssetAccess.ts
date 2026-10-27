@@ -494,7 +494,7 @@ const finalizeWorkspaceFileAsset = Effect.fn("AssetAccess.finalizeWorkspaceFileA
         resource: input.resource,
       });
     }
-    if (isDraftMedia) {
+    if (isDraftMedia && !input.download) {
       return yield* finalizeAbsoluteMediaFileAsset({
         ...input,
         requestedPath: canonicalFile,
