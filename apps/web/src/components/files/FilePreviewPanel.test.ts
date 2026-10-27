@@ -392,7 +392,7 @@ describe("document preview contents", () => {
       )
       .file(
         "Book/book.opf",
-        '<package><manifest><item id="a" href="one.xhtml" media-type="application/xhtml+xml"/><item id="b" href="two&amp;&#x26;&#38;.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="b"/><itemref idref="a"/></spine></package>',
+        '<package><manifest><item id="a" href="one.xhtml" media-type="application/xhtml+xml"/><item id="b" href="two&amp;&#x26;&#38;.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="b"/><itemref idref="a"/><itemref idref="b"/></spine></package>',
       )
       .file(
         "Book/one.xhtml",
@@ -409,10 +409,13 @@ describe("document preview contents", () => {
           "base64",
         ),
       );
+    const read = vi.spyOn(archive.file("Book/two&&&.xhtml")!, "async");
     const result = await openEpub(archive);
+    expect(read).toHaveBeenCalledOnce();
     expect(result.type).toBe("document");
     if (result.type !== "document") throw new Error("Expected document");
-    expect(result.pages.map((page) => page.title)).toEqual(["Second", "First"]);
+    expect(result.pages.map((page) => page.title)).toEqual(["Second", "First", "Second"]);
+    expect(result.pages[2]!.html).toBe(result.pages[0]!.html);
     expect(result.pages[0]!.html).toContain("A\u00a0B © — ≂̸ &amp;lt;");
     expect(result.pages[0]!.html).toContain('alt="© ≂̸"');
     expect(result.pages[1]!.html).toContain('src="data:image/png;base64,');

@@ -390,18 +390,29 @@ export async function openEpub(archive: JSZip): Promise<OfficeWorkerResult> {
   if (!spine.length || spine.length > 500)
     throw new Error("This EPUB has no chapters or too many chapters to preview.");
   const pages = [];
+  const chapters = new Map<string, { title: string; html: string; cost: number }>();
   for (const itemref of spine) {
     const item = manifest.get(itemref.attrs.idref);
     if (!item || item.attrs["media-type"] !== "application/xhtml+xml") continue;
     const path = archivePath(rootfile, item.attrs.href ?? "");
     const entry = path ? archive.file(path) : null;
     if (!entry || !path) continue;
-    const chapter = parseXml(await entry.async("string"));
+    let prepared = chapters.get(path);
+    if (prepared) reserveMarkup(prepared.cost);
+    else {
+      const chapter = parseXml(await entry.async("string"));
+      const before = markupBytes;
+      const html = await epubHtml(chapter, archive, path);
+      prepared = {
+        title: text(find(chapter, "title")[0] ?? find(chapter, "h1")[0] ?? chapter).slice(0, 120),
+        html,
+        cost: markupBytes - before,
+      };
+      chapters.set(path, prepared);
+    }
     pages.push({
-      title:
-        text(find(chapter, "title")[0] ?? find(chapter, "h1")[0] ?? chapter).slice(0, 120) ||
-        `Chapter ${pages.length + 1}`,
-      html: await epubHtml(chapter, archive, path),
+      title: prepared.title || `Chapter ${pages.length + 1}`,
+      html: prepared.html,
     });
   }
   if (!pages.length) throw new Error("This EPUB has no readable XHTML chapters.");
