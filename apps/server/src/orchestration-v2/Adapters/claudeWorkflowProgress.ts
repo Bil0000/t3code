@@ -118,6 +118,7 @@ function parseClaudeWorkflowProgress(message: unknown): {
 /** Returns undefined without workflow evidence; progress frames omit task_type and ordinary subagents also emit usage. */
 export function mergeClaudeWorkflowProgress(input: {
   readonly previous: OrchestrationV2SubagentWorkflow | undefined;
+  readonly newLaunch?: boolean;
   readonly name?: string | undefined;
   readonly runHandles?: OrchestrationV2WorkflowRunHandles | undefined;
   readonly message: unknown;
@@ -136,7 +137,7 @@ export function mergeClaudeWorkflowProgress(input: {
     input.runHandles?.runId !== undefined &&
     previous?.runHandles?.runId !== undefined &&
     input.runHandles.runId !== previous.runHandles.runId;
-  const previousProgress = runChanged ? undefined : previous;
+  const previousProgress = runChanged || input.newLaunch === true ? undefined : previous;
   const reported = field(input.message, "usage");
   const phasesByIndex = new Map(
     (previousProgress?.phases ?? []).map((phase) => [phase.index, phase] as const),

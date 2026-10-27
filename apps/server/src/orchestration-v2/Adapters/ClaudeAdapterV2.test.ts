@@ -13698,121 +13698,214 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       ),
   );
 
-  it.effect("isolates member threads and transcript state when a workflow run changes", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const harness = yield* makeWorkflowHarness;
-        yield* harness.runtime.startTurn(
-          makeClaudeTestTurnInput({
-            threadId: harness.threadId,
-            providerThread: harness.providerThread,
-            now: yield* DateTime.now,
-            attemptId: RunAttemptId.make("attempt-workflow-run-change"),
-            text: "Run the workflow twice.",
-            attachments: [],
-          }),
-        );
-        yield* harness.offerAndWait(workflowToolUse);
-        yield* harness.offerAndWait(workflowTaskStarted);
-        yield* harness.offerAndWait(
-          workflowSnapshot({ uuid: "00000000-0000-4000-8000-000000004001", state: "queued" }),
-        );
-        yield* harness.until(() => workflowMemberEvents(harness.events, 2).length === 1);
-        const beforeAck = workflowMemberEvents(harness.events, 1).at(-1)!.subagent;
-        yield* harness.offerAndWait(workflowLaunchAck(harness.transcriptDir));
-        yield* harness.offerAndWait(
-          workflowSnapshot({ uuid: "00000000-0000-4000-8000-000000004002", state: "done" }),
-        );
-        yield* harness.until(
-          () => workflowMemberEvents(harness.events, 2).at(-1)?.subagent.status === "completed",
-        );
-        const first = workflowMemberEvents(harness.events, 1).at(-1)!.subagent;
-        assert.equal(first.childThreadId, beforeAck.childThreadId);
-        const firstMessages = threadMessages(harness.events, first.childThreadId);
-        assert.deepEqual(
-          firstMessages.map((event) => event.message.text),
-          ["Reply with exactly: A1", "A1 from the transcript"],
-        );
-        const ack = workflowLaunchAck(harness.transcriptDir);
-        yield* harness.offerAndWait(
-          claudeSdkFrame({
-            ...ack,
-            uuid: "00000000-0000-4000-8000-000000004003",
-            tool_use_result: { taskType: "local_workflow", runId: "wf_second" },
-          }),
-        );
-        yield* harness.until(
-          () =>
-            workflowCoordinatorEvents(harness.events).at(-1)?.subagent.workflow?.runHandles
-              ?.runId === "wf_second",
-        );
-        yield* harness.offerAndWait(
-          workflowSnapshot({ uuid: "00000000-0000-4000-8000-000000004004", state: "queued" }),
-        );
-        yield* harness.until(
-          () =>
-            workflowCoordinatorEvents(harness.events).at(-1)?.subagent.workflow?.agents[0] !==
-            undefined,
-        );
-        const secondThreadId = workflowCoordinatorEvents(harness.events).at(-1)!.subagent.workflow!
-          .agents[0]!.childThreadId;
-        assert.notEqual(secondThreadId, first.childThreadId);
-        yield* harness.until(
-          () =>
-            workflowMemberEvents(harness.events, 1).at(-1)?.subagent.childThreadId ===
-            secondThreadId,
-        );
-        const second = workflowMemberEvents(harness.events, 1).at(-1)!.subagent;
-        assert.notEqual(second.childThreadId, first.childThreadId);
-        assert.notEqual(second.id, first.id);
-        assert.equal(second.status, "pending");
-        assert.isNull(second.startedAt);
-        assert.isNull(second.completedAt);
-        assert.isNull(second.result);
-        const secondPrompt = threadMessages(harness.events, second.childThreadId);
-        assert.deepEqual(
-          secondPrompt.map((event) => event.message.text),
-          ["Reply with exactly: A1"],
-        );
-        assert.notEqual(secondPrompt[0]!.message.id, firstMessages[0]!.message.id);
-        NodeFS.writeFileSync(
-          NodePath.join(harness.transcriptDir, "agent-a1.jsonl"),
-          '{"type":"assistant","uuid":"wf-second-run-line","message":{"role":"assistant","stop_reason":"end_turn","id":"msg_second","content":[{"type":"text","text":"A1 from the second run transcript"}]}}\n',
-        );
-        yield* harness.offerAndWait(
-          claudeSdkFrame({
-            ...ack,
-            uuid: "00000000-0000-4000-8000-000000004005",
-            tool_use_result: {
-              taskType: "local_workflow",
-              runId: "wf_second",
-              transcriptDir: harness.transcriptDir,
+  it.effect.each(["active", "idle", "idle without progress ID"])(
+    "isolates workflow progress before a new launch reply: %s",
+    (mode) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const harness = yield* makeWorkflowHarness;
+          const idle = mode !== "active";
+          yield* harness.runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make("attempt-workflow-run-change"),
+              text: "Run the workflow twice.",
+              attachments: [],
+            }),
+          );
+          yield* harness.offerAndWait(workflowToolUse);
+          yield* harness.offerAndWait(workflowTaskStarted);
+          yield* harness.offerAndWait(
+            workflowSnapshot({ uuid: "00000000-0000-4000-8000-000000004001", state: "queued" }),
+          );
+          yield* harness.until(() => workflowMemberEvents(harness.events, 2).length === 1);
+          const beforeAck = workflowMemberEvents(harness.events, 1).at(-1)!.subagent;
+          yield* harness.offerAndWait(workflowLaunchAck(harness.transcriptDir));
+          yield* harness.offerAndWait(
+            workflowSnapshot({ uuid: "00000000-0000-4000-8000-000000004002", state: "done" }),
+          );
+          yield* harness.until(
+            () => workflowMemberEvents(harness.events, 2).at(-1)?.subagent.status === "completed",
+          );
+          const first = workflowMemberEvents(harness.events, 1).at(-1)!.subagent;
+          assert.equal(first.childThreadId, beforeAck.childThreadId);
+          const firstMessages = threadMessages(harness.events, first.childThreadId);
+          assert.deepEqual(
+            firstMessages.map((event) => event.message.text),
+            ["Reply with exactly: A1", "A1 from the transcript"],
+          );
+          if (idle) {
+            yield* harness.offerAndWait(
+              makeResultFrame({
+                uuid: "00000000-0000-4000-8000-000000004008",
+                result: "Launched.",
+              }),
+            );
+            yield* Queue.take(harness.terminalReceipts);
+          }
+          const secondToolUseId = "toolu-workflow-second";
+          const secondStart = claudeSdkFrame({
+            ...workflowTaskStarted,
+            uuid: "00000000-0000-4000-8000-000000004009",
+            tool_use_id: secondToolUseId,
+          });
+          if (idle) {
+            yield* harness.offerAndWait(
+              mode === "idle"
+                ? claudeSdkFrame({
+                    ...workflowTaskStarted,
+                    uuid: "00000000-0000-4000-8000-000000004012",
+                  })
+                : secondStart,
+            );
+          }
+          yield* harness.offerAndWait(
+            claudeSdkFrame({
+              ...workflowSnapshot({
+                uuid: "00000000-0000-4000-8000-000000004004",
+                state: "queued",
+                attempt: 2,
+                prompt: "Reply with exactly: B1",
+              }),
+              tool_use_id: mode === "idle without progress ID" ? undefined : secondToolUseId,
+            }),
+          );
+          yield* harness.until(
+            () =>
+              workflowMemberEvents(harness.events, 1).at(-1)?.subagent.prompt ===
+              "Reply with exactly: B1",
+          );
+          assert.deepEqual(threadMessages(harness.events, first.childThreadId), firstMessages);
+          const secondThreadId = workflowCoordinatorEvents(harness.events).at(-1)!.subagent
+            .workflow!.agents[0]!.childThreadId;
+          assert.notEqual(secondThreadId, first.childThreadId);
+          yield* harness.until(
+            () =>
+              workflowMemberEvents(harness.events, 1).at(-1)?.subagent.childThreadId ===
+              secondThreadId,
+          );
+          const second = workflowMemberEvents(harness.events, 1).at(-1)!.subagent;
+          assert.notEqual(second.childThreadId, first.childThreadId);
+          assert.notEqual(second.id, first.id);
+          assert.equal(second.status, "pending");
+          assert.isNull(second.startedAt);
+          assert.isNull(second.completedAt);
+          assert.isNull(second.result);
+          const secondPrompt = threadMessages(harness.events, second.childThreadId);
+          assert.deepEqual(
+            secondPrompt.map((event) => event.message.text),
+            ["Reply with exactly: B1"],
+          );
+          assert.notEqual(secondPrompt[0]!.message.id, firstMessages[0]!.message.id);
+          if (mode !== "idle without progress ID") yield* harness.offerAndWait(secondStart);
+          if (idle) {
+            yield* harness.runtime.startTurn(
+              makeClaudeTestTurnInput({
+                threadId: harness.threadId,
+                providerThread: harness.providerThread,
+                now: yield* DateTime.now,
+                attemptId: RunAttemptId.make("attempt-workflow-second-launch"),
+                text: "Continue the workflow.",
+                attachments: [],
+                providerTurnOrdinal: 2,
+                messageCreatedBy: "agent",
+                messageCreationSource: "provider",
+              }),
+            );
+          }
+          const originalAck = workflowLaunchAck(harness.transcriptDir);
+          const ack = claudeSdkFrame({
+            ...originalAck,
+            message: {
+              role: "user",
+              content: [
+                { type: "tool_result", tool_use_id: secondToolUseId, content: "Launched." },
+              ],
             },
-          }),
-        );
-        yield* harness.offerAndWait(
-          workflowSnapshot({ uuid: "00000000-0000-4000-8000-000000004006", state: "done" }),
-        );
-        yield* harness.until(
-          () =>
-            threadMessages(harness.events, second.childThreadId).at(-1)?.message.text ===
-            "A1 from the second run transcript",
-        );
-        assert.deepEqual(
-          threadMessages(harness.events, second.childThreadId).map((event) => event.message.text),
-          ["Reply with exactly: A1", "A1 from the second run transcript"],
-        );
-        assert.deepEqual(threadMessages(harness.events, first.childThreadId), firstMessages);
-        yield* harness.offerAndWait(
-          makeResultFrame({ uuid: "00000000-0000-4000-8000-000000004007", result: "Launched." }),
-        );
-        yield* Queue.take(harness.terminalReceipts);
-      }).pipe(
-        Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          });
+          yield* harness.offerAndWait(
+            claudeSdkFrame({
+              ...ack,
+              uuid: "00000000-0000-4000-8000-000000004003",
+              tool_use_result: { taskType: "local_workflow", runId: "wf_second" },
+            }),
+          );
+          yield* harness.until(
+            () =>
+              workflowCoordinatorEvents(harness.events).at(-1)?.subagent.workflow?.runHandles
+                ?.runId === "wf_second",
+          );
+          assert.equal(
+            workflowCoordinatorEvents(harness.events).at(-1)?.subagent.workflow?.agents[0]
+              ?.childThreadId,
+            secondThreadId,
+          );
+          assert.equal(
+            workflowCoordinatorEvents(harness.events).at(-1)?.subagent.workflow?.agents[0]?.prompt,
+            "Reply with exactly: B1",
+          );
+          yield* harness.offerAndWait(
+            claudeSdkFrame({
+              ...originalAck,
+              uuid: "00000000-0000-4000-8000-000000004010",
+            }),
+          );
+          yield* harness.offerAndWait(
+            workflowSnapshot({
+              uuid: "00000000-0000-4000-8000-000000004011",
+              state: "done",
+              attempt: 3,
+              prompt: "Old launch progress",
+            }),
+          );
+          NodeFS.writeFileSync(
+            NodePath.join(harness.transcriptDir, "agent-a1.jsonl"),
+            '{"type":"assistant","uuid":"wf-second-run-line","message":{"role":"assistant","stop_reason":"end_turn","id":"msg_second","content":[{"type":"text","text":"A1 from the second run transcript"}]}}\n',
+          );
+          yield* harness.offerAndWait(
+            claudeSdkFrame({
+              ...ack,
+              uuid: "00000000-0000-4000-8000-000000004005",
+              tool_use_result: {
+                taskType: "local_workflow",
+                runId: "wf_second",
+                transcriptDir: harness.transcriptDir,
+              },
+            }),
+          );
+          yield* harness.offerAndWait(
+            claudeSdkFrame({
+              ...workflowSnapshot({
+                uuid: "00000000-0000-4000-8000-000000004006",
+                state: "done",
+                attempt: 2,
+                prompt: "Reply with exactly: B1",
+              }),
+              tool_use_id: secondToolUseId,
+            }),
+          );
+          yield* harness.until(
+            () =>
+              threadMessages(harness.events, second.childThreadId).at(-1)?.message.text ===
+              "A1 from the second run transcript",
+          );
+          assert.deepEqual(
+            threadMessages(harness.events, second.childThreadId).map((event) => event.message.text),
+            ["Reply with exactly: B1", "A1 from the second run transcript"],
+          );
+          assert.deepEqual(threadMessages(harness.events, first.childThreadId), firstMessages);
+          yield* harness.offerAndWait(
+            makeResultFrame({ uuid: "00000000-0000-4000-8000-000000004007", result: "Launched." }),
+          );
+          yield* Queue.take(harness.terminalReceipts);
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          ),
         ),
       ),
-    ),
   );
 
   it.effect("answers settled workflow members from a transcript, or the snapshot excerpt", () =>

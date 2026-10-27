@@ -3815,6 +3815,7 @@ interface ActiveClaudeSubagent {
   readonly turnItemId: OrchestrationV2TurnItem["id"];
   readonly turnItemOrdinal: number;
   readonly runToolUseId: string | null;
+  readonly workflowLaunchToolUseId?: string | null;
   readonly effort: string | undefined;
   nextChildItemOrdinal: number;
   resultItemOrdinal: number | null;
@@ -5563,6 +5564,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         const withWorkflowMemberThreadIds = (
           workflow: OrchestrationV2SubagentWorkflow,
           coordinatorChildThreadId: ThreadId,
+          launchToolUseId: string | null,
         ): OrchestrationV2SubagentWorkflow => ({
           ...workflow,
           agents: workflow.agents.map((member) => ({
@@ -5571,7 +5573,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               member.childThreadId ??
               idAllocator.derive.threadFromProviderThread({
                 driver: CLAUDE_PROVIDER,
-                nativeThreadId: `${coordinatorChildThreadId}:run:${workflow.runHandles?.runId ?? "unknown"}:agent:${member.index}`,
+                nativeThreadId: `${coordinatorChildThreadId}:run:${workflow.runHandles?.runId ?? `launch:${launchToolUseId ?? "unknown"}`}:agent:${member.index}`,
               }),
           })),
         });
@@ -6004,11 +6006,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           const existingSubagent =
             input.onlyIfRunningInRun !== undefined
               ? registeredSubagent
-              : (input.context.subagentsByTaskId.get(input.taskId) ??
+              : (registeredSubagent ??
+                input.context.subagentsByTaskId.get(input.taskId) ??
                 (input.toolUseId === undefined
                   ? undefined
-                  : input.context.subagentsByToolUseId.get(input.toolUseId)) ??
-                registeredSubagent);
+                  : input.context.subagentsByToolUseId.get(input.toolUseId)));
           if (existingSubagent === undefined && input.status !== "running") {
             return;
           }
@@ -6032,6 +6034,26 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           ) {
             return;
           }
+          const previousWorkflowLaunchToolUseId =
+            existingSubagent?.workflowLaunchToolUseId ?? existingSubagent?.runToolUseId;
+          const workflowToolUseId =
+            input.reopen === true &&
+            input.toolUseId !== undefined &&
+            findToolCall(input.context, input.toolUseId)?.toolName === "SendMessage"
+              ? previousWorkflowLaunchToolUseId
+              : input.toolUseId;
+          const newWorkflowLaunch =
+            existingSubagent?.task.workflow !== undefined &&
+            workflowToolUseId !== undefined &&
+            previousWorkflowLaunchToolUseId != null &&
+            workflowToolUseId !== previousWorkflowLaunchToolUseId;
+          if (
+            newWorkflowLaunch &&
+            input.toolUseId !== undefined &&
+            (input.status !== "running" ||
+              (yield* Ref.get(sessionSubagentTaskIdsByToolUseId)).has(input.toolUseId))
+          )
+            return;
           // Resume task_started uses the SendMessage tool_use_id and sent message as its prompt.
           const resumeToolUseId =
             input.reopen === true &&
@@ -6068,16 +6090,26 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 : existingSubagent.task;
           const workflow = mergeClaudeWorkflowProgress({
             previous: priorTask?.workflow,
+            newLaunch: newWorkflowLaunch,
             ...(input.workflowName === undefined ? {} : { name: input.workflowName }),
             ...(input.workflowRunHandles === undefined
               ? {}
               : { runHandles: input.workflowRunHandles }),
             message: input.workflowFrame,
           });
+          const runToolUseId =
+            existingSubagent === undefined ||
+            existingSubagent.runToolUseId === null ||
+            newWorkflowLaunch
+              ? (input.toolUseId ?? null)
+              : (resumeToolUseId ?? existingSubagent.runToolUseId);
+          const workflowLaunchToolUseId = newWorkflowLaunch
+            ? (workflowToolUseId ?? null)
+            : (previousWorkflowLaunchToolUseId ?? workflowToolUseId ?? null);
           const workflowWithThreads =
             workflow === undefined
               ? undefined
-              : withWorkflowMemberThreadIds(workflow, childThreadId);
+              : withWorkflowMemberThreadIds(workflow, childThreadId, workflowLaunchToolUseId);
           const effort =
             existingSubagent === undefined
               ? (input.effort ??
@@ -6148,10 +6180,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             childRootNodeId,
             turnItemId: existingSubagent?.turnItemId ?? derivedIds.turnItemId,
             turnItemOrdinal,
-            runToolUseId:
-              existingSubagent === undefined
-                ? (input.toolUseId ?? null)
-                : (resumeToolUseId ?? existingSubagent.runToolUseId),
+            runToolUseId,
+            ...(workflow === undefined ? {} : { workflowLaunchToolUseId }),
             childThread: existingSubagent?.childThread ?? null,
             effort,
             nextChildItemOrdinal: existingSubagent?.nextChildItemOrdinal ?? 100,
@@ -7450,7 +7480,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           }
         });
 
-        const applyWorkflowProgressWithoutTurn = Effect.fnUntraced(function* (message: SDKMessage) {
+        const applyWorkflowProgressWithoutTurn = Effect.fnUntraced(function* (
+          message: SDKMessage,
+          nativeThreadId: string,
+        ) {
           if (message.type !== "system" || message.subtype !== "task_progress") return;
           if (!hasClaudeWorkflowSnapshot(message)) return;
           const taskId = message.task_id;
@@ -7461,8 +7494,43 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             registered.task.status !== "running"
           )
             return;
+          const bufferedMessages =
+            (yield* Ref.get(wakeBuffers)).get(nativeThreadId)?.messages ?? [];
+          const bufferedStart = bufferedMessages.findLast(
+            (entry) =>
+              entry.type === "system" &&
+              entry.subtype === "task_started" &&
+              entry.task_id === taskId,
+          );
+          const startToolUseId = text(field(bufferedStart, "tool_use_id"));
+          const isResume =
+            startToolUseId !== undefined &&
+            (settledTurnByNativeThread.get(nativeThreadId)?.toolCalls.get(startToolUseId)
+              ?.toolName === "SendMessage" ||
+              bufferedMessages.some((entry) =>
+                claudeToolUseBlocksFromAssistantMessage(entry).some(
+                  (tool) => tool.id === startToolUseId && tool.name === "SendMessage",
+                ),
+              ));
+          const previousWorkflowLaunchToolUseId =
+            registered.workflowLaunchToolUseId ?? registered.runToolUseId;
+          const startedToolUseId = isResume
+            ? (previousWorkflowLaunchToolUseId ?? undefined)
+            : startToolUseId;
+          const toolUseId = message.tool_use_id ?? startedToolUseId;
+          const newLaunch =
+            toolUseId !== undefined &&
+            previousWorkflowLaunchToolUseId !== null &&
+            toolUseId !== previousWorkflowLaunchToolUseId;
+          if (
+            newLaunch &&
+            toolUseId !== undefined &&
+            (yield* Ref.get(sessionSubagentTaskIdsByToolUseId)).has(toolUseId)
+          )
+            return;
           const workflow = mergeClaudeWorkflowProgress({
             previous: registered.task.workflow,
+            newLaunch,
             message,
           });
           if (workflow === undefined) return;
@@ -7471,6 +7539,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           const workflowWithThreads = withWorkflowMemberThreadIds(
             workflow,
             registered.childThreadId,
+            toolUseId ?? previousWorkflowLaunchToolUseId,
           );
           const task = {
             ...registered.task,
@@ -7478,7 +7547,14 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             workflow: workflowWithThreads,
             updatedAt: now,
           } satisfies OrchestrationV2Subagent;
-          const coordinator = { ...registered, task };
+          const coordinator = {
+            ...registered,
+            task,
+            runToolUseId: newLaunch
+              ? (toolUseId ?? registered.runToolUseId)
+              : registered.runToolUseId,
+            workflowLaunchToolUseId: toolUseId ?? previousWorkflowLaunchToolUseId,
+          };
           const accepted = yield* Ref.modify(sessionSubagentsByTaskId, (current) => {
             const latest = current.get(taskId);
             if (latest !== registered || latest.task.status !== "running") {
@@ -7487,6 +7563,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             return [true, new Map(current).set(taskId, coordinator)] as const;
           });
           if (!accepted) return;
+          if (toolUseId !== undefined) {
+            yield* Ref.update(sessionSubagentTaskIdsByToolUseId, (current) =>
+              current.get(toolUseId) === taskId ? current : new Map(current).set(toolUseId, taskId),
+            );
+          }
           yield* emitProviderEvent({
             type: "subagent.updated",
             driver: CLAUDE_PROVIDER,
@@ -7956,7 +8037,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             (yield* Ref.get(activeTurn)) ??
             (yield* settledTurnForSubagentFrame(liveQuery.nativeThreadId, message));
           if (context === null) {
-            yield* applyWorkflowProgressWithoutTurn(message);
+            yield* applyWorkflowProgressWithoutTurn(message, liveQuery.nativeThreadId);
             // Buffer wake evidence before clearing the task from the roster.
             if (message.type === "system" && message.subtype === "task_notification") {
               yield* bufferWakeMessage({ nativeThreadId: liveQuery.nativeThreadId, message });
@@ -9078,6 +9159,15 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           }
           const toolUseId = message.tool_use_id;
           const taskId = message.task_id;
+          const subagent = (yield* Ref.get(sessionSubagentsByTaskId)).get(taskId);
+          const workflowLaunchToolUseId =
+            subagent?.workflowLaunchToolUseId ?? subagent?.runToolUseId;
+          if (
+            subagent?.task.workflow !== undefined &&
+            workflowLaunchToolUseId != null &&
+            workflowLaunchToolUseId !== toolUseId
+          )
+            return [];
           yield* Ref.update(sessionSubagentTaskIdsByToolUseId, (current) =>
             current.get(toolUseId) === taskId ? current : new Map(current).set(toolUseId, taskId),
           );
