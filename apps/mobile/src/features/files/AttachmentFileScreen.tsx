@@ -8,7 +8,6 @@ import {
   clampFileAttachmentUploadBytes,
   formatAttachmentSize,
 } from "@t3tools/client-runtime/state/attachments";
-import { isZipFile } from "@t3tools/client-runtime/zip-preview";
 import { useRef, useState } from "react";
 import { Platform, View } from "react-native";
 
@@ -36,7 +35,7 @@ import { useAppearancePreferences } from "../settings/appearance/AppearancePrefe
 import { SourceFileSurface } from "./SourceFileSurface";
 import { WorkspaceFileWebPreview } from "./WorkspaceFileWebPreview";
 import { HtmlRenderWebView } from "../threads/HtmlRenderWebView";
-import { ZipArchiveView } from "./ZipArchiveView";
+import { isZipFile, ZipArchiveView } from "./ZipArchiveView";
 
 export type AttachmentFileRouteParams = {
   readonly environmentId?: string;
@@ -51,7 +50,7 @@ export type AttachmentFileRouteParams = {
 
 type AttachmentFileScreenProps = StaticScreenProps<AttachmentFileRouteParams>;
 
-function nativeViewerKind(kind: ReturnType<typeof useAttachmentDocument>["kind"]) {
+export function nativeViewerKind(kind: ReturnType<typeof useAttachmentDocument>["kind"]) {
   if (kind === "image") return "image" as const;
   if (kind === "pdf") return "pdf" as const;
   if (kind === "video" || kind === "unsupported") return "document" as const;

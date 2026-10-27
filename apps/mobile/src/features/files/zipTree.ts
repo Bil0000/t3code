@@ -1,9 +1,16 @@
-import type { ZipPreviewEntry } from "@t3tools/client-runtime/zip-preview";
+export interface ZipEntry {
+  readonly path: string;
+  readonly name: string;
+  readonly isDirectory: boolean;
+  readonly sizeBytes: number;
+  readonly mimeType: string;
+  readonly bytes: Uint8Array<ArrayBuffer>;
+}
 
 export interface ZipTreeNode {
   readonly path: string;
   readonly label: string;
-  readonly entry: ZipPreviewEntry | null;
+  readonly entry: ZipEntry | null;
   readonly children: ReadonlyArray<ZipTreeNode>;
   readonly fileCount: number;
 }
@@ -16,7 +23,7 @@ export interface ZipTreeRow {
 interface MutableNode {
   path: string;
   name: string;
-  entry: ZipPreviewEntry | null;
+  entry: ZipEntry | null;
   children: Map<string, MutableNode>;
 }
 
@@ -50,7 +57,7 @@ function freeze(node: MutableNode): ZipTreeNode {
   };
 }
 
-export function buildZipTree(entries: ReadonlyArray<ZipPreviewEntry>): ReadonlyArray<ZipTreeNode> {
+export function buildZipTree(entries: ReadonlyArray<ZipEntry>): ReadonlyArray<ZipTreeNode> {
   const root: MutableNode = { path: "", name: "", entry: null, children: new Map() };
   for (const entry of entries) {
     const parts = entry.path.split("/").filter(Boolean);

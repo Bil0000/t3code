@@ -10,10 +10,9 @@ import {
   officePreviewKind,
   FILE_TEXT_PREVIEW_MAX_BYTES,
 } from "@t3tools/shared/filePreview";
-import { isZipFile } from "@t3tools/client-runtime/zip-preview";
 import { ChevronRightIcon, DownloadIcon, Trash2Icon, WrapTextIcon, XIcon } from "lucide-react";
 import { Check, Code2, Copy, Eye, Table2 } from "lucide";
-import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 
 import { useAssetUrlRefresh } from "~/assets/assetUrls";
 import ChatMarkdown from "~/components/ChatMarkdown";
@@ -52,7 +51,6 @@ const MermaidFilePreview = lazy(() =>
 );
 
 const SourcePreview = lazy(() => import("./ReadOnlySourcePreview"));
-const ZipArchivePreview = lazy(() => import("./ZipArchivePreview"));
 
 const STALE_URL_MS = 5 * 60_000;
 
@@ -88,12 +86,10 @@ export function AttachmentFilePreview(props: {
   htmlRender?: boolean;
   threadRef?: ScopedThreadRef;
   origin?: string;
-  header?: ReactNode;
   onRemove?: () => void;
   onClose?: () => void;
 }) {
   const kind = filePreviewKind(props);
-  const zip = kind === "archive" && isZipFile(props);
   const officeKind = officePreviewKind(props);
   const delimiter = filePreviewDelimiter(props);
   const renderedMode =
@@ -290,21 +286,6 @@ export function AttachmentFilePreview(props: {
     ) : (
       <ReadOnlySourcePreview name={props.name} text={content.text} />
     )
-  ) : zip ? (
-    <Suspense fallback={<FileSurfaceLoading />}>
-      <ZipArchivePreview
-        key={`${url}:${revision}`}
-        name={props.name}
-        file={props.file ?? null}
-        url={url}
-        sizeBytes={props.sizeBytes}
-        origin={props.origin ?? (props.asset ? "Sent" : "Attachment")}
-        onRetry={() => setRevision((value) => value + 1)}
-        onSaveZip={save}
-        {...(props.onRemove ? { onRemove: props.onRemove } : {})}
-        {...(props.onClose ? { onClose: props.onClose } : {})}
-      />
-    </Suspense>
   ) : kind === "archive" || kind === "sqlite" ? (
     <BinaryFilePreview
       key={revision}
@@ -365,31 +346,23 @@ export function AttachmentFilePreview(props: {
     </div>
   );
 
-  // A loaded ZIP draws its own header with archive actions.
-  if (zip && !failure && url)
-    return <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">{body}</div>;
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
       <div className={cn(FILE_SURFACE_SUBHEADER_CLASS)} data-surface-subheader>
-        {props.header ?? (
-          <div className="flex min-w-0 flex-1 items-center text-xs">
-            <span className="shrink-0 px-0.5 text-muted-foreground">
-              {props.origin ?? "Attachment"}
+        <div className="flex min-w-0 flex-1 items-center text-xs">
+          <span className="shrink-0 px-0.5 text-muted-foreground">
+            {props.origin ?? "Attachment"}
+          </span>
+          <ChevronRightIcon className="mx-1 size-3.5 shrink-0 text-muted-foreground/60" />
+          <span aria-current="page" className="min-w-0 truncate px-0.5 font-medium text-foreground">
+            {props.name}
+          </span>
+          {props.sizeBytes > 0 ? (
+            <span className="ml-2 shrink-0 text-muted-foreground">
+              {formatAttachmentSize(props.sizeBytes)}
             </span>
-            <ChevronRightIcon className="mx-1 size-3.5 shrink-0 text-muted-foreground/60" />
-            <span
-              aria-current="page"
-              className="min-w-0 truncate px-0.5 font-medium text-foreground"
-            >
-              {props.name}
-            </span>
-            {props.sizeBytes > 0 ? (
-              <span className="ml-2 shrink-0 text-muted-foreground">
-                {formatAttachmentSize(props.sizeBytes)}
-              </span>
-            ) : null}
-          </div>
-        )}
+          ) : null}
+        </div>
         {renderedMode ? (
           <FileSurfaceAction
             label={renderedToggleLabel(renderedMode, rendered)}

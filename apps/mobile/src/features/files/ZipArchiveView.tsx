@@ -1,18 +1,21 @@
 import { formatAttachmentSize } from "@t3tools/client-runtime/state/attachments";
 import {
-  loadZipArchive,
-  readZipArchiveStream,
-  ZipPreviewError,
-  type ZipPreviewEntry,
-} from "@t3tools/client-runtime/zip-preview";
+  ARCHIVE_ENTRY_MAX_BYTES,
+  ARCHIVE_MAX_BYTES,
+  boundedZip,
+} from "@t3tools/client-runtime/zip/bounded-zip";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { filePreviewDelimiter, parseDelimitedPreview } from "@t3tools/shared/delimitedPreview";
-import { decodeFilePreviewText, filePreviewKind } from "@t3tools/shared/filePreview";
+import {
+  decodeFilePreviewText,
+  filePreviewKind,
+  hostPreviewMimeTypeFromExtension,
+} from "@t3tools/shared/filePreview";
 import { LegendList } from "@legendapp/list/react-native";
 import { fetch } from "expo/fetch";
 import { File } from "expo-file-system";
 import { useNavigation, usePreventRemove } from "@react-navigation/native";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { Keyboard, Platform, Pressable, ScrollView, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -35,71 +38,129 @@ import {
   writeGeneratedAttachmentFile,
 } from "../../lib/attachmentDownload";
 import { attachmentDocumentPresentation } from "../../lib/attachmentDocumentPresentation";
-import { createComposerFileAttachment } from "../../lib/composerImages";
+import {
+  createComposerFileAttachment,
+  removePersistedComposerAttachmentFile,
+} from "../../lib/composerImages";
 import { appendComposerDraftAttachments } from "../../state/use-composer-drafts";
-import { AttachmentDocumentBody } from "./AttachmentFileScreen";
+import { AttachmentDocumentBody, nativeViewerKind } from "./AttachmentFileScreen";
 import { FilePreviewLoading } from "./FilePreviewFeedback";
 import {
   buildZipTree,
   flattenZipTree,
   zipDownloadTimeLeft,
   zipFolderLabel,
+  type ZipEntry,
   type ZipTreeRow,
 } from "./zipTree";
 
-type ZipArchive = Awaited<ReturnType<typeof loadZipArchive>>;
-type ZipFailure = ZipPreviewError["reason"] | "network" | "cancelled";
-
-function archiveFailure(reason: ZipFailure) {
-  if (reason === "archive-limit" || reason === "entry-limit")
-    return {
-      title: "Too large to browse here",
-      detail: "Browsing works up to 32 MB and 2,000 files. Save the ZIP to open it in another app.",
-      retry: false,
-    };
-  if (reason === "encrypted")
-    return {
-      title: "This ZIP is password-protected",
-      detail: "T3 Code can't open encrypted ZIPs. Save it and open it with its password.",
-      retry: false,
-    };
-  if (reason === "unsupported")
-    return {
-      title: "This ZIP format isn't supported",
-      detail: "Save the ZIP to open it in another app.",
-      retry: false,
-    };
-  if (reason === "cancelled")
-    return {
-      title: "Download cancelled",
-      detail: "The ZIP wasn't downloaded. Try again to list its files.",
-      retry: true,
-    };
-  if (reason === "network")
-    return {
-      title: "Couldn't download this ZIP",
-      detail: "Check the connection to this environment and try again.",
-      retry: true,
-    };
-  return {
-    title: "Couldn't read this ZIP",
-    detail: "It may be incomplete or not a real ZIP. Try again, or ask for the file again.",
-    retry: true,
-  };
+export function isZipFile(file: { readonly name: string; readonly mimeType: string }) {
+  const mime = file.mimeType.split(";", 1)[0]?.trim().toLowerCase();
+  return (
+    mime === "application/zip" ||
+    mime === "application/x-zip-compressed" ||
+    file.name.toLowerCase().endsWith(".zip")
+  );
 }
 
-function failureReason(cause: unknown): ZipFailure {
-  return cause instanceof ZipPreviewError ? cause.reason : "network";
+interface ZipArchive {
+  readonly entries: ReadonlyArray<ZipEntry>;
+  readonly fileCount: number;
+}
+
+interface ZipFailure {
+  readonly title: string;
+  readonly detail: string;
+  readonly retry: boolean;
+}
+
+const SAVE_ZIP_HINT = "Save the ZIP to open it in another app.";
+const TOO_LARGE: ZipFailure = {
+  title: "Too large to browse here",
+  detail: `Browsing works up to ${formatAttachmentSize(ARCHIVE_MAX_BYTES)}. ${SAVE_ZIP_HINT}`,
+  retry: false,
+};
+const CANCELLED: ZipFailure = {
+  title: "Download cancelled",
+  detail: "The ZIP wasn't downloaded. Try again to list its files.",
+  retry: true,
+};
+const NETWORK: ZipFailure = {
+  title: "Couldn't download this ZIP",
+  detail: "Check the connection to this environment and try again.",
+  retry: true,
+};
+
+class ZipFailureError extends Error {
+  constructor(readonly failure: ZipFailure) {
+    super(failure.title);
+  }
 }
 
 function errorMessage(cause: unknown, fallback: string) {
   return cause instanceof Error ? cause.message : fallback;
 }
 
+async function readArchiveBody(
+  body: ReadableStream<Uint8Array>,
+  onProgress: (receivedBytes: number) => void,
+) {
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > ARCHIVE_MAX_BYTES) throw new ZipFailureError(TOO_LARGE);
+      chunks.push(value);
+      onProgress(size);
+    }
+  } finally {
+    void reader.cancel().catch(() => {});
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes.buffer;
+}
+
+async function openArchive(bytes: ArrayBuffer): Promise<ZipArchive> {
+  let files: Awaited<ReturnType<typeof boundedZip>>;
+  try {
+    files = await boundedZip(bytes);
+  } catch (cause) {
+    throw new ZipFailureError({
+      title: "Couldn't browse this ZIP",
+      detail: `${errorMessage(cause, "It may be incomplete or damaged.")} ${SAVE_ZIP_HINT}`,
+      retry: false,
+    });
+  }
+  const entries = [...files].map(([path, file]): ZipEntry => {
+    const name = path.split("/").findLast(Boolean) ?? path;
+    const dot = name.lastIndexOf(".");
+    return {
+      path,
+      name,
+      isDirectory: file.directory,
+      sizeBytes: file.bytes.byteLength,
+      mimeType:
+        (dot > 0 ? hostPreviewMimeTypeFromExtension(name.slice(dot).toLowerCase()) : null) ??
+        "application/octet-stream",
+      bytes: file.bytes,
+    };
+  });
+  return { entries, fileCount: entries.filter((entry) => !entry.isDirectory).length };
+}
+
 type ArchiveState =
   | { readonly status: "loading"; readonly receivedBytes: number; readonly timeLeft: string | null }
   | { readonly status: "ready"; readonly archive: ZipArchive }
-  | { readonly status: "failed"; readonly reason: ZipFailure };
+  | { readonly status: "failed"; readonly failure: ZipFailure };
 
 function useZipArchive(input: {
   readonly uri: string | null;
@@ -114,7 +175,9 @@ function useZipArchive(input: {
   });
   const [revision, setRevision] = useState(0);
   const controller = useRef<AbortController | null>(null);
-  const { uri, isLocal, sizeBytes, refresh } = input;
+  const { uri, isLocal, sizeBytes } = input;
+  // The parent mints a new refresh callback on every render; it must not reload the archive.
+  const refresh = useEffectEvent(input.refresh);
   // oxlint-disable-next-line t3code/react-effect-budget -- Load archive bytes and cancel the stream on cleanup.
   useEffect(() => {
     if (!uri) return;
@@ -124,15 +187,16 @@ function useZipArchive(input: {
     // oxlint-disable-next-line react/set-state-in-effect -- A new archive load resets its progress.
     setState({ status: "loading", receivedBytes: 0, timeLeft: null });
     void (async () => {
-      const body = isLocal
-        ? new File(uri).readableStream()
-        : await (async () => {
-            const url = (await refresh()) ?? uri;
-            const response = await fetch(url, { signal: abort.signal });
-            if (!response.ok || !response.body) throw new Error("Could not load this ZIP file.");
-            return response.body;
-          })();
-      const bytes = await readZipArchiveStream(body, abort.signal, (receivedBytes) =>
+      if (sizeBytes > ARCHIVE_MAX_BYTES) throw new ZipFailureError(TOO_LARGE);
+      if (isLocal) {
+        const file = new File(uri);
+        if ((file.size ?? 0) > ARCHIVE_MAX_BYTES) throw new ZipFailureError(TOO_LARGE);
+        return openArchive(await file.arrayBuffer());
+      }
+      const url = (await refresh()) ?? uri;
+      const response = await fetch(url, { signal: abort.signal });
+      if (!response.ok || !response.body) throw new ZipFailureError(NETWORK);
+      const bytes = await readArchiveBody(response.body, (receivedBytes) =>
         setState({
           status: "loading",
           receivedBytes,
@@ -143,23 +207,28 @@ function useZipArchive(input: {
           }),
         }),
       );
-      return loadZipArchive(bytes, abort.signal);
+      abort.signal.throwIfAborted();
+      return openArchive(bytes);
     })()
       .then((archive) => {
         if (!abort.signal.aborted) setState({ status: "ready", archive });
       })
       .catch((cause: unknown) => {
-        if (!abort.signal.aborted) setState({ status: "failed", reason: failureReason(cause) });
+        if (!abort.signal.aborted)
+          setState({
+            status: "failed",
+            failure: cause instanceof ZipFailureError ? cause.failure : NETWORK,
+          });
       });
     return () => abort.abort();
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Retry must reload the archive.
-  }, [uri, isLocal, sizeBytes, refresh, revision]);
+  }, [uri, isLocal, sizeBytes, revision]);
   return {
     state,
     retry: () => setRevision((value) => value + 1),
     cancel: () => {
       controller.current?.abort();
-      setState({ status: "failed", reason: "cancelled" });
+      setState({ status: "failed", failure: CANCELLED });
     },
   };
 }
@@ -168,7 +237,7 @@ function ZipTreeRowView(props: {
   readonly row: ZipTreeRow;
   readonly collapsed: boolean;
   readonly onToggle: (path: string) => void;
-  readonly onOpen: (entry: ZipPreviewEntry) => void;
+  readonly onOpen: (entry: ZipEntry) => void;
 }) {
   const { node, depth } = props.row;
   const entry = node.entry;
@@ -312,7 +381,7 @@ function ZipArchiveProgress(props: {
 }
 
 function ZipArchiveFailure(props: {
-  readonly failure: { title: string; detail: string; retry: boolean };
+  readonly failure: ZipFailure;
   readonly onRetry: () => void;
   readonly onSave: () => void;
 }) {
@@ -342,9 +411,8 @@ function ZipArchiveFailure(props: {
 function ZipArchiveList(props: {
   readonly archive: ZipArchive;
   readonly headerInset: number;
-  readonly onOpen: (entry: ZipPreviewEntry) => void;
+  readonly onOpen: (entry: ZipEntry) => void;
 }) {
-  const insets = useSafeAreaInsets();
   const [query, setQuery] = useState("");
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const { archive } = props;
@@ -425,16 +493,6 @@ function ZipArchiveList(props: {
           )
         }
       />
-      {archive.hiddenCount > 0 ? (
-        <View
-          className="items-center border-t border-border pt-3"
-          style={{ paddingBottom: Math.max(insets.bottom, 8) }}
-        >
-          <Text className="text-2xs text-foreground-muted">
-            {`${archive.hiddenCount} macOS ${archive.hiddenCount === 1 ? "file" : "files"} hidden`}
-          </Text>
-        </View>
-      ) : null}
     </View>
   );
 }
@@ -455,11 +513,11 @@ export function ZipArchiveView(props: {
 }) {
   const { state, retry, cancel } = useZipArchive(props);
   const [selection, setSelection] = useState<{
-    readonly entries: ZipArchive["entries"];
-    readonly entry: ZipPreviewEntry;
+    readonly archive: ZipArchive;
+    readonly entry: ZipEntry;
   } | null>(null);
   const archive = state.status === "ready" ? state.archive : null;
-  const selected = selection && selection.entries === archive?.entries ? selection.entry : null;
+  const selected = selection && selection.archive === archive ? selection.entry : null;
   const entryOpen = selected !== null;
   usePreventRemove(entryOpen, () => setSelection(null));
   const insets = useSafeAreaInsets();
@@ -486,7 +544,7 @@ export function ZipArchiveView(props: {
           headerInset={headerInset}
           onOpen={(entry) => {
             Keyboard.dismiss();
-            setSelection({ entries: state.archive.entries, entry });
+            setSelection({ archive: state.archive, entry });
           }}
         />
       ) : (
@@ -503,19 +561,15 @@ export function ZipArchiveView(props: {
               />
             )
           ) : (
-            <ZipArchiveFailure
-              failure={archiveFailure(state.reason)}
-              onRetry={retry}
-              onSave={props.onSave}
-            />
+            <ZipArchiveFailure failure={state.failure} onRetry={retry} onSave={props.onSave} />
           )}
         </View>
       )}
-      {selected && archive ? (
+      {selected ? (
         <View className="absolute inset-0">
           <ZipEntryView
+            key={selected.path}
             archiveName={props.name}
-            archive={archive}
             entry={selected}
             environmentId={props.environmentId}
             draftKey={props.draftKey}
@@ -529,28 +583,30 @@ export function ZipArchiveView(props: {
 }
 
 async function addZipEntryToDraft(input: {
-  readonly archive: ZipArchive;
-  readonly entry: ZipPreviewEntry;
+  readonly entry: ZipEntry;
   readonly draftKey: string;
   readonly maxBytes: number;
   readonly signal: AbortSignal;
 }) {
   const { entry, signal } = input;
-  const mimeType = entry.mimeType ?? "application/octet-stream";
   const file = await writeGeneratedAttachmentFile({
-    bytes: await input.archive.readFileForSave(entry, signal),
-    attachment: { name: entry.name, mimeType },
+    bytes: entry.bytes,
+    attachment: { name: entry.name, mimeType: entry.mimeType },
   });
   try {
     signal.throwIfAborted();
     const attachment = await createComposerFileAttachment({
       uri: file.uri,
       name: entry.name,
-      mimeType,
+      mimeType: entry.mimeType,
       sizeBytes: entry.sizeBytes,
       maxBytes: input.maxBytes,
     });
-    signal.throwIfAborted();
+    if (signal.aborted) {
+      await removePersistedComposerAttachmentFile(attachment.fileUri);
+      signal.throwIfAborted();
+    }
+    // Rejected attachments are cleaned up by the draft store.
     if (appendComposerDraftAttachments(input.draftKey, [attachment], { appendReference: true }))
       throw new Error("This message already has as many attachments as it can hold.");
   } finally {
@@ -562,48 +618,51 @@ type EntryContent =
   | { readonly status: "loading" }
   | { readonly status: "text"; readonly text: string; readonly truncated: boolean }
   | { readonly status: "file"; readonly uri: string }
-  | { readonly status: "failed"; readonly reason: ZipFailure; readonly message: string };
+  | { readonly status: "failed"; readonly title: string; readonly message: string };
 
 function ZipEntryView(props: {
   readonly archiveName: string;
-  readonly archive: ZipArchive;
-  readonly entry: ZipPreviewEntry;
+  readonly entry: ZipEntry;
   readonly environmentId: EnvironmentId | null;
   readonly draftKey: string | null;
   readonly maxAttachmentBytes: number | undefined;
   readonly onBack: () => void;
 }) {
-  const { archive, entry, draftKey, maxAttachmentBytes } = props;
-  const mimeType = entry.mimeType ?? "application/octet-stream";
+  const { entry, draftKey, maxAttachmentBytes } = props;
+  const { mimeType } = entry;
   const previewKind = filePreviewKind({ name: entry.name, mimeType });
   const isText = previewKind === "text" || previewKind === "markdown" || previewKind === "html";
   // Archive HTML is shown as source: a rendered page could load its sibling files.
   const kind = previewKind === "html" ? "text" : previewKind;
-  const [content, setContent] = useState<EntryContent>({ status: "loading" });
-  const [prefixRequested, setPrefixRequested] = useState(false);
+  const viewerKind = isText || kind === "audio" ? null : (nativeViewerKind(kind) ?? "document");
+  const tooBig = entry.sizeBytes > ARCHIVE_ENTRY_MAX_BYTES;
+  const [content, setContent] = useState<EntryContent>(
+    tooBig
+      ? {
+          status: "failed",
+          title: "Too big to preview",
+          message: `Previews stop at ${formatAttachmentSize(ARCHIVE_ENTRY_MAX_BYTES)}. Save the file to open it in another app.`,
+        }
+      : { status: "loading" },
+  );
   const [rendered, setRendered] = useState(true);
   const [revision, setRevision] = useState(0);
+  const [viewerOpen, setViewerOpen] = useState(true);
   const [viewerError, setViewerError] = useState<string | null>(null);
   const [busy, setBusy] = useState<"save" | "attach" | null>(null);
   const action = useRef<AbortController | null>(null);
   const pendingViewerError = useRef<string | null>(null);
   // oxlint-disable-next-line t3code/react-effect-budget -- Cancel a pending save or attach when the entry closes.
   useEffect(() => () => action.current?.abort(), []);
-  // oxlint-disable-next-line t3code/react-effect-budget -- Read the selected entry and release its cached file on cleanup.
+  // oxlint-disable-next-line t3code/react-effect-budget -- Write the selected entry to a cached file and release it on cleanup.
   useEffect(() => {
+    if (tooBig) return;
     const controller = new AbortController();
     let release: (() => void) | undefined;
-    // oxlint-disable-next-line react/set-state-in-effect -- A new entry clears the previous preview.
-    setContent({ status: "loading" });
     void (async (): Promise<EntryContent> => {
-      if (isText && prefixRequested) {
-        const prefix = await archive.readTextPrefix(entry, controller.signal);
-        return { status: "text", ...decodeFilePreviewText(prefix.bytes, prefix.truncated) };
-      }
-      const bytes = await archive.readFile(entry, controller.signal);
-      if (isText) return { status: "text", ...decodeFilePreviewText(bytes) };
+      if (isText) return { status: "text", ...decodeFilePreviewText(entry.bytes) };
       const file = await writeGeneratedAttachmentFile({
-        bytes,
+        bytes: entry.bytes,
         attachment: { name: entry.name, mimeType },
       });
       if (controller.signal.aborted) {
@@ -620,7 +679,7 @@ function ZipEntryView(props: {
         if (!controller.signal.aborted)
           setContent({
             status: "failed",
-            reason: failureReason(cause),
+            title: "Couldn't read this file",
             message: errorMessage(cause, "Could not read this file."),
           });
       });
@@ -628,8 +687,7 @@ function ZipEntryView(props: {
       controller.abort();
       release?.();
     };
-    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Retry must reread the entry.
-  }, [archive, entry, isText, mimeType, prefixRequested, revision]);
+  }, [entry, isText, mimeType, tooBig, revision]);
 
   const run = (kind: "save" | "attach", task: (signal: AbortSignal) => Promise<unknown>) => {
     if (busy) return;
@@ -654,9 +712,9 @@ function ZipEntryView(props: {
     );
   };
   const save = () =>
-    run("save", async (signal) =>
+    run("save", (signal) =>
       shareGeneratedAttachment({
-        bytes: await archive.readFileForSave(entry, signal),
+        bytes: entry.bytes,
         attachment: { name: entry.name, mimeType },
         signal,
       }),
@@ -665,8 +723,12 @@ function ZipEntryView(props: {
   const addToChat = () => {
     if (draftKey === null || maxAttachmentBytes === undefined) return;
     run("attach", (signal) =>
-      addZipEntryToDraft({ archive, entry, draftKey, maxBytes: maxAttachmentBytes, signal }),
+      addZipEntryToDraft({ entry, draftKey, maxBytes: maxAttachmentBytes, signal }),
     );
+  };
+  const openViewer = () => {
+    setViewerError(null);
+    setViewerOpen(true);
   };
 
   const text = content.status === "text" ? content : null;
@@ -679,8 +741,6 @@ function ZipEntryView(props: {
     hasEnvironment: props.environmentId !== null,
     rendered,
   });
-  const failure = content.status === "failed" ? content : null;
-  const tooBig = failure?.reason === "file-limit" && isText && !prefixRequested;
   const folders = entry.path.split("/").slice(0, -1);
   const subtitle = `${[props.archiveName, ...folders].join(" / ")} · ${formatAttachmentSize(entry.sizeBytes)}`;
   const isAndroid = Platform.OS === "android";
@@ -749,45 +809,27 @@ function ZipEntryView(props: {
           </Toolbar.Menu>
         </Toolbar>
       )}
-      {failure ? (
+      {content.status === "failed" ? (
         <ScrollView contentContainerClassName="flex-grow items-center justify-center px-6">
           <EmptyState
             variant="plain"
-            title={
-              tooBig
-                ? "Too big to preview in full"
-                : failure.reason === "image-limit"
-                  ? "Too large to preview safely"
-                  : failure.reason === "file-limit"
-                    ? "Too big to preview"
-                    : "Couldn't read this file"
-            }
-            detail={
-              tooBig
-                ? "Previews stop at 10 MB. You can read the start of the file or save the whole file."
-                : failure.reason === "image-limit"
-                  ? "It could freeze the app, so it isn't decoded. Save it to view it in another app."
-                  : failure.message
-            }
+            title={content.title}
+            detail={content.message}
             action={
-              <View className="flex-row gap-3">
-                {tooBig ? (
-                  <Button
-                    tone="primary"
-                    label="Show first 1 MB"
-                    onPress={() => setPrefixRequested(true)}
-                  />
-                ) : null}
-                <Button
-                  tone={tooBig ? "secondary" : "primary"}
-                  label="Save file"
-                  loading={busy === "save"}
-                  onPress={save}
-                />
-              </View>
+              <Button tone="primary" label="Save file" loading={busy === "save"} onPress={save} />
             }
           />
         </ScrollView>
+      ) : viewerKind && uri && !viewerOpen ? (
+        // Closing the viewer stays here so Save and Add to chat remain reachable.
+        <View className="flex-1 items-center justify-center bg-sheet px-6">
+          <EmptyState
+            title={viewerError ? "No preview for this file" : entry.name}
+            detail={viewerError ?? "Open it in the file viewer, save it, or add it to chat."}
+            actionLabel="Open in file viewer"
+            onAction={openViewer}
+          />
+        </View>
       ) : (
         <AttachmentDocumentBody
           document={{
@@ -804,27 +846,21 @@ function ZipEntryView(props: {
           name={entry.name}
           environmentId={props.environmentId}
           htmlRender={false}
-          nativeViewer={uri ? (viewerError ? "unavailable" : "open") : isText ? null : "pending"}
-          nativeError={viewerError}
-          onOpenNative={() => setViewerError(null)}
+          nativeViewer={viewerKind ? (uri ? "open" : "pending") : null}
+          nativeError={null}
+          onOpenNative={openViewer}
         />
       )}
-      {uri && !viewerError ? (
+      {viewerKind && uri && viewerOpen ? (
         <FilePreviewModal
-          source={{
-            kind: kind === "image" ? "image" : kind === "pdf" ? "pdf" : "document",
-            name: entry.name,
-            mimeType,
-            uri,
-          }}
+          source={{ kind: viewerKind, name: entry.name, mimeType, uri }}
           onOpenError={(error) => {
             pendingViewerError.current = nativeViewerErrorMessage(error);
           }}
           onRequestClose={() => {
-            const message = pendingViewerError.current;
+            setViewerError(pendingViewerError.current);
             pendingViewerError.current = null;
-            if (message) setViewerError(message);
-            else props.onBack();
+            setViewerOpen(false);
           }}
         />
       ) : null}

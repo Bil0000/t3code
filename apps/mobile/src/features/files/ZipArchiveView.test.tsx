@@ -84,15 +84,13 @@ vi.mock("expo-file-system", () => ({
     get exists() {
       return false;
     }
-    readableStream() {
+    get size() {
+      return files.get(this.uri)?.byteLength ?? null;
+    }
+    async arrayBuffer() {
       const bytes = files.get(this.uri);
       if (!bytes) throw new Error(`Missing ZIP fixture: ${this.uri}`);
-      return new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(bytes);
-          controller.close();
-        },
-      });
+      return Uint8Array.from(bytes).buffer;
     }
   },
 }));
@@ -291,8 +289,27 @@ it("explains why an encrypted ZIP cannot be browsed", async () => {
   const directory = view.getUint32(bytes.length - 6, true);
   view.setUint16(directory + 8, view.getUint16(directory + 8, true) | 1, true);
   await screen.render();
-  await screen.settle(() =>
-    expect(screen.container.textContent).toContain("This ZIP is password-protected"),
-  );
+  await screen.settle(() => expect(screen.container.textContent).toContain("Encrypted zip"));
   expect(screen.container.querySelector('[aria-label="first.txt"]')).toBeNull();
+});
+
+it("keeps the archive and selected entry when the parent re-renders with a new refresh", async () => {
+  const screen = setup();
+  await screen.render();
+  await screen.settle(() =>
+    expect(screen.container.querySelector('[aria-label="first.txt"]')).not.toBeNull(),
+  );
+  await act(async () =>
+    screen.container.querySelector<HTMLButtonElement>('[aria-label="first.txt"]')!.click(),
+  );
+  await screen.settle(() =>
+    expect(screen.container.querySelector("pre")?.textContent).toBe("First archive contents"),
+  );
+  files.delete("file:///first.zip");
+
+  await screen.render({ ...screen.props, refresh: async () => null });
+  await screen.settle(() =>
+    expect(screen.container.querySelector("pre")?.textContent).toBe("First archive contents"),
+  );
+  expect(navigation.remove).not.toBeNull();
 });
