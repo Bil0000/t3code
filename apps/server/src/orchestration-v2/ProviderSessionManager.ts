@@ -1,3 +1,4 @@
+import * as TemporaryThreadLifecycleState from "./TemporaryThreadLifecycleState.ts";
 import { AgentScope } from "@t3tools/shared/AgentScope";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
@@ -314,6 +315,7 @@ export const layerWithOptions = (
     Effect.gen(function* () {
       const registry = yield* ProviderAdapterRegistry.ProviderAdapterRegistryV2;
       const fileSystem = yield* FileSystem.FileSystem;
+      const lifecycle = yield* TemporaryThreadLifecycleState.TemporaryThreadLifecycleState;
       const mcpSessionRegistry = yield* McpSessionRegistry.McpSessionRegistry;
       const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
       /** Unreadable settings must preserve explicit browser-access opt-outs. */
@@ -2386,6 +2388,21 @@ export const layerWithOptions = (
                 ),
               { discard: true },
             );
+            const pending = lifecycle.pendingNativeCleanup.get(input.threadId);
+            for (const [path, providerSessionId] of pending ?? []) {
+              yield* fileSystem.remove(path, { recursive: true, force: true }).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderSessionReleaseError({
+                      providerSessionId,
+                      reason: "manual_shutdown",
+                      cause,
+                    }),
+                ),
+              );
+              pending?.delete(path);
+            }
+            if (pending?.size === 0) lifecycle.pendingNativeCleanup.delete(input.threadId);
           },
         ),
         detach: Effect.fn("ProviderSessionManager.detach")(
@@ -2559,6 +2576,6 @@ export const layerWithOptions = (
         ),
       } satisfies ProviderSessionManagerV2Shape);
     }),
-  );
+  ).pipe(Layer.provide(TemporaryThreadLifecycleState.layer));
 
 export const layer = layerWithOptions();

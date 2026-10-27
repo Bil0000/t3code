@@ -4,6 +4,7 @@ import { assert, it } from "@effect/vitest";
 import { AgentScope } from "@t3tools/shared/AgentScope";
 import {
   CommandId,
+  CodexSettings,
   EnvironmentId,
   MessageId,
   type ModelSelection,
@@ -30,6 +31,12 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import type * as Scope from "effect/Scope";
+import * as Sink from "effect/Sink";
+import * as Schema from "effect/Schema";
+import * as PlatformError from "effect/PlatformError";
+import * as ChildProcess from "effect/process/ChildProcess";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as Stream from "effect/Stream";
 import { TestClock } from "effect/testing";
 import { HttpServer } from "effect/http";
@@ -43,6 +50,8 @@ import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import * as CodexAdapterV2 from "./Adapters/CodexAdapterV2.ts";
+import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import * as EventSink from "./EventSink.ts";
 import * as EventStore from "./EventStore.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
@@ -197,6 +206,7 @@ const emptyState: TestProviderRuntimeState = {
   eventQueues: new Map(),
 };
 
+const codexSettings = Schema.decodeSync(CodexSettings)({});
 const modelSelection = {
   instanceId: ProviderInstanceId.make("codex"),
   model: "gpt-5.4",
@@ -336,7 +346,7 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
     readonly beforeOpen?: (input: {
       readonly providerSessionId: ProviderSessionId;
       readonly initialProviderItemIdentityVersion?: 2;
-    }) => Effect.Effect<void>;
+    }) => Effect.Effect<void, never, Scope.Scope>;
     readonly hasPendingBackgroundWork?: Effect.Effect<boolean>;
     readonly hasPendingBackgroundWorkForThread?: Effect.Effect<boolean>;
     readonly backgroundTasksEndWithProcess?: boolean;
@@ -476,7 +486,7 @@ function layerTest(input: {
   readonly beforeOpen?: (input: {
     readonly providerSessionId: ProviderSessionId;
     readonly initialProviderItemIdentityVersion?: 2;
-  }) => Effect.Effect<void>;
+  }) => Effect.Effect<void, never, Scope.Scope>;
   readonly failReleaseEventWrites?: boolean;
   readonly flakyReleaseWrites?: FlakyReleaseWrites;
   readonly pauseAttachWrite?: Parameters<typeof layerPausingAttachEventSink>[0];
@@ -1076,11 +1086,83 @@ it.effect.each([
     }),
 );
 
-it.effect(
-  "production temporary cleanup closes a real pinned manager session after its binding is removed",
-  () =>
+it.effect.each([false, true])(
+  "production temporary cleanup closes a pinned session and retries private folder deletion: %s",
+  (failRemoval) =>
     Effect.gen(function* () {
       const state = yield* Ref.make(emptyState);
+      const fs = yield* FileSystem.FileSystem;
+      const lifecycle = yield* TemporaryThreadService.TemporaryThreadLifecycleState;
+      let privateDirectory: string | undefined;
+      let removals = 0;
+      const remove: typeof fs.remove = (path, options) =>
+        Effect.suspend(() => {
+          if (path === privateDirectory && ++removals === 1 && failRemoval)
+            return Effect.fail(
+              new PlatformError.PlatformError(
+                new PlatformError.SystemError({
+                  _tag: "PermissionDenied",
+                  module: "FileSystem",
+                  method: "remove",
+                }),
+              ),
+            );
+          return fs.remove(path, options);
+        });
+      const fileSystem = FileSystem.FileSystem.of({
+        ...fs,
+        remove,
+        makeTempDirectoryScoped: (options) =>
+          Effect.acquireRelease(fs.makeTempDirectory(options), (path) =>
+            remove(path, { recursive: true }).pipe(Effect.orDie),
+          ),
+      });
+      yield* Effect.addFinalizer(() =>
+        privateDirectory === undefined
+          ? Effect.void
+          : fs.remove(privateDirectory, { recursive: true, force: true }).pipe(Effect.orDie),
+      );
+      const factoryLayer = CodexAdapterV2.layerAppServerClientFactory.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.succeed(FileSystem.FileSystem, fileSystem),
+            Layer.succeed(
+              ProviderEventLoggers.ProviderEventLoggers,
+              ProviderEventLoggers.NoOpProviderEventLoggers,
+            ),
+            Layer.succeed(
+              ChildProcessSpawner.ChildProcessSpawner,
+              ChildProcessSpawner.make((command) =>
+                Effect.gen(function* () {
+                  assert.isTrue(ChildProcess.isStandardCommand(command));
+                  if (!ChildProcess.isStandardCommand(command))
+                    return yield* Effect.die("unexpected pipeline");
+                  const directory = command.args.find((arg) => arg.startsWith("sqlite_home="));
+                  assert.isDefined(directory);
+                  privateDirectory = JSON.parse(directory!.slice("sqlite_home=".length));
+                  yield* fs.writeFileString(
+                    `${privateDirectory}/logs_2.sqlite`,
+                    "private-sentinel",
+                  );
+                  return ChildProcessSpawner.makeHandle({
+                    pid: ChildProcessSpawner.ProcessId(1),
+                    exitCode: Effect.never,
+                    isRunning: Effect.succeed(true),
+                    kill: () => Effect.void,
+                    unref: Effect.succeed(Effect.void),
+                    stdin: Sink.drain,
+                    stdout: Stream.never,
+                    stderr: Stream.empty,
+                    all: Stream.empty,
+                    getInputFd: () => Sink.drain,
+                    getOutputFd: () => Stream.empty,
+                  });
+                }),
+              ),
+            ),
+          ),
+        ),
+      );
       yield* Effect.gen(function* () {
         const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
         const projections = yield* ProjectionStore.ProjectionStoreV2;
@@ -1092,9 +1174,8 @@ it.effect(
           providerInstanceId: modelSelection.instanceId,
           threadId,
         });
-        yield* eventSink.write({
-          events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
-        });
+        const created = yield* makeThreadCreatedEvent({ idAllocator, threadId, now });
+        yield* eventSink.write({ events: [created] });
         yield* manager.open({
           threadId,
           providerSessionId,
@@ -1121,7 +1202,6 @@ it.effect(
         const cleanup = yield* TemporaryThreadService.TemporaryThreadCleanup.pipe(
           Effect.provide(
             TemporaryThreadService.layerCleanup.pipe(
-              Layer.provide(TemporaryThreadService.layerState),
               Layer.provide(
                 Layer.mergeAll(
                   Layer.mock(Orchestrator.OrchestratorV2)({
@@ -1147,17 +1227,86 @@ it.effect(
             ),
           ),
         );
-        yield* cleanup.stopAndTeardown([threadId]);
+        let discarded = false;
+        const service = yield* TemporaryThreadService.TemporaryThreadService.pipe(
+          Effect.provide(
+            TemporaryThreadService.layer.pipe(
+              Layer.provide(
+                Layer.mergeAll(
+                  Layer.succeed(TemporaryThreadService.TemporaryThreadCleanup, cleanup),
+                  Layer.mock(TemporaryThreadStorage.TemporaryThreadStorage)({
+                    changes: Stream.empty,
+                    register: () => Effect.void,
+                    isTemporary: () => Effect.sync(() => !discarded),
+                    isDiscarded: () => Effect.sync(() => discarded),
+                    family: () => Effect.succeed([threadId]),
+                    markDiscarding: () => Effect.void,
+                    discard: () =>
+                      Effect.sync(() => {
+                        discarded = true;
+                      }),
+                  }),
+                ),
+              ),
+            ),
+          ),
+        );
+        if (failRemoval) {
+          const result = yield* service.discard(threadId).pipe(Effect.exit);
+          assert.isTrue(Exit.isFailure(result));
+          assert.isFalse(discarded);
+          assert.isTrue(yield* fs.exists(`${privateDirectory}/logs_2.sqlite`));
+          assert.isFalse(yield* manager.isLive(providerSessionId));
+          yield* eventSink.write({
+            events: [
+              {
+                ...created,
+                id: yield* idAllocator.allocate.event({ threadId }),
+                type: "thread.deleted",
+                payload: { ...created.payload, deletedAt: now },
+              },
+            ],
+          });
+          assert.isNull(yield* projections.getThreadShell(threadId));
+        }
+        yield* service.discard(threadId);
+        assert.isTrue(discarded);
+        assert.isFalse(yield* fs.exists(privateDirectory!));
         assert.isFalse(yield* manager.isLive(providerSessionId));
         assert.equal((yield* Ref.get(state)).closeCount, 1);
-        yield* cleanup.stopAndTeardown([threadId]);
-        assert.equal((yield* Ref.get(state)).closeCount, 1);
+        assert.equal((yield* Ref.get(state)).openCount, 1);
+        assert.equal(removals, 1);
       }).pipe(
         Effect.provide(
-          layerTest({ state, idleTimeoutMs: 1000, capabilities: ExclusiveCapabilities }),
+          Layer.unwrap(
+            Effect.map(CodexAdapterV2.CodexAppServerClientFactory, (factory) =>
+              layerTest({
+                state,
+                idleTimeoutMs: 1000,
+                capabilities: ExclusiveCapabilities,
+                beforeOpen: ({ providerSessionId }) =>
+                  factory
+                    .open({
+                      instanceId: modelSelection.instanceId,
+                      threadId: ThreadId.make("temporary-discard-detached-owner"),
+                      providerSessionId,
+                      runtimePolicy: { ...runtimePolicy, temporary: true },
+                      settings: codexSettings,
+                      environment: {},
+                    })
+                    .pipe(Effect.asVoid, Effect.orDie),
+              }),
+            ),
+          ).pipe(Layer.provide(factoryLayer)),
         ),
+        Effect.provideService(TemporaryThreadService.TemporaryThreadLifecycleState, lifecycle),
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
       );
-    }),
+    }).pipe(
+      Effect.provide(
+        TemporaryThreadService.layerState.pipe(Layer.provideMerge(NodeServices.layer)),
+      ),
+    ),
 );
 
 it.effect("ProviderSessionManagerV2 pins memory-only sessions after saved reopen", () =>

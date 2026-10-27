@@ -771,6 +771,36 @@ const temporaryCreateCommand = (threadId: ThreadId) =>
 it.layer(Layer.fresh(Layer.merge(layerTest, TemporaryThreadService.layerState)))(
   "temporary create receipts",
   (it) => {
+    it.effect("temporary cleanup recovers from a rejected stop receipt in routed storage", () =>
+      Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const storage = yield* TemporaryThreadStorage.TemporaryThreadStorage;
+        const stores = yield* TemporaryThreadStorage.TemporaryThreadStores;
+        const threadId = ThreadId.make("temporary-rejected-cleanup-stop");
+        const commandId = CommandId.make(`temporary-discard:stop:${threadId}`);
+        yield* storage.register({ threadId });
+        const stop = { type: "thread.stop", threadId, commandId } as const;
+        assert.equal(
+          (yield* orchestrator.dispatch(stop).pipe(Effect.flip))._tag,
+          "OrchestratorProjectionError",
+        );
+        assert.equal(
+          (yield* orchestrator.dispatch(stop).pipe(Effect.flip))._tag,
+          "OrchestratorCommandPreviouslyRejectedError",
+        );
+        yield* orchestrator.dispatch(temporaryCreateCommand(threadId));
+        yield* Effect.gen(function* () {
+          const cleanup = yield* TemporaryThreadService.TemporaryThreadCleanup;
+          yield* cleanup.stopAndTeardown([threadId]);
+        }).pipe(Effect.provide(TemporaryThreadService.layerCleanup));
+        assert.isNull(yield* stores.volatile.projectionStore.getThreadShell(threadId));
+        assert.isNull(yield* stores.durable.projectionStore.getThreadShell(threadId));
+        assert.isTrue(
+          Option.isNone(yield* stores.durable.commandReceipts.getByCommandId(commandId)),
+        );
+      }),
+    );
+
     it.effect("replays a rejected receipt without registering a temporary root", () =>
       Effect.gen(function* () {
         const orchestrator = yield* Orchestrator.OrchestratorV2;

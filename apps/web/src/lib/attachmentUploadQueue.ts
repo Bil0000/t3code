@@ -58,6 +58,8 @@ interface UploadJob {
   stopWatchingConnection: () => void;
 }
 
+type DraftFileOwner = Pick<UploadJob, "image" | "environmentId" | "draftTarget">;
+
 const jobsByImageId = new Map<string, UploadJob>();
 const queue: UploadJob[] = [];
 const activeUploadsByEnvironment = new Map<EnvironmentId, number>();
@@ -83,9 +85,7 @@ export function readAttachmentUpload(imageId: string): AttachmentUploadState | u
   return useAttachmentUploadStore.getState().uploadsByImageId[imageId];
 }
 
-function resolveCurrentDraftTarget(
-  job: Pick<UploadJob, "draftTarget" | "image" | "environmentId">,
-): ComposerThreadTarget | undefined {
+function resolveCurrentDraftTarget(job: DraftFileOwner): ComposerThreadTarget | undefined {
   if (job.draftTarget === undefined) {
     return undefined;
   }
@@ -113,9 +113,7 @@ function resolveCurrentDraftTarget(
   return undefined;
 }
 
-function rejectTemporaryUpload(
-  job: Pick<UploadJob, "draftTarget" | "image" | "environmentId">,
-): boolean {
+function rejectTemporaryUpload(job: DraftFileOwner): boolean {
   const draftTarget = resolveCurrentDraftTarget(job) ?? job.draftTarget;
   if (
     (job.draftTarget === undefined || !isTemporaryComposerTarget(job.draftTarget)) &&
@@ -133,7 +131,7 @@ function rejectTemporaryUpload(
 }
 
 /** Persist background completions even when no composer is mounted. */
-function stampDraftFileUpload(job: UploadJob, attachmentId: string): void {
+function stampDraftFileUpload(job: DraftFileOwner, attachmentId: string): void {
   if (job.image.type !== "file") return;
   const draftTarget = resolveCurrentDraftTarget(job);
   if (draftTarget === undefined) {
@@ -453,6 +451,9 @@ export function startAttachmentUpload(input: {
 
   const existing = readAttachmentUpload(input.image.id);
   if (existing?.status === "ready" && existing.environmentId === input.environmentId) {
+    // A file restored into a draft after its upload finished (stash, failed send) missed the
+    // completion stamp; stamping here keeps it from re-uploading after a reload.
+    stampDraftFileUpload(input, existing.attachmentId);
     return;
   }
   if (existing?.status === "failed" && existing.environmentId === input.environmentId) {

@@ -15,8 +15,9 @@ to keep a large paste editable in the composer instead.
 ## Temporary chats
 
 Start a new thread in a project or **No project** and turn on **Temporary** before
-typing. Temporary chats keep the conversation and drafts in memory instead of
-saving them to your T3 Code history.
+sending. Temporary chats currently work with Codex only. Other providers,
+including ACP agents, cannot start temporary chats. The conversation and drafts
+stay in memory instead of being saved to your T3 Code history.
 
 Leaving the last open view of the thread stops its agent and child work, then
 discards the chat. A view on another device keeps it open. Putting the app in the
@@ -25,8 +26,16 @@ background also counts as keeping it open. A refresh or connection loss allows
 
 Choose **Save thread** on web or desktop, or **Keep thread** on mobile, to save
 the conversation and continue in the same thread. Wait for the save to succeed before leaving. If saving fails, the thread
-stays temporary. Discarding a temporary chat leaves file edits in place. Temporary
-chat does not erase records held by your provider or other services.
+stays temporary. Discarding a temporary chat leaves file edits in place.
+
+Codex's local diagnostic databases use a separate temporary folder, which T3
+removes when the native session closes. A crash can leave that folder behind,
+and managed provider settings can override its location.
+
+Temporary chat does not erase records held by your provider, MCP servers, or
+tools the agent runs. This includes other local logs and generated files. It is
+not a promise that no trace of the work can remain on your device or in another
+service.
 
 If your provider does not support temporary chats, choose a supported provider or
 turn off Temporary before sending. Keep the thread before attaching files,

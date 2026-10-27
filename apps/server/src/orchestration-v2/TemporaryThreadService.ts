@@ -1,5 +1,4 @@
 import { CommandId, ThreadId } from "@t3tools/contracts";
-import * as KeyedLock from "@t3tools/shared/KeyedLock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -8,6 +7,11 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
+import {
+  TemporaryThreadLifecycleState,
+  layer as layerState,
+} from "./TemporaryThreadLifecycleState.ts";
+
 import * as EffectWorker from "./EffectWorker.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
@@ -15,6 +19,8 @@ import * as Orchestrator from "./Orchestrator.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ResourceCleanupService from "./ResourceCleanupService.ts";
 import * as TemporaryThreadStorage from "./TemporaryThreadStorage.ts";
+
+export { TemporaryThreadLifecycleState, layerState };
 
 interface TemporaryThreadClientIdentity {
   readonly sessionId: string;
@@ -40,26 +46,6 @@ export class TemporaryThreadServiceError extends Schema.TaggedError<TemporaryThr
     return `Temporary thread operation ${this.operation} failed.`;
   }
 }
-
-export class TemporaryThreadLifecycleState extends Context.Service<
-  TemporaryThreadLifecycleState,
-  {
-    readonly discarding: Set<ThreadId>;
-    readonly commands: KeyedLock.KeyedLock<ThreadId>;
-    readonly preparations: Map<ThreadId, Set<Fiber.Fiber<void>>>;
-  }
->()("t3/orchestration-v2/TemporaryThreadService/TemporaryThreadLifecycleState") {}
-
-export const layerState = Layer.effect(
-  TemporaryThreadLifecycleState,
-  Effect.gen(function* () {
-    return {
-      discarding: new Set<ThreadId>(),
-      commands: yield* KeyedLock.make<ThreadId>(),
-      preparations: new Map<ThreadId, Set<Fiber.Fiber<void>>>(),
-    };
-  }),
-);
 
 export class TemporaryThreadCleanup extends Context.Service<
   TemporaryThreadCleanup,
@@ -105,7 +91,7 @@ const make = Effect.gen(function* () {
   const gate = yield* Semaphore.make(1);
   const views = new Map<string, View>();
   const unowned = new Map<ThreadId, Fiber.Fiber<void, TemporaryThreadServiceError>>();
-  const pendingDiscards = new Set<ThreadId>();
+  const pendingDiscards = new Map<ThreadId, string>();
   const sameIdentity = (
     left: TemporaryThreadClientIdentity,
     right: TemporaryThreadClientIdentity,
@@ -129,7 +115,7 @@ const make = Effect.gen(function* () {
       pendingDiscards.delete(threadId);
       return;
     }
-    pendingDiscards.add(threadId);
+    pendingDiscards.set(threadId, pendingDiscards.get(threadId) ?? threadId);
     const before = yield* storage.family(threadId);
     const family = yield* state.commands.withLock(
       before[0] ?? threadId,
@@ -159,14 +145,29 @@ const make = Effect.gen(function* () {
   }, Effect.uninterruptible);
 
   const discardUnviewed = Effect.fn("TemporaryThreadService.discardUnviewed")(function* (
+    owner: string,
     ids: ReadonlyArray<ThreadId>,
   ) {
     for (const id of ids) {
       if (!(yield* storage.isTemporary(id))) continue;
       const family = yield* storage.family(id);
-      if (!hasView(family)) pendingDiscards.add(id);
+      if (!hasView(family)) pendingDiscards.set(id, owner);
     }
-    for (const id of pendingDiscards) yield* discardUnlocked(id);
+    let failure: TemporaryThreadServiceError | undefined;
+    for (const [id, pendingOwner] of pendingDiscards) {
+      yield* discardUnlocked(id).pipe(
+        Effect.catch((cause) =>
+          pendingOwner === owner
+            ? Effect.sync(() => {
+                failure ??= cause;
+              })
+            : Effect.logError("Temporary thread discard cleanup failed", {
+                operation: cause.operation,
+              }),
+        ),
+      );
+    }
+    if (failure !== undefined) return yield* failure;
   });
 
   const updateViews = Effect.fn("TemporaryThreadService.updateViews")(
@@ -178,8 +179,8 @@ const make = Effect.gen(function* () {
           cause: "View belongs to another client.",
         });
       }
-      yield* discardUnviewed([]);
-      if (previous !== undefined && input.generation <= previous.generation) return;
+      if (previous !== undefined && input.generation <= previous.generation)
+        return yield* discardUnviewed(input.viewId, []);
       const threadIds: Array<ThreadId> = [];
       for (const id of new Set(input.threadIds)) {
         if ((yield* storage.isDiscarded(id)) || state.discarding.has(id)) continue;
@@ -208,7 +209,10 @@ const make = Effect.gen(function* () {
           if (timer !== undefined) yield* Fiber.interrupt(timer);
         }
       }
-      yield* discardUnviewed(previous?.threadIds.filter((id) => !threadIds.includes(id)) ?? []);
+      yield* discardUnviewed(
+        input.viewId,
+        previous?.threadIds.filter((id) => !threadIds.includes(id)) ?? [],
+      );
     },
     Effect.uninterruptible,
     gate.withPermits(1),
@@ -231,7 +235,7 @@ const make = Effect.gen(function* () {
                 )
                   return;
                 views.set(viewId, { ...current, threadIds: [], expiry: undefined });
-                yield* discardUnviewed(current.threadIds);
+                yield* discardUnviewed(viewId, current.threadIds);
               }),
             ),
           ),
@@ -293,7 +297,7 @@ const make = Effect.gen(function* () {
                 gate.withPermits(1)(
                   Effect.gen(function* () {
                     unowned.delete(id);
-                    yield* discardUnviewed([id]);
+                    yield* discardUnviewed(id, [id]);
                   }),
                 ),
               ),
@@ -335,17 +339,22 @@ export const layerCleanup = Layer.effect(
     const projections = yield* ProjectionStore.ProjectionStoreV2;
     const outbox = yield* EffectOutbox.EffectOutboxV2;
     const state = yield* TemporaryThreadLifecycleState;
+    let attempts = 0;
     return TemporaryThreadCleanup.of({
       stopAndTeardown: Effect.fn("TemporaryThreadCleanup.stopAndTeardown")(
         function* (threadIds: ReadonlyArray<ThreadId>) {
+          const attempt = ++attempts;
           const commands: Array<CommandId> = [];
           for (const threadId of threadIds.toReversed()) {
             yield* Effect.forEach(state.preparations.get(threadId) ?? [], Fiber.interrupt, {
               discard: true,
             });
-            if ((yield* projections.getThreadShell(threadId)) === null) continue;
+            if ((yield* projections.getThreadShell(threadId)) === null) {
+              yield* sessions.releaseTemporaryOwned({ threadId });
+              continue;
+            }
             const projection = yield* orchestrator.getThreadRecords(threadId, ["providerSessions"]);
-            const stopCommandId = CommandId.make(`temporary-discard:stop:${threadId}`);
+            const stopCommandId = CommandId.make(`temporary-discard:stop:${threadId}:${attempt}`);
             commands.push(stopCommandId);
             yield* orchestrator.dispatch({
               type: "thread.stop",
@@ -366,7 +375,9 @@ export const layerCleanup = Layer.effect(
               threadId,
               detail: "Temporary thread closed.",
             });
-            const deleteCommandId = CommandId.make(`temporary-discard:delete:${threadId}`);
+            const deleteCommandId = CommandId.make(
+              `temporary-discard:delete:${threadId}:${attempt}`,
+            );
             commands.push(deleteCommandId);
             yield* orchestrator.dispatch({
               type: "thread.delete",

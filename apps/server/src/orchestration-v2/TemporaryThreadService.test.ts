@@ -28,6 +28,7 @@ import * as TemporaryThreadService from "./TemporaryThreadService.ts";
 
 const threadId = ThreadId.make("temporary");
 const childId = ThreadId.make("temporary-child");
+const otherId = ThreadId.make("other-temporary");
 const first = { sessionId: "session", clientId: "first" };
 const second = { sessionId: "session", clientId: "second" };
 const views = (
@@ -45,6 +46,9 @@ const views = (
 const setup = Effect.gen(function* () {
   const temporary = new Set<ThreadId>();
   const discarded = new Set<ThreadId>();
+  const parents = new Map<ThreadId, ThreadId>();
+  const familyOf = (id: ThreadId) =>
+    [...temporary].filter((member) => (parents.get(member) ?? member) === (parents.get(id) ?? id));
   const registrationErrors = new Map<
     ThreadId,
     | TemporaryThreadStorage.TemporaryThreadStorageError
@@ -65,11 +69,12 @@ const setup = Effect.gen(function* () {
   let delayKeep = false;
   let rejectKeep = false;
   const storage = TemporaryThreadStorage.TemporaryThreadStorage.of({
-    register: ({ threadId: id }) =>
+    register: ({ threadId: id, parentThreadId }) =>
       Effect.gen(function* () {
         const error = registrationErrors.get(id);
         if (error !== undefined) return yield* error;
         temporary.add(id);
+        if (parentThreadId !== undefined) parents.set(id, parentThreadId);
         yield* PubSub.publish(changes, {
           type: "registered",
           threadIds: [id],
@@ -78,7 +83,7 @@ const setup = Effect.gen(function* () {
       }),
     isTemporary: (id) => Effect.sync(() => temporary.has(id)),
     isDiscarded: (id) => Effect.sync(() => discarded.has(id)),
-    family: () => Effect.sync(() => [...temporary]),
+    family: (id) => Effect.sync(() => familyOf(id)),
     markDiscarding: () =>
       Effect.sync(() => {
         operations.push("mark");
@@ -94,13 +99,15 @@ const setup = Effect.gen(function* () {
             cause: new Error("failure"),
           });
         operations.push("keep");
-        temporary.clear();
+        for (const member of familyOf(id)) temporary.delete(member);
       }),
-    discard: () =>
+    discard: (id) =>
       Effect.sync(() => {
         operations.push("discard");
-        for (const id of temporary) discarded.add(id);
-        temporary.clear();
+        for (const member of familyOf(id)) {
+          discarded.add(member);
+          temporary.delete(member);
+        }
       }),
     generation: () => Effect.succeed("memory"),
     subscribeThreadRunUpdates: () => Effect.succeed(Stream.empty),
@@ -112,7 +119,7 @@ const setup = Effect.gen(function* () {
         operations.push(`stop:${ids.join(",")}`);
         yield* Deferred.succeed(cleanupStarted, undefined);
         if (delayCleanup) yield* Deferred.await(cleanupRelease);
-        if (rejectCleanup)
+        if (rejectCleanup && ids.includes(threadId))
           return yield* new TemporaryThreadService.TemporaryThreadServiceError({
             operation: "discard",
             cause: "cleanup failure",
@@ -208,9 +215,10 @@ it.effect.each([
   { failRelease: true, detached: false },
   { failRelease: false, detached: true },
   { failRelease: true, detached: true },
+  { failRelease: false, detached: false, failStop: true },
 ])(
-  "last-view discard uses production cleanup, release failure: $failRelease, detached: $detached",
-  ({ failRelease, detached }) =>
+  "last-view discard uses production cleanup, release failure: $failRelease, detached: $detached, stop failure: $failStop",
+  ({ failRelease, detached, failStop }) =>
     Effect.gen(function* () {
       const fixture = yield* setup;
       const now = yield* DateTime.now;
@@ -281,6 +289,8 @@ it.effect.each([
         );
       }
       let rejectRelease = failRelease;
+      let rejectStop = failStop === true;
+      const rejected = new Set<CommandId>();
       const cleanupLayer = TemporaryThreadService.layerCleanup.pipe(
         Layer.provide(
           Layer.mergeAll(
@@ -295,7 +305,21 @@ it.effect.each([
                     ),
                   ),
               dispatch: (command) =>
-                Effect.sync(() => {
+                Effect.gen(function* () {
+                  if (rejected.has(command.commandId))
+                    return yield* new Orchestrator.OrchestratorCommandPreviouslyRejectedError({
+                      commandId: command.commandId,
+                      commandType: command.type,
+                      detail: "stop failure",
+                    });
+                  if (command.type === "thread.stop" && rejectStop) {
+                    rejected.add(command.commandId);
+                    return yield* new Orchestrator.OrchestratorDispatchError({
+                      commandId: command.commandId,
+                      commandType: command.type,
+                      cause: "stop failure",
+                    });
+                  }
                   fixture.operations.push(command.type);
                   return { sequence: 0, storedEvents: [] };
                 }),
@@ -341,20 +365,21 @@ it.effect.each([
         yield* service.updateViews(second, views([threadId], 1, false, "second-view"));
         yield* service.updateViews(first, views([], 2));
         assert.deepEqual(fixture.operations, []);
-        if (failRelease) {
+        if (failRelease || failStop) {
           const error = yield* service
             .updateViews(second, views([], 2, false, "second-view"))
             .pipe(Effect.flip);
           assert.equal(error._tag, "TemporaryThreadServiceError");
-          assert.deepEqual(fixture.operations, [
-            "mark",
-            "thread.stop",
-            ...(detached ? [] : ["detach"]),
-            "release",
-          ]);
+          assert.deepEqual(
+            fixture.operations,
+            failStop
+              ? ["mark"]
+              : ["mark", "thread.stop", ...(detached ? [] : ["detach"]), "release"],
+          );
           assert.isTrue(fixture.temporary.has(threadId));
           assert.isFalse(fixture.discarded.has(threadId));
           rejectRelease = false;
+          rejectStop = false;
           fixture.operations.length = 0;
         }
         yield* service.updateViews(second, views([], 2, false, "second-view"));
@@ -632,6 +657,55 @@ it.effect.each([2, 3])("retries failed last-view cleanup at generation %s", (gen
       assert.isTrue(fixture.discarded.has(threadId));
       assert.isTrue(fixture.discarded.has(childId));
       assert.isFalse(fixture.temporary.has(childId));
+    }).pipe(Effect.provide(fixture.serviceLayer));
+  }),
+);
+
+it.effect("a failed discard stays closed and pending without blocking another view", () =>
+  Effect.gen(function* () {
+    const fixture = yield* setup;
+    yield* Effect.gen(function* () {
+      const service = yield* TemporaryThreadService.TemporaryThreadService;
+      yield* fixture.storage.register({ threadId });
+      yield* fixture.storage.register({ threadId: otherId });
+      yield* service.updateViews(first, views([threadId]));
+      yield* service.updateViews(second, views([otherId], 1, false, "other-view"));
+      fixture.rejectCleanup();
+      assert.equal((yield* Effect.exit(service.updateViews(first, views([], 2))))._tag, "Failure");
+      yield* service.updateViews(second, views([otherId], 2, false, "other-view"));
+      yield* service.updateViews(second, views([], 3, false, "other-view"));
+      assert.isTrue(fixture.discarded.has(otherId));
+      assert.isTrue(fixture.temporary.has(threadId));
+      assert.equal(
+        (yield* Effect.exit(service.keep({ threadId, commandId: CommandId.make("keep") })))._tag,
+        "Failure",
+      );
+      fixture.rejectCleanup(false);
+      yield* service.updateViews(second, views([], 3, false, "other-view"));
+      assert.isTrue(fixture.discarded.has(threadId));
+      assert.isFalse(fixture.temporary.has(threadId));
+    }).pipe(Effect.provide(fixture.serviceLayer));
+  }),
+);
+
+it.effect("a failed discard still admits the same view's next temporary chat", () =>
+  Effect.gen(function* () {
+    const fixture = yield* setup;
+    yield* Effect.gen(function* () {
+      const service = yield* TemporaryThreadService.TemporaryThreadService;
+      yield* service.updateViews(first, views([threadId]));
+      fixture.rejectCleanup();
+      assert.isTrue(Exit.isFailure(yield* Effect.exit(service.updateViews(first, views([], 2)))));
+      assert.isTrue(
+        Exit.isFailure(yield* Effect.exit(service.updateViews(first, views([otherId], 3)))),
+      );
+      assert.isTrue(fixture.temporary.has(otherId));
+      fixture.rejectCleanup(false);
+      yield* service.updateViews(first, views([otherId], 3));
+      assert.isTrue(fixture.discarded.has(threadId));
+      assert.isFalse(fixture.discarded.has(otherId));
+      yield* service.updateViews(first, views([], 4));
+      assert.isTrue(fixture.discarded.has(otherId));
     }).pipe(Effect.provide(fixture.serviceLayer));
   }),
 );

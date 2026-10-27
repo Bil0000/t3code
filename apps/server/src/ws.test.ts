@@ -517,6 +517,23 @@ it.effect("shell snapshots omit idle children and older settled threads only on 
   }).pipe(Effect.scoped, Effect.provide(ReplayTestLayer)),
 );
 
+const layerThreadRpcServices = Layer.mergeAll(
+  Layer.mock(BackgroundPolicy.BackgroundPolicy)({
+    removeRpcClient: () => Effect.void,
+  }),
+  Layer.mock(EventLoopMonitor.EventLoopMonitor)({}),
+  Layer.mock(ExternalLauncher.ExternalLauncher)({}),
+  Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({}),
+  Layer.mock(DirectEndpoints.DirectEndpoints)({}),
+  Layer.mock(ProviderRegistry.ProviderRegistry)({}),
+  Layer.mock(UsageLimitSources.UsageLimitSources)({}),
+  Layer.mock(ServerEnvironment.ServerEnvironment)({}),
+  Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
+  Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+    namedProjectsRoot: process.cwd(),
+  }),
+);
+
 // Build the production RPC layer; unrelated capabilities fail if this test calls them.
 const layerUnusedConfigRpcServices = Layer.mergeAll(
   TemporaryThreadStorage.layer,
@@ -709,20 +726,7 @@ it.effect.each(["family", "worktree"] as const)(
           ).pipe(
             Layer.provide(
               Layer.mergeAll(
-                Layer.mock(BackgroundPolicy.BackgroundPolicy)({
-                  removeRpcClient: () => Effect.void,
-                }),
-                Layer.mock(EventLoopMonitor.EventLoopMonitor)({}),
-                Layer.mock(ExternalLauncher.ExternalLauncher)({}),
-                Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({}),
-                Layer.mock(DirectEndpoints.DirectEndpoints)({}),
-                Layer.mock(ProviderRegistry.ProviderRegistry)({}),
-                Layer.mock(UsageLimitSources.UsageLimitSources)({}),
-                Layer.mock(ServerEnvironment.ServerEnvironment)({}),
-                Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
-                Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
-                  namedProjectsRoot: process.cwd(),
-                }),
+                layerThreadRpcServices,
                 Layer.succeed(TemporaryThreadStorage.TemporaryThreadStores, {
                   ...stores,
                   getShellSnapshot: (options) =>
@@ -994,25 +998,7 @@ it.effect.each(
             Context.get(services, ServerBrowser.ServerBrowser),
             yield* Effect.scope,
           ).pipe(
-            Layer.provide(
-              Layer.mergeAll(
-                threads,
-                Layer.mock(BackgroundPolicy.BackgroundPolicy)({
-                  removeRpcClient: () => Effect.void,
-                }),
-                Layer.mock(EventLoopMonitor.EventLoopMonitor)({}),
-                Layer.mock(ExternalLauncher.ExternalLauncher)({}),
-                Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({}),
-                Layer.mock(DirectEndpoints.DirectEndpoints)({}),
-                Layer.mock(ProviderRegistry.ProviderRegistry)({}),
-                Layer.mock(UsageLimitSources.UsageLimitSources)({}),
-                Layer.mock(ServerEnvironment.ServerEnvironment)({}),
-                Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
-                Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
-                  namedProjectsRoot: process.cwd(),
-                }),
-              ),
-            ),
+            Layer.provide(Layer.mergeAll(threads, layerThreadRpcServices)),
             Layer.provide(Layer.succeedContext(Context.merge(services, query))),
           ),
         ),
@@ -1142,18 +1128,7 @@ it.effect.each(
         ).pipe(
           Layer.provide(
             Layer.mergeAll(
-              Layer.mock(BackgroundPolicy.BackgroundPolicy)({ removeRpcClient: () => Effect.void }),
-              Layer.mock(EventLoopMonitor.EventLoopMonitor)({}),
-              Layer.mock(ExternalLauncher.ExternalLauncher)({}),
-              Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({}),
-              Layer.mock(DirectEndpoints.DirectEndpoints)({}),
-              Layer.mock(ProviderRegistry.ProviderRegistry)({}),
-              Layer.mock(UsageLimitSources.UsageLimitSources)({}),
-              Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
-                namedProjectsRoot: process.cwd(),
-              }),
-              Layer.mock(ServerEnvironment.ServerEnvironment)({}),
-              Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
+              layerThreadRpcServices,
               Layer.mock(ThreadManagement.ThreadManagementService)({
                 ensureLegacyTranscript: () => Effect.void,
                 getThreadSnapshot: read,
@@ -1266,24 +1241,7 @@ it.effect.each([false, true])(
             socketScope,
           ).pipe(
             Layer.provide(Layer.succeedContext(lifecycle)),
-            Layer.provide(
-              Layer.mergeAll(
-                Layer.mock(BackgroundPolicy.BackgroundPolicy)({
-                  removeRpcClient: () => Effect.void,
-                }),
-                Layer.mock(EventLoopMonitor.EventLoopMonitor)({}),
-                Layer.mock(ExternalLauncher.ExternalLauncher)({}),
-                Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({}),
-                Layer.mock(DirectEndpoints.DirectEndpoints)({}),
-                Layer.mock(ProviderRegistry.ProviderRegistry)({}),
-                Layer.mock(UsageLimitSources.UsageLimitSources)({}),
-                Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
-                  namedProjectsRoot: process.cwd(),
-                }),
-                Layer.mock(ServerEnvironment.ServerEnvironment)({}),
-                Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
-              ),
-            ),
+            Layer.provide(layerThreadRpcServices),
             Layer.provide(Layer.succeedContext(services)),
           ),
         ),
