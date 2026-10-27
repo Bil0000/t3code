@@ -47,6 +47,19 @@ function setup(id: string) {
   return ref;
 }
 
+it("reuses availability for the same environment and thread across reference objects", () => {
+  const ref = setup("identity");
+  const available = canShareWithGuestAtom(ref);
+
+  expect(canShareWithGuestAtom(scopeThreadRef(ref.environmentId, ref.threadId))).toBe(available);
+  expect(canShareWithGuestAtom(scopeThreadRef(EnvironmentId.make("other"), ref.threadId))).not.toBe(
+    available,
+  );
+  expect(canShareWithGuestAtom(scopeThreadRef(ref.environmentId, ThreadId.make("other")))).not.toBe(
+    available,
+  );
+});
+
 it.each(["shell", "registry"] as const)(
   "refuses to open the guest share dialog for a temporary thread known by %s",
   (source) => {

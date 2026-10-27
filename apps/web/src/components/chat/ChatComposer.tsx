@@ -650,6 +650,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const isLiteralPendingAnswer = activePendingProgress?.activeQuestion?.initialAnswer !== undefined;
   const isEditingQueuedMessage = editingQueuedAttachments !== null;
   const composerDraft = useComposerThreadDraft(composerDraftTarget);
+  const temporary = useComposerDraftStore((state) => {
+    const draft = state.getDraftThread(composerDraftTarget);
+    if (draft)
+      return draft.temporary === true || isTemporaryThread(draft.environmentId, draft.threadId);
+    return (
+      typeof composerDraftTarget !== "string" &&
+      isTemporaryThread(composerDraftTarget.environmentId, composerDraftTarget.threadId)
+    );
+  });
   const composerDraftTargetKeyRef = useRef("");
   useLayoutEffect(() => {
     composerDraftTargetKeyRef.current = composerDraftTargetKey;
@@ -967,8 +976,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     : (compatibleRuntimeModeOptions[0]?.mode ?? runtimeMode);
 
   const providerSendBlockReason =
-    isTemporaryComposerTarget(composerDraftTarget) &&
-    selectedProviderEntry?.snapshot.temporaryThreads !== true
+    temporary && selectedProviderEntry?.snapshot.temporaryThreads !== true
       ? "This provider cannot run temporary chats. Choose a supported provider or turn off Temporary."
       : getAntigravitySendBlockReason(selectedProviderEntry?.snapshot, selectedModel);
   const sendDisabledReason =
@@ -2641,7 +2649,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   const { addComposerAttachments, removeComposerImage, foldPastedText } =
     useComposerAttachmentIntake({
-      temporary: isTemporaryComposerTarget(composerDraftTarget),
+      temporary,
       activeThreadId,
       activePendingProgress,
       activePendingIsResponding,
