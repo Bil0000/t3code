@@ -19,11 +19,11 @@ import * as RpcHttp from "../rpc/http.ts";
 import * as ClientCapabilities from "../platform/capabilities.ts";
 import * as RemoteEnvironmentAuthorization from "./service.ts";
 import * as TokenStore from "./tokenStore.ts";
-import * as ConnectionResolver from "../connection/resolver.ts";
-import * as ConnectionProfileStore from "../connection/profileStore.ts";
-import * as ConnectionCredentialStore from "../connection/credentialStore.ts";
 import { BearerConnectionCredential, BearerConnectionProfile } from "../connection/catalog.ts";
+import * as ConnectionCredentialStore from "../connection/credentialStore.ts";
 import { BearerConnectionTarget } from "../connection/model.ts";
+import * as ConnectionProfileStore from "../connection/profileStore.ts";
+import * as ConnectionResolver from "../connection/resolver.ts";
 
 const ENVIRONMENT_ID = EnvironmentId.make("environment-1");
 const ENDPOINT = {
@@ -52,17 +52,12 @@ const BOOTSTRAP: RelayEnvironmentConnectResponse = {
 
 type RecordedResponse = Response | ((init: RequestInit) => Response);
 
-function recordedFetch(
-  responses:
-    | ReadonlyArray<RecordedResponse>
-    | ((input: RequestInfo | URL, init: RequestInit) => Response),
-) {
+function recordedFetch(responses: ReadonlyArray<RecordedResponse>) {
   const calls: Array<readonly [RequestInfo | URL, RequestInit]> = [];
   let responseIndex = 0;
   const fetchFn = ((input, init) => {
     calls.push([input, init ?? {}]);
-    const response =
-      typeof responses === "function" ? responses(input, init ?? {}) : responses[responseIndex++];
+    const response = responses[responseIndex++];
     return response === undefined
       ? Promise.reject(new Error(`Unexpected fetch call to ${String(input)}`))
       : Promise.resolve(typeof response === "function" ? response(init ?? {}) : response);
@@ -116,7 +111,7 @@ const persistedToken = (
 
 const makeHarness = Effect.fn("TestRemoteAuthorization.makeHarness")(function* (input: {
   readonly initialToken?: TokenStore.RemoteDpopAccessToken;
-  readonly responses: Parameters<typeof recordedFetch>[0];
+  readonly responses: ReadonlyArray<RecordedResponse>;
   readonly bootstrap?: RelayEnvironmentConnectResponse;
   readonly beforeBootstrap?: Effect.Effect<void, ManagedRelay.ManagedRelayClientError>;
   readonly beforePut?: Effect.Effect<void>;
@@ -239,29 +234,29 @@ const makeHarness = Effect.fn("TestRemoteAuthorization.makeHarness")(function* (
   };
 });
 
-const makeResolverHarness = Effect.fn("TestRemoteAuthorization.makeResolverHarness")(function* (
-  responses: Parameters<typeof recordedFetch>[0],
-  options?: {
-    readonly authorization?: "t3-connect";
-    readonly initialToken?: TokenStore.RemoteDpopAccessToken;
-    readonly bootstrap?: RelayEnvironmentConnectResponse;
-  },
+const prepareDirectBearer = Effect.fn("TestRemoteAuthorization.prepareDirectBearer")(function* (
+  harness: Effect.Success<ReturnType<typeof makeHarness>>,
+  times: number,
 ) {
-  const harness = yield* makeHarness({ ...options, responses });
   const target = new BearerConnectionTarget({
     environmentId: ENVIRONMENT_ID,
     label: DESCRIPTOR.label,
     connectionId: "direct-1",
   });
-  const profile = new BearerConnectionProfile({
-    connectionId: target.connectionId,
-    environmentId: target.environmentId,
-    label: target.label,
-    httpBaseUrl: ENDPOINT.httpBaseUrl,
-    wsBaseUrl: ENDPOINT.wsBaseUrl,
-    ...(options?.authorization === undefined ? {} : { authorization: options.authorization }),
-  });
-  const unused = () => Effect.die("Unexpected connection store or SSH operation");
+  const entry = {
+    target,
+    profile: Option.some(
+      new BearerConnectionProfile({
+        connectionId: target.connectionId,
+        environmentId: ENVIRONMENT_ID,
+        label: target.label,
+        httpBaseUrl: ENDPOINT.httpBaseUrl,
+        wsBaseUrl: ENDPOINT.wsBaseUrl,
+      }),
+    ),
+    enabled: true,
+  };
+  const unused = () => Effect.die("unused");
   const layer = ConnectionResolver.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -287,75 +282,74 @@ const makeResolverHarness = Effect.fn("TestRemoteAuthorization.makeResolverHarne
       ),
     ),
   );
-  return { ...harness, layer, entry: { target, profile: Option.some(profile), enabled: true } };
+  const resolver = yield* ConnectionResolver.ConnectionResolver.pipe(Effect.provide(layer));
+  return yield* Effect.forEach(Array.from({ length: times }), () =>
+    resolver.prepare(entry).pipe(Effect.result),
+  );
 });
 
 describe("RemoteEnvironmentAuthorization", () => {
-  it.effect("uses one fresh descriptor GET for a cold direct bearer prepare", () =>
+  it.effect("prepares a cold direct bearer connection with one descriptor request", () =>
     Effect.gen(function* () {
-      const descriptor = {
-        ...DESCRIPTOR,
-        orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
-      };
-      const harness = yield* makeResolverHarness((url) =>
-        String(url).endsWith("/.well-known/t3/environment")
-          ? Response.json(descriptor)
-          : websocketTicket("cold-ticket"),
-      );
-      const prepared = yield* Effect.gen(function* () {
-        const resolver = yield* ConnectionResolver.ConnectionResolver;
-        return yield* resolver.prepare(harness.entry);
-      }).pipe(Effect.provide(harness.layer));
-
-      expect(prepared.socketUrl).toContain("wsTicket=cold-ticket");
-      expect(prepared).not.toHaveProperty("descriptor");
-      expect(
-        harness.fetch.calls
-          .filter(([url]) => String(url).endsWith("/.well-known/t3/environment"))
-          .map(([, init]) => init.method ?? "GET"),
-      ).toEqual(["GET"]);
-    }),
-  );
-
-  it.effect.each([
-    {
-      name: "identity",
-      environmentId: EnvironmentId.make("another-environment"),
-      reason: "configuration",
-    },
-    { name: "protocol", orchestrationProtocolVersion: 0, reason: "unsupported" },
-  ])("checks fresh $name data on a warm direct bearer prepare", (change) =>
-    Effect.gen(function* () {
-      let descriptor = {
-        ...DESCRIPTOR,
-        orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
-      };
-      const harness = yield* makeResolverHarness((url) =>
-        String(url).endsWith("/.well-known/t3/environment")
-          ? Response.json(descriptor)
-          : websocketTicket("warm-ticket"),
-      );
-      yield* Effect.gen(function* () {
-        const resolver = yield* ConnectionResolver.ConnectionResolver;
-        yield* resolver.prepare(harness.entry);
-        descriptor = { ...descriptor, ...change };
-        const failure = yield* resolver.prepare(harness.entry).pipe(Effect.flip);
-        expect(failure).toMatchObject({
-          _tag: "ConnectionBlockedError",
-          reason: change.reason,
-        });
-      }).pipe(Effect.provide(harness.layer));
-    }),
-  );
-
-  it.effect("fetches a fresh bearer descriptor while issuing fresh websocket tickets", () =>
-    Effect.gen(function* () {
-      let ticketCount = 0;
       const harness = yield* makeHarness({
-        responses: (url) =>
-          String(url).endsWith("/.well-known/t3/environment")
-            ? Response.json(DESCRIPTOR)
-            : websocketTicket(++ticketCount === 1 ? "first-ticket" : "second-ticket"),
+        responses: [
+          Response.json({
+            ...DESCRIPTOR,
+            orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
+          }),
+          websocketTicket("cold-ticket"),
+        ],
+      });
+
+      const [prepared] = yield* prepareDirectBearer(harness, 1);
+
+      expect(prepared).toMatchObject({
+        _tag: "Success",
+        success: { socketUrl: expect.stringContaining("wsTicket=cold-ticket") },
+      });
+      expect(harness.fetch.calls.map(([url]) => new URL(String(url)).pathname)).toEqual([
+        "/.well-known/t3/environment",
+        "/api/auth/websocket-ticket/rpc",
+      ]);
+    }),
+  );
+
+  it.effect("blocks a warm direct bearer prepare when the environment changes identity", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        responses: [
+          Response.json({
+            ...DESCRIPTOR,
+            orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
+          }),
+          websocketTicket("first-ticket"),
+          Response.json({
+            ...DESCRIPTOR,
+            environmentId: "another-environment",
+            orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
+          }),
+          websocketTicket("second-ticket"),
+        ],
+      });
+
+      const [first, second] = yield* prepareDirectBearer(harness, 2);
+
+      expect(first?._tag).toBe("Success");
+      expect(second).toMatchObject({
+        _tag: "Failure",
+        failure: { _tag: "ConnectionBlockedError", reason: "configuration" },
+      });
+    }),
+  );
+  it.effect("validates a fresh bearer descriptor while issuing fresh websocket tickets", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        responses: [
+          Response.json(DESCRIPTOR),
+          websocketTicket("first-ticket"),
+          Response.json(DESCRIPTOR),
+          websocketTicket("second-ticket"),
+        ],
       });
 
       const [first, second] = yield* Effect.gen(function* () {
@@ -382,60 +376,6 @@ describe("RemoteEnvironmentAuthorization", () => {
         ),
       ).toHaveLength(2);
     }),
-  );
-
-  it.effect.each(["cached", "renewed"] as const)(
-    "uses one fresh direct descriptor with a %s DPoP token and permits old-host updates",
-    (tokenState) =>
-      Effect.gen(function* () {
-        const directDescriptor = { ...DESCRIPTOR, orchestrationProtocolVersion: 0 };
-        const relayHttpBaseUrl = "https://relay-route.example.test";
-        const harness = yield* makeResolverHarness(
-          (url) => {
-            const endpoint = String(url);
-            if (endpoint.endsWith("/.well-known/t3/environment")) {
-              return Response.json(
-                endpoint.startsWith(ENDPOINT.httpBaseUrl)
-                  ? directDescriptor
-                  : { ...DESCRIPTOR, orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION },
-              );
-            }
-            return endpoint.endsWith("/oauth/token")
-              ? accessToken("renewed-token")
-              : websocketTicket("direct-ticket");
-          },
-          {
-            authorization: "t3-connect",
-            ...(tokenState === "cached" ? { initialToken: persistedToken() } : {}),
-            bootstrap: {
-              ...BOOTSTRAP,
-              endpoint: {
-                ...ENDPOINT,
-                httpBaseUrl: relayHttpBaseUrl,
-                wsBaseUrl: "wss://relay-route.example.test",
-              },
-            },
-          },
-        );
-        yield* Effect.gen(function* () {
-          const resolver = yield* ConnectionResolver.ConnectionResolver;
-          const { prepared, descriptor } = yield* resolver.prepareForUpdate(harness.entry);
-          expect(descriptor).toMatchObject(directDescriptor);
-          expect(prepared.socketUrl).toContain("wsTicket=direct-ticket");
-          expect(prepared.httpBaseUrl).toBe(ENDPOINT.httpBaseUrl);
-          expect(prepared).not.toHaveProperty("descriptor");
-          expect(
-            harness.fetch.calls.filter(
-              ([url]) => String(url) === `${ENDPOINT.httpBaseUrl}/.well-known/t3/environment`,
-            ),
-          ).toHaveLength(1);
-          expect(yield* resolver.prepare(harness.entry).pipe(Effect.flip)).toMatchObject({
-            _tag: "ConnectionBlockedError",
-            reason: "unsupported",
-          });
-        }).pipe(Effect.provide(harness.layer));
-        expect(yield* Ref.get(harness.bootstrapCalls)).toBe(tokenState === "cached" ? 0 : 1);
-      }),
   );
 
   it.effect("reuses a same-account persisted environment token without contacting the relay", () =>

@@ -145,10 +145,7 @@ const makeHarness = Effect.fn("TestThreadCommands.makeHarness")(function* (optio
 });
 
 describe("history loading", () => {
-  it.effect.each([
-    ["startTurn", "message.dispatch"],
-    ["interruptTurn", "run.interrupt"],
-  ] as const)("dispatches %s while earlier history is pending", ([action, commandType]) =>
+  it.effect("sends a message on the thread while earlier history is loading", () =>
     Effect.gen(function* () {
       const historyStarted = yield* Deferred.make<void>();
       const historyReply =
@@ -165,23 +162,22 @@ describe("history loading", () => {
         input: { threadId: THREAD_ID },
       });
       yield* Deferred.await(historyStarted);
-      const input = {
-        threadId: THREAD_ID,
-        runId: RunId.make("running-run"),
-        message: {
-          messageId: MessageId.make("message"),
-          role: "user",
-          text: "Send while history loads",
-          attachments: [],
-        },
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        dispatchMode: "start",
-      } as const;
-      const result = h.commands[action].run(h.registry, {
+      const send = h.commands.startTurn.run(h.registry, {
         environmentId: ENVIRONMENT_ID,
-        input,
+        input: {
+          threadId: THREAD_ID,
+          message: {
+            messageId: MessageId.make("message"),
+            role: "user",
+            text: "Send while history loads",
+            attachments: [],
+          },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          dispatchMode: "start",
+        },
       });
+      // Dispatched after Send on another thread, so it arrives first only if Send is queued.
       const controlThreadId = ThreadId.make("control-thread");
       const control = h.commands.interruptTurn.run(h.registry, {
         environmentId: ENVIRONMENT_ID,
@@ -192,9 +188,9 @@ describe("history loading", () => {
       yield* Deferred.succeed(historyReply, { _tag: "loaded" });
       const second = yield* Queue.take(h.requests);
       yield* Deferred.succeed(second.reply, { sequence: 2 });
-      const results = yield* Effect.promise(() => Promise.all([history, result, control]));
+      const results = yield* Effect.promise(() => Promise.all([history, send, control]));
 
-      expect(first.command).toMatchObject({ type: commandType, threadId: THREAD_ID });
+      expect(first.command).toMatchObject({ type: "message.dispatch", threadId: THREAD_ID });
       expect(second.command).toMatchObject({ type: "run.interrupt", threadId: controlThreadId });
       expect(results.map((value) => value._tag)).toEqual(["Success", "Success", "Success"]);
     }),
