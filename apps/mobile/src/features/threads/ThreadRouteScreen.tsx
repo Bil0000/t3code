@@ -6,6 +6,7 @@ import { isTemporaryThread } from "@t3tools/client-runtime/temporary-threads";
 import { useAtomValue } from "@effect/atom-react";
 import { CommandId } from "@t3tools/contracts";
 import * as Dialog from "../../components/ui/Dialog";
+import { useRememberThreadProject } from "./useRememberThreadProject";
 import { useOpenPullRequest } from "../../native/useOpenPullRequest";
 import { makeTurnCommandMetadata } from "../../lib/commandMetadata";
 import { buildProjectThreadStartTurnInput } from "../../lib/projectThreadStartTurn";
@@ -91,7 +92,6 @@ import { resolveLatestMergeBackRun } from "@t3tools/client-runtime/state/thread-
 import { threadEnvironment, useThreadFamily } from "../../state/threads";
 import { EMPTY_ENVIRONMENT_THREAD_STATE } from "@t3tools/client-runtime/state/threads";
 import { useProjects } from "../../state/entities";
-import { newTaskDestination } from "./new-task-project-selection";
 import { projectThreadContentPresentation } from "./threadContentPresentation";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import {
@@ -208,14 +208,18 @@ function ThreadUnavailableScreen(props: {
 function UnavailableThreadDraftRedirect(props: { readonly environmentId: EnvironmentId }) {
   const navigation = useNavigation();
   const projects = useProjects();
-  const { layout } = useAdaptiveWorkspaceLayout();
   const openDraft = useEffectEvent(() => {
     const project = projects.find((candidate) => candidate.environmentId === props.environmentId);
     navigation.dispatch(
-      StackActions.replace(
-        "Thread",
-        newTaskDestination(layout.usesSplitView, projects, project, uuidv4()),
-      ),
+      StackActions.replace("Thread", {
+        draft: project
+          ? {
+              requestId: uuidv4(),
+              environmentId: String(project.environmentId),
+              projectId: String(project.id),
+            }
+          : { requestId: uuidv4() },
+      }),
     );
   });
   // oxlint-disable-next-line t3code/react-effect-budget -- replaces this route in the navigator
@@ -349,6 +353,7 @@ function ThreadRouteContent(
     selectedThreadProject,
     selectedEnvironmentConnection,
   } = useThreadSelection();
+  useRememberThreadProject(selectedThreadProject);
   const canOperateThread = useEnvironmentScope(
     selectedThread?.environmentId ?? null,
     AuthOrchestrationOperateScope,

@@ -25,6 +25,7 @@ vi.mock("@react-navigation/native", () => ({
   CommonActions: { navigate: vi.fn() },
   StackActions: { replace: vi.fn() },
   useNavigation: () => ({ goBack: state.goBack, dispatch: vi.fn() }),
+  useIsFocused: () => true,
   usePreventRemove: (prevent: boolean) => {
     state.preventRemove = prevent;
   },
@@ -34,6 +35,7 @@ vi.mock("../../state/use-temporary-thread-views", () => ({ enqueueTemporaryDraft
 vi.mock("./DraftEnvironmentControl", () => ({ DraftEnvironmentControl: () => null }));
 vi.mock("../../native/NativeScrollViewMarker", () => ({ NativeScrollEdgeEffectsContext: "div" }));
 vi.mock("./DraftThreadHeader", () => ({ DraftThreadHeader: () => null }));
+vi.mock("./useRememberThreadProject", () => ({ useRememberThreadProject: () => {} }));
 vi.mock("./thread-header-appearance", () => ({ threadHeaderAppearance: () => ({}) }));
 vi.mock("../../native/native-glass", () => ({ NATIVE_LIQUID_GLASS_SUPPORTED: false }));
 vi.mock("../../state/use-composer-attachment-actions", () => ({
