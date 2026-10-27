@@ -24,6 +24,7 @@ const emitToolCalls = process.env.T3_ACP_EMIT_TOOL_CALLS === "1";
 const emitInterleavedAssistantToolCalls =
   process.env.T3_ACP_EMIT_INTERLEAVED_ASSISTANT_TOOL_CALLS === "1";
 const emitV2Fidelity = process.env.T3_ACP_EMIT_V2_FIDELITY === "1";
+const emitNotice = process.env.T3_ACP_EMIT_NOTICE === "1";
 const vibeRetryOutcome = process.env.T3_ACP_VIBE_RETRY_OUTCOME;
 const emitGenericToolPlaceholders = process.env.T3_ACP_EMIT_GENERIC_TOOL_PLACEHOLDERS === "1";
 const emitPostSettleMonitorFlow = process.env.T3_ACP_EMIT_POST_SETTLE_MONITOR_FLOW === "1";
@@ -1060,22 +1061,6 @@ const program = Effect.gen(function* () {
               : {}),
           },
         });
-        // The agent outlives the failed prompt, so its subagent finishes afterwards.
-        yield* Effect.sleep("50 millis").pipe(
-          Effect.andThen(
-            Effect.sync(() =>
-              writeJsonRpcNotification("session/update", {
-                sessionId: requestedSessionId,
-                update: {
-                  sessionUpdate: "tool_call_update",
-                  toolCallId: "tool-call-idle-error-subagent",
-                  status: "completed",
-                },
-              }),
-            ),
-          ),
-          Effect.forkDetach,
-        );
         return {};
       }
       if (
@@ -1167,6 +1152,30 @@ const program = Effect.gen(function* () {
             content: { type: "text", text: "Recovered answer" },
           },
         });
+        return yield* finishPrompt(requestedSessionId, "end_turn");
+      }
+
+      if (emitNotice) {
+        // A notice in fx 0.0.14's shape for a skipped skill, between two chunks of one message.
+        const chunk = (text: string) =>
+          writeJsonRpcNotification("session/update", {
+            sessionId: requestedSessionId,
+            update: {
+              sessionUpdate: "agent_message_chunk",
+              messageId: "mock-notice-message",
+              content: { type: "text", text },
+            },
+          });
+        chunk("before the notice, ");
+        writeJsonRpcNotification("session/update", {
+          sessionId: requestedSessionId,
+          update: {
+            sessionUpdate: "notice",
+            severity: "info",
+            title: "skill discovery warning: candidate was skipped because its metadata is invalid",
+          },
+        });
+        chunk("after the notice");
         return yield* finishPrompt(requestedSessionId, "end_turn");
       }
 
@@ -2584,6 +2593,19 @@ const program = Effect.gen(function* () {
   );
 
   yield* agent.handleUnknownExtRequest((method, params) => {
+    if (method === "_test/finish-idle-error-child") {
+      return Effect.sync(() => {
+        writeJsonRpcNotification("session/update", {
+          sessionId,
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "tool-call-idle-error-subagent",
+            status: "completed",
+          },
+        });
+        return {};
+      });
+    }
     if (method === "_test/environment") {
       return Effect.succeed({
         inherited: process.env.T3_ACP_RUNTIME_AMBIENT === "sentinel",

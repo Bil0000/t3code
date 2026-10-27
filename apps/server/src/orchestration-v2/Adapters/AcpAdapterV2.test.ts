@@ -409,6 +409,7 @@ describe("AcpAdapterV2", () => {
         const instanceId = ProviderInstanceId.make(`idle-error-${details}`);
         const threadId = ThreadId.make(`thread-idle-error-${details}`);
         const childSessionId = "mock-child-session-idle-error";
+        let nativeRuntime: AcpSessionRuntime.AcpSessionRuntime["Service"] | undefined;
         const adapter = yield* makeAcpAdapterV2({
           instanceId,
           selfInvocation: yield* resolveSelfInvocation(),
@@ -438,6 +439,10 @@ describe("AcpAdapterV2", () => {
                 new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
               ),
               environment: { T3_ACP_IDLE_ERROR: details },
+              wrapRuntime: (runtime) => {
+                nativeRuntime = runtime;
+                return runtime;
+              },
             }),
           },
         });
@@ -478,6 +483,12 @@ describe("AcpAdapterV2", () => {
 
         const failedEvents = yield* runTurn(1);
         const failed = failedEvents.at(-1);
+        assert.isFalse(
+          failedEvents.some(
+            (event) => event.type === "subagent.updated" && event.subagent.status === "completed",
+          ),
+          "the fixture must keep child completion after the terminal event",
+        );
         assert.equal(failed?.type, "turn.terminal");
         if (failed?.type !== "turn.terminal" || failed.status !== "failed") {
           return assert.fail("expected a failed terminal");
@@ -486,15 +497,16 @@ describe("AcpAdapterV2", () => {
           failed.childTurnsContinue,
           "the run keeps ingesting work that outlives the failed prompt",
         );
+        assert.isDefined(nativeRuntime);
+        yield* nativeRuntime!.request("_test/finish-idle-error-child", {});
         const lateSubagent = yield* runtime.events.pipe(
           Stream.filter(
             (event) => event.type === "subagent.updated" && event.subagent.status === "completed",
           ),
           Stream.runHead,
-          Effect.timeoutOption("2 seconds"),
         );
         assert.isTrue(
-          Option.isSome(lateSubagent) && Option.isSome(lateSubagent.value),
+          Option.isSome(lateSubagent),
           "a subagent finishing after the failed prompt still reports to the run",
         );
         assert.deepEqual(
@@ -2054,6 +2066,88 @@ describe("AcpAdapterV2", () => {
       );
       assert.isFalse(
         items.some((item) => item.threadId === threadId && item.type === "dynamic_tool"),
+      );
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
+  it.effect("advertises ACP session notices and shows them as system notices", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const path = yield* Path.Path;
+      const selfInvocation = yield* resolveSelfInvocation();
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
+      const instanceId = ProviderInstanceId.make("acp-test-notice");
+      const adapter = yield* makeAcpAdapterV2({
+        instanceId,
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          makeRuntime: makeMockRuntime({
+            childProcessSpawner,
+            mockAgentPath,
+            protocolEvents,
+            environment: { T3_ACP_EMIT_NOTICE: "1" },
+          }),
+        },
+        selfInvocation,
+      });
+      const threadId = ThreadId.make("thread-acp-notice");
+      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const modelSelection = { instanceId, model: "default" } as const;
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-acp-notice"),
+        modelSelection,
+        runtimePolicy,
+      });
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+      });
+      const now = yield* DateTime.now;
+      yield* runtime.startTurn(
+        makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now, ordinal: 1 }),
+      );
+      const items = Array.from(
+        yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+        ),
+      ).flatMap((event) => (event.type === "turn_item.updated" ? [event.turnItem] : []));
+
+      const initialize = Array.from(yield* Queue.takeAll(protocolEvents)).find(
+        (event) => event.direction === "outgoing" && rawProtocolMethod(event) === "initialize",
+      );
+      assert.deepEqual(
+        initialize === undefined
+          ? undefined
+          : Reflect.get(
+              Object(rawProtocolRequestParam(initialize, "clientCapabilities")),
+              "session",
+            ),
+        { notices: {} },
+      );
+      const title =
+        "skill discovery warning: candidate was skipped because its metadata is invalid";
+      assert.deepEqual(
+        items.flatMap((item) => (item.type === "system_notice" ? [item.message] : [])),
+        [title],
+      );
+      const replies = new Map(
+        items.flatMap((item) => (item.type === "assistant_message" ? [[item.id, item.text]] : [])),
+      );
+      assert.deepEqual(
+        [...replies.values()],
+        ["before the notice, after the notice"],
+        "a notice neither joins the reply nor splits it",
       );
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
