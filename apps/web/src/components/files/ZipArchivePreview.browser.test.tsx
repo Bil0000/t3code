@@ -529,16 +529,15 @@ describe("ZIP file browsing", () => {
     readFile.mockResolvedValue(new Blob(["name,value\nexample,42"]));
     await using screen = await open();
     await select(screen, "data.csv");
-    await vi.waitFor(() =>
-      expect([...screen.container.querySelectorAll("th")].map((cell) => cell.textContent)).toEqual([
-        "name",
-        "value",
-      ]),
-    );
-    expect([...screen.container.querySelectorAll("td")].map((cell) => cell.textContent)).toEqual([
-      "example",
-      "42",
-    ]);
+    await expect.element(screen.getByRole("table", { name: "data.csv" })).toBeVisible();
+    expect(
+      [...screen.container.querySelectorAll('[role="columnheader"]')].map(
+        (cell) => cell.textContent,
+      ),
+    ).toEqual(["name", "value"]);
+    expect(
+      [...screen.container.querySelectorAll('[role="cell"]')].map((cell) => cell.textContent),
+    ).toEqual(["example", "42"]);
     await userEvent.click(screen.getByRole("button", { name: "Show source" }));
     await vi.waitFor(() =>
       expect(screen.container.querySelector("pre")?.textContent).toBe("name,value\nexample,42"),
