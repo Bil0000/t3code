@@ -687,6 +687,7 @@ function ZipEntryView(props: {
       controller.abort();
       release?.();
     };
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Retry must reread the entry.
   }, [entry, isText, mimeType, tooBig, revision]);
 
   const run = (kind: "save" | "attach", task: (signal: AbortSignal) => Promise<unknown>) => {
