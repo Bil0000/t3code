@@ -84,7 +84,8 @@ it.effect.each(
       const services = ThreadMetadataMcpService.layer.pipe(Layer.provideMerge(dependencies));
       const input = {
         threadId: targetId,
-        action: "unlink_pull_request" as const,
+        action: "rename" as const,
+        title: "Renamed thread",
         clientRequestId: "test",
       };
       const update = viaTool
