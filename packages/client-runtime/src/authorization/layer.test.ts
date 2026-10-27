@@ -328,7 +328,6 @@ describe("RemoteEnvironmentAuthorization", () => {
             environmentId: "another-environment",
             orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
           }),
-          websocketTicket("second-ticket"),
         ],
       });
 
@@ -339,6 +338,11 @@ describe("RemoteEnvironmentAuthorization", () => {
         _tag: "Failure",
         failure: { _tag: "ConnectionBlockedError", reason: "configuration" },
       });
+      expect(
+        harness.fetch.calls.filter(([url]) =>
+          String(url).endsWith("/api/auth/websocket-ticket/rpc"),
+        ),
+      ).toHaveLength(1);
     }),
   );
   it.effect("validates a fresh bearer descriptor while issuing fresh websocket tickets", () =>
