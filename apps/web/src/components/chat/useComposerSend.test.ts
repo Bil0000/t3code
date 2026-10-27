@@ -1,6 +1,7 @@
 import { Children, isValidElement, type ReactNode } from "react";
 import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
+import { isTemporaryThread, setTemporaryThread } from "@t3tools/client-runtime/temporary-threads";
 import { AsyncResult } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
 
@@ -70,6 +71,7 @@ vi.mock("../../composerDraftStore", async (original) => {
 });
 
 import { DraftId, useComposerDraftStore } from "../../composerDraftStore";
+import { useRightPanelStore } from "../../rightPanelStore";
 import { useComposerSend } from "./useComposerSend";
 import { TemporaryChatControls } from "./TemporaryChatControls";
 
@@ -91,6 +93,8 @@ it.each(["project", "No project"])(
     state.toast.mockReset();
     const environmentId = EnvironmentId.make("temporary-send");
     const threadId = ThreadId.make("temporary-send");
+    expect(isTemporaryThread(environmentId, threadId)).toBe(false);
+    const temporaryThreadRefs = [{ environmentId, threadId }];
     const draftId = DraftId.make(`temporary-send-${project}`);
     const nextDraftIds = [0, 1].map((round) => DraftId.make(`temporary-send-${project}-${round}`));
     const routeThreadKey = "temporary-send";
@@ -117,7 +121,12 @@ it.each(["project", "No project"])(
       },
       activeThreadKey: routeThreadKey,
       activeThreadBranch: null,
-      activeProject: { id: ProjectId.make(project), environmentId, workspaceRoot: "/project" },
+      activeProject: {
+        id: ProjectId.make(project),
+        environmentId,
+        workspaceRoot: "/project",
+        ...(project === "No project" ? { isScratch: true } : {}),
+      },
       activeProjectDefaultModelSelection: null,
       isLocalDraftThread: true,
       isServerThread: false,
@@ -217,6 +226,7 @@ it.each(["project", "No project"])(
           ),
         ).toBe(true);
         const draft = store.getDraftSession(nextDraftId)!;
+        temporaryThreadRefs.push({ environmentId, threadId: draft.threadId });
         expect(draft.threadId).not.toBe(savedThreadId);
         const text = `temporary ${project} prompt ${round}`;
         store.setPrompt(nextDraftId, text);
@@ -250,6 +260,10 @@ it.each(["project", "No project"])(
         expect(promptRef.current).toBe("");
       }
     } finally {
+      for (const ref of temporaryThreadRefs) {
+        useRightPanelStore.getState().removeThread(ref);
+        setTemporaryThread(ref.environmentId, ref.threadId, false);
+      }
       for (const id of [draftId, ...nextDraftIds]) store.clearDraftThread(id);
     }
   },
