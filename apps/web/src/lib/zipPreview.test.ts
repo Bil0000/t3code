@@ -242,7 +242,7 @@ describe("loadZipPreview", () => {
     async (createFolders) => {
       const zip = new JSZip();
       for (let index = 0; index < 2000; index++) {
-        zip.file(`folder-${index}/file.txt`, "hello", { createFolders });
+        zip.file(`folder-${index}/file.txt`, "hello", { createFolders, compression: "STORE" });
       }
       const preview = await loadZipPreview(await archive(zip), signal());
 
