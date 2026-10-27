@@ -1125,6 +1125,8 @@ function OpenSenderThreadButton(props: {
 /** Automation prompts are long, repeated runbooks; a folded bubble keeps them out of the way. */
 function ThreadAutomationMessageRow(props: {
   readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+  readonly temporary: boolean;
   readonly text: string;
   readonly context?: OrchestrationMessageContext;
   readonly scheduledTaskId: ScheduledTaskId | undefined;
@@ -1198,6 +1200,8 @@ function ThreadAutomationMessageRow(props: {
               <UserMessageContent
                 text={renderAssistantCitationsAsText(props.text)}
                 environmentId={props.environmentId}
+                threadId={props.threadId}
+                temporary={props.temporary}
                 context={props.context}
                 markdownStyles={props.markdownStyles}
                 reviewCommentColors={props.reviewCommentColors}
@@ -1516,6 +1520,8 @@ function renderFeedEntry(
       return (
         <ThreadAutomationMessageRow
           environmentId={props.environmentId}
+          threadId={props.threadId}
+          temporary={props.temporary}
           text={presentation.text}
           context={message.context}
           scheduledTaskId={presentation.scheduledTaskId}
@@ -1671,6 +1677,8 @@ function renderFeedEntry(
                     <UserMessageContent
                       text={renderedText}
                       environmentId={props.environmentId}
+                      threadId={props.threadId}
+                      temporary={props.temporary}
                       context={message.context}
                       markdownStyles={styles}
                       reviewCommentColors={props.reviewCommentColors}
@@ -1892,6 +1900,8 @@ function TurnDiffStat(props: {
 type UserMessageContentProps = {
   readonly text: string;
   readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+  readonly temporary: boolean;
   readonly context?: OrchestrationMessageContext;
   readonly markdownStyles: MarkdownStyleSet;
   readonly reviewCommentColors: ReviewCommentColors;
@@ -1972,7 +1982,7 @@ function UserMessageContent(props: UserMessageContentProps) {
               (item) => item.contextId === reference.contextId,
             );
             if (actionId === "copy-context" && record) {
-              if (selectedThread?.temporary) {
+              if (props.temporary || isTemporaryThread(props.environmentId, props.threadId)) {
                 Dialog.alert("Keep thread first", "Keep this thread before copying context.");
                 return;
               }
@@ -2018,9 +2028,8 @@ function UserMessageMarkdownContent(props: UserMessageContentProps) {
   const text = props.text;
   const segments = parseReviewCommentMessageSegments(text);
   const hasReviewComment = segments.some((segment) => segment.kind === "review-comment");
-  const { selectedThread } = useThreadSelection();
   const contextClipboardFragment =
-    props.context && !selectedThread?.temporary
+    props.context && !props.temporary && !isTemporaryThread(props.environmentId, props.threadId)
       ? (encodeComposerContextFragment({
           version: 1,
           source: { environmentId: props.environmentId },
@@ -3061,7 +3070,9 @@ export const ThreadFeed = memo(function ThreadFeed({
   const getFixedItemSize = (entry: ThreadFeedRow) => {
     if (entry.type === "guest-pending") return undefined;
     if (entry.type === "html-render") {
-      return htmlRenderRowHeight(htmlRenderFrameHeight(entry.render, contentWidth));
+      return temporary
+        ? undefined
+        : htmlRenderRowHeight(htmlRenderFrameHeight(entry.render, contentWidth));
     }
     if (workRowSizing.fixedRowHeight === undefined || entry.checkpointSummary) {
       return undefined;
@@ -3101,17 +3112,22 @@ export const ThreadFeed = memo(function ThreadFeed({
   // re-caches old sizes.
   const { textSizeKey } = workRowSizing;
   const hasHtmlRenders = presentedFeed.some((entry) => entry.type === "html-render");
-  const previousRowGeometry = useRef({ textSizeKey, contentWidth });
+  const previousRowGeometry = useRef({ textSizeKey, contentWidth, temporary });
   useLayoutEffect(() => {
     const previous = previousRowGeometry.current;
-    if (previous.textSizeKey === textSizeKey && previous.contentWidth === contentWidth) return;
-    previousRowGeometry.current = { textSizeKey, contentWidth };
+    if (
+      previous.textSizeKey === textSizeKey &&
+      previous.contentWidth === contentWidth &&
+      previous.temporary === temporary
+    )
+      return;
+    previousRowGeometry.current = { textSizeKey, contentWidth, temporary };
     // Rows re-rendered at this width are measured in the next commit, after this effect.
     if (previous.contentWidth !== contentWidth) beginReflow();
     if (previous.textSizeKey !== textSizeKey || hasHtmlRenders) {
       listRef.current?.clearCaches({ mode: "sizes" });
     }
-  }, [textSizeKey, contentWidth, hasHtmlRenders, beginReflow, listRef]);
+  }, [textSizeKey, contentWidth, temporary, hasHtmlRenders, beginReflow, listRef]);
 
   const renderItem = (info: { item: ThreadFeedRow; index: number }) => (
     <Animated.View

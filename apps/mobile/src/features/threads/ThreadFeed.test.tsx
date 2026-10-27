@@ -5,6 +5,7 @@ import { expect, it, vi } from "vite-plus/test";
 import { EnvironmentId, MessageId, ThreadId, type ScopedThreadRef } from "@t3tools/contracts";
 import { RegistryContext } from "@effect/atom-react";
 import { AtomRegistry } from "effect/reactivity";
+import type { LegendListRef } from "@legendapp/list/react-native";
 import type { OrchestrationV2ThreadProjection } from "@t3tools/contracts";
 import { setTemporaryThread } from "@t3tools/client-runtime/temporary-threads";
 import type { FilePreviewSource } from "../../components/FilePreviewModal";
@@ -24,6 +25,7 @@ const state = await vi.hoisted(async () => {
     openPullRequest: vi.fn(),
     copyContext: vi.fn(async () => {}),
     copyText: vi.fn(async (_text: string) => true),
+    clearSizes: vi.fn(),
     projections: new Map<string, OrchestrationV2ThreadProjection>(),
   };
 });
@@ -57,11 +59,19 @@ vi.mock("@legendapp/list/react-native", () => ({ useViewabilityAmount: () => 1 }
 vi.mock("@legendapp/list/keyboard", () => ({
   KeyboardAwareLegendList: (props: {
     data: readonly { id: string }[];
+    getFixedItemSize: (item: { id: string }) => number | undefined;
     renderItem: (info: { item: { id: string }; index: number }) => ReactNode;
   }) =>
-    props.data.map((item, index) => <div key={item.id}>{props.renderItem({ item, index })}</div>),
+    props.data.map((item, index) => (
+      <div key={item.id} data-row={item.id} style={{ height: props.getFixedItemSize(item) }}>
+        {props.renderItem({ item, index })}
+      </div>
+    )),
 }));
-vi.mock("expo-haptics", () => ({}));
+vi.mock("expo-haptics", () => ({
+  notificationAsync: async () => {},
+  NotificationFeedbackType: { Success: "success" },
+}));
 vi.mock("../../lib/uuid", () => ({ uuidv4: () => "uuid" }));
 vi.mock("expo-image", () => ({ Image: "img" }));
 vi.mock("uniwind", () => ({ useResolveClassNames: () => ({}) }));
@@ -94,6 +104,8 @@ vi.mock("../../native/SelectableMarkdownText", () => ({
     markdown: string;
     renderImage: (image: { href: string; alt: string }) => ReactNode;
     onLinkPress: (href: string) => void;
+    onFileContextMenuAction: (href: string, actionId: string) => void;
+    contextClipboardFragment?: string;
   }) => (
     <>
       <button aria-label="Open link" onClick={() => props.onLinkPress("https://example.test/link")}>
@@ -102,6 +114,20 @@ vi.mock("../../native/SelectableMarkdownText", () => ({
       {props.markdown === "Image"
         ? props.renderImage({ href: "https://example.test/markdown.png", alt: "Markdown image" })
         : null}
+      {props.markdown === "Copy context" ? (
+        <button
+          aria-label="Copy context"
+          data-context-fragment={props.contextClipboardFragment}
+          onClick={() =>
+            props.onFileContextMenuAction(
+              "t3-context://v1/terminal/private-context",
+              "copy-context",
+            )
+          }
+        >
+          Copy context
+        </button>
+      ) : null}
     </>
   ),
 }));
@@ -314,6 +340,7 @@ it.each([true, false])(
     state.openPullRequest.mockClear();
     state.copyContext.mockClear();
     state.copyText.mockClear();
+    state.clearSizes.mockClear();
     state.projections.clear();
     const registry = AtomRegistry.make();
     registry.set(state.shellAtom, state.shell);
@@ -381,7 +408,29 @@ it.each([true, false])(
         agentLabel="Codex"
         latestRun={null}
         activeWorkStartedAt={null}
-        listRef={{ current: null }}
+        listRef={
+          {
+            current: {
+              clearCaches: state.clearSizes,
+              flashScrollIndicators: vi.fn(),
+              getAnimatableRef: vi.fn<LegendListRef["getAnimatableRef"]>(),
+              getNativeScrollRef: vi.fn<LegendListRef["getNativeScrollRef"]>(),
+              getScrollableNode: vi.fn(),
+              getScrollResponder: vi.fn<LegendListRef["getScrollResponder"]>(),
+              getState: vi.fn<LegendListRef["getState"]>(),
+              reportContentInset: vi.fn(),
+              scrollIndexIntoView: vi.fn<LegendListRef["scrollIndexIntoView"]>(),
+              scrollItemIntoView: vi.fn<LegendListRef["scrollItemIntoView"]>(),
+              scrollToEnd: vi.fn<LegendListRef["scrollToEnd"]>(),
+              scrollToIndex: vi.fn<LegendListRef["scrollToIndex"]>(),
+              scrollToItem: vi.fn<LegendListRef["scrollToItem"]>(),
+              scrollToOffset: vi.fn<LegendListRef["scrollToOffset"]>(),
+              setItemSize: vi.fn(),
+              setScrollProcessingEnabled: vi.fn(),
+              setVisibleContentAnchorOffset: vi.fn(),
+            },
+          } satisfies ComponentProps<typeof ThreadFeed>["listRef"]
+        }
         freeze={{ value: false } as ComponentProps<typeof ThreadFeed>["freeze"]}
         anchorMessageId={null}
         contentInsetEndAdjustment={
@@ -393,6 +442,11 @@ it.each([true, false])(
     const copyMessage = async () => {
       await act(async () => {
         container.querySelector<HTMLButtonElement>('[aria-label="Copy message"]')!.click();
+      });
+    };
+    const copyContext = async () => {
+      await act(async () => {
+        container.querySelector<HTMLButtonElement>('[aria-label="Copy context"]')!.click();
       });
     };
     try {
@@ -420,6 +474,18 @@ it.each([true, false])(
       expect(state.detailReads.mock.calls).toEqual([[threadId]]);
       expect(container.textContent?.match(/Keep thread to open media/g)).toHaveLength(4);
       expect(container.querySelectorAll("img")).toHaveLength(0);
+      expect.soft(container.querySelector<HTMLElement>('[data-row="html"]')?.style.height).toBe("");
+      expect
+        .soft(
+          container
+            .querySelector('[aria-label="Copy context"]')
+            ?.getAttribute("data-context-fragment"),
+        )
+        .toBeNull();
+      await copyContext();
+      expect.soft(state.copyContext).not.toHaveBeenCalled();
+      state.copyContext.mockClear();
+      state.alert.mockClear();
       await copyMessage();
       expect.soft(state.copyContext).not.toHaveBeenCalled();
       expect.soft(state.copyText).toHaveBeenCalledWith("Copy context");
@@ -429,6 +495,10 @@ it.each([true, false])(
         setTemporaryThread(environmentId, threadId, false);
       });
       if (temporary) {
+        await copyContext();
+        expect.soft(state.copyContext).not.toHaveBeenCalled();
+        state.copyContext.mockClear();
+        state.alert.mockClear();
         await copyMessage();
         expect.soft(state.copyContext).not.toHaveBeenCalled();
         expect.soft(state.copyText).toHaveBeenCalledWith("Copy context");
@@ -451,6 +521,25 @@ it.each([true, false])(
       expect(container.textContent).not.toContain("Keep thread to open media");
       expect(container.textContent).toContain("HTML media");
       expect(container.textContent).toContain("MCP media");
+      expect
+        .soft(container.querySelector<HTMLElement>('[data-row="html"]')?.style.height)
+        .toBe("100px");
+      expect.soft(state.clearSizes).toHaveBeenCalledWith({ mode: "sizes" });
+      expect
+        .soft(
+          container
+            .querySelector('[aria-label="Copy context"]')
+            ?.getAttribute("data-context-fragment"),
+        )
+        .toContain("private clipboard sentinel");
+      await copyContext();
+      expect.soft(state.copyContext).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          records: [expect.objectContaining({ text: "private clipboard sentinel" })],
+        }),
+      );
+      state.copyContext.mockClear();
       expect(Array.from(container.querySelectorAll("img"), (image) => image.alt)).toEqual([
         "Markdown image",
         "Viewed image",
@@ -476,6 +565,10 @@ it.each([true, false])(
       });
       state.openPullRequest.mockClear();
       setTemporaryThread(environmentId, threadId, true);
+      await copyContext();
+      expect.soft(state.copyContext).not.toHaveBeenCalled();
+      state.copyContext.mockClear();
+      state.alert.mockClear();
       await copyMessage();
       expect.soft(state.copyContext).not.toHaveBeenCalled();
       expect.soft(state.copyText).toHaveBeenCalledWith("Copy context");
