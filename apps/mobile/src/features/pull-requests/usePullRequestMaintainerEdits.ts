@@ -20,12 +20,13 @@ export function usePullRequestMaintainerEdits(
   const update = useAtomCommand(composerPullRequests.update, { reportFailure: false });
   const refresh = useAtomRefresh(composerPullRequests.detail(target));
   const key = `${pr?.url}:${pr?.maintainerCanModify}`;
-  const [selection, setSelection] = useState({ key, value: pr?.maintainerCanModify ?? false });
-  if (selection.key !== key) {
-    setSelection({ key, value: pr?.maintainerCanModify ?? false });
-  }
-  const value = selection.key === key ? selection.value : (pr?.maintainerCanModify ?? false);
   const [saving, setSaving] = useState(false);
+  const [selection, setSelection] = useState({ key, value: pr?.maintainerCanModify ?? false });
+  const value =
+    selection.key === key || saving ? selection.value : (pr?.maintainerCanModify ?? false);
+  if (selection.key !== key) {
+    setSelection({ key, value });
+  }
   const inFlight = useRef(false);
   const visible = pr !== null && canEditPullRequestMaintainerEdits(pr);
   const save = async (next: boolean) => {

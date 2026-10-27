@@ -237,7 +237,7 @@ export function PullRequestActionsMenu({
         {showsMaintainerEdits && detail.maintainerCanModify !== undefined ? (
           <>
             <PullRequestMaintainerEdits
-              key={`${detail.url}:${detail.maintainerCanModify}`}
+              key={`${environmentId}:${detail.url}`}
               environmentId={environmentId}
               reference={reference}
               enabled={detail.maintainerCanModify}

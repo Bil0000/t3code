@@ -1,5 +1,6 @@
 import "~/index.css";
 import { EnvironmentId, ProjectId } from "@t3tools/contracts";
+import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
@@ -17,11 +18,18 @@ vi.mock(
 );
 
 vi.mock(import("../ui/toast"), () => ({ toastManager: { add: mocks.notify } }) as never);
+vi.mock(import("~/state/server"), async () => {
+  const { Atom } = await import("effect/reactivity");
+  return { primaryServerKeybindingsAtom: Atom.make([]) } as never;
+});
+vi.mock(import("./PullRequestThreadLinks"), () => ({ PullRequestThreadLinks: () => null }));
+vi.mock(
+  import("./PullRequestDetailActions"),
+  () => ({ ActOnEnvironmentPicker: () => null }) as never,
+);
 
 import { render } from "../../../test/render";
-import { Menu, MenuPopup, MenuTrigger } from "../ui/menu";
-
-import { PullRequestMaintainerEdits } from "./PullRequestMaintainerEdits";
+import { PullRequestActionsMenu } from "./PullRequestActionsMenu";
 
 const reference = { projectId: ProjectId.make("project"), repository: "owner/repo", number: 7 };
 const environmentId = EnvironmentId.make("environment");
@@ -30,19 +38,74 @@ function setup() {
   mocks.update.mockReset().mockResolvedValue({ _tag: "Success" });
   mocks.notify.mockReset();
   const onSaved = vi.fn();
-  const control = (allowed = true) => (
-    <Menu>
-      <MenuTrigger>More pull request actions</MenuTrigger>
-      <MenuPopup keepMounted>
-        <PullRequestMaintainerEdits
-          environmentId={environmentId}
-          reference={reference}
-          enabled={true}
-          allowed={allowed}
-          onSaved={onSaved}
-        />
-      </MenuPopup>
-    </Menu>
+  const control = (allowed = true, enabled = true) => (
+    <PullRequestActionsMenu
+      environmentId={environmentId}
+      reference={reference}
+      pullRequestKey="owner/repo/7"
+      detail={{
+        url: "https://github.com/owner/repo/pull/7",
+        state: "open",
+        isDraft: false,
+        headBranch: "feature",
+        maintainerCanModify: enabled,
+        capabilities: {
+          diff: true,
+          comment: true,
+          actions: [],
+          mergeMethods: [],
+          search: true,
+          review: { inlineComment: true, reply: true, resolve: true, verdicts: [] },
+          reviewers: { request: true, listCandidates: true },
+          edit: { changeRequest: true, comment: true, maintainerEdits: true },
+        },
+        viewerPermissions: {
+          actions: [],
+          comment: true,
+          resolve: true,
+          verdicts: [],
+          requestReviewers: true,
+          maintainerEdits: true,
+        },
+      }}
+      terminology={sourceControlClients.get("github").changeRequest}
+      linkThreadRef={null}
+      onThreadPickerOpenChange={() => {}}
+      refreshing={false}
+      refreshFromHost={async () => {}}
+      handoff={null}
+      attachesToComposer={false}
+      askAboutPullRequest={() => {}}
+      explainPullRequest={() => {}}
+      canFixFindings={false}
+      startFixFindings={() => {}}
+      handoffLabels={{ fixFindings: "Fix review findings" }}
+      canWriteGuide={false}
+      guideRunning={false}
+      guideWritten={false}
+      writeGuide={() => {}}
+      pickableEnvironments={[]}
+      actingEnvironmentId={environmentId}
+      onActingEnvironmentChange={() => {}}
+      can={() => false}
+      autoMergeArmed={false}
+      showsDraftToggle={false}
+      showsMergeNow={false}
+      showsAutoMerge={false}
+      showsMergeMethods={false}
+      allowedMergeMethods={[]}
+      selectedMergeMethod="squash"
+      onSelectMergeMethod={() => {}}
+      showsDeleteBranch={false}
+      environmentConnected={true}
+      canWriteSourceControl={allowed}
+      onMaintainerEditsSaved={onSaved}
+      confirmDeleteBranch={async () => {}}
+      pendingAction={null}
+      perform={async () => true}
+      openOnHostText="Open on GitHub"
+      copyReference={() => {}}
+    />
   );
   return { control, onSaved };
 }
@@ -127,4 +190,32 @@ it("blocks a session without source control write access", async () => {
   await screen.getByRole("button", { name: "More pull request actions" }).click();
   await expect.element(page.getByRole("menuitemcheckbox")).toHaveAttribute("aria-disabled", "true");
   expect(mocks.update).not.toHaveBeenCalled();
+});
+
+it("keeps a second save locked when the first save's refresh arrives", async () => {
+  const { control, onSaved } = setup();
+  await using screen = await render(control());
+  await screen.getByRole("button", { name: "More pull request actions" }).click();
+  const checkbox = page.getByRole("menuitemcheckbox");
+  await checkbox.click();
+  await vi.waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
+  let settle!: (value: { _tag: "Success" }) => void;
+  mocks.update.mockReturnValueOnce(
+    new Promise<{ _tag: "Success" }>((resolve) => {
+      settle = resolve;
+    }),
+  );
+  await checkbox.click();
+  await expect.element(checkbox).toHaveAttribute("aria-disabled", "true");
+  await screen.rerender(control(true, false));
+  await expect.element(checkbox).toHaveAttribute("aria-disabled", "true");
+  await expect.element(checkbox).toBeChecked();
+  await userEvent.keyboard("{Enter}");
+  expect(mocks.update).toHaveBeenCalledTimes(2);
+  settle({ _tag: "Success" });
+  await expect.element(checkbox).not.toHaveAttribute("aria-disabled", "true");
+  await expect.element(checkbox).toBeChecked();
+  await screen.rerender(control(true, true));
+  await screen.rerender(control(true, false));
+  await expect.element(checkbox).not.toBeChecked();
 });

@@ -23,6 +23,11 @@ export function PullRequestMaintainerEdits({
   const update = useAtomCommand(pullRequestEnvironment.update, { reportFailure: false });
   const [value, setValue] = useState(enabled);
   const [saving, setSaving] = useState(false);
+  const [observedValue, setObservedValue] = useState(enabled);
+  if (observedValue !== enabled) {
+    setObservedValue(enabled);
+    if (!saving) setValue(enabled);
+  }
   const inFlight = useRef(false);
   const save = async (next: boolean) => {
     if (!allowed || inFlight.current) return;

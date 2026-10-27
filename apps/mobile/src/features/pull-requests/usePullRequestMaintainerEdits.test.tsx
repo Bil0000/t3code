@@ -53,7 +53,7 @@ function setup() {
   mocks.permission = Atom.make(true);
   mocks.detail = Atom.make(null);
   const registry = AtomRegistry.make();
-  const detail: PullRequestDetail = {
+  let detail: PullRequestDetail = {
     provider: SourceControlProviderKind.make("github"),
     projectId: ProjectId.make("project"),
     projectTitle: "Project",
@@ -127,7 +127,13 @@ function setup() {
     );
   render();
   return {
-    detail,
+    get detail() {
+      return detail;
+    },
+    refresh(enabled: boolean) {
+      detail = { ...detail, maintainerCanModify: enabled };
+      render();
+    },
     render,
     registry,
     get current() {
@@ -165,4 +171,27 @@ it("saves an explicit maintainer grant without a viewer login, while honoring lo
   expect(screen.current.disabled).toBe(true);
   await act(async () => screen.current.toggle());
   expect(mocks.update).toHaveBeenCalledTimes(1);
+});
+
+it("keeps a newer selection when an earlier save's refresh arrives", async () => {
+  using screen = setup();
+  await act(async () => screen.current.toggle());
+  expect(screen.current.value).toBe(true);
+  let settle!: (value: { _tag: "Success" }) => void;
+  mocks.update.mockReturnValueOnce(
+    new Promise<{ _tag: "Success" }>((resolve) => {
+      settle = resolve;
+    }),
+  );
+  await act(async () => screen.current.toggle());
+  expect(screen.current.value).toBe(false);
+  screen.refresh(true);
+  expect(screen.current.disabled).toBe(true);
+  expect(screen.current.value).toBe(false);
+  await act(async () => screen.current.toggle());
+  expect(mocks.update).toHaveBeenCalledTimes(2);
+  await act(async () => settle({ _tag: "Success" }));
+  expect(screen.current.value).toBe(false);
+  screen.refresh(false);
+  expect(screen.current.value).toBe(false);
 });
