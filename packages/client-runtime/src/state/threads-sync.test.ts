@@ -2300,6 +2300,9 @@ describe("temporary thread persistence", () => {
 
   it.effect("keeps the full sentinel in RAM without queued or finalizer disk writes", () =>
     Effect.gen(function* () {
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => forgetTemporaryThread(TARGET.environmentId, THREAD_ID)),
+      );
       const scope = yield* Scope.make();
       const resumeCache: NonNullable<Parameters<typeof makeEnvironmentThreadState>[1]> = {
         snapshot: undefined,
@@ -2325,6 +2328,7 @@ describe("temporary thread persistence", () => {
 describe("thread storage generations", () => {
   it.effect("resets the resume cursor when Keep moves to durable storage", () =>
     Effect.gen(function* () {
+      expect(isTemporaryThread(TARGET.environmentId, THREAD_ID)).toBe(false);
       const harness = yield* makeHarness();
       expect((yield* Queue.take(harness.subscribed)).acceptTemporaryThreads).toBe(true);
       yield* Queue.offer(harness.inputs, {
