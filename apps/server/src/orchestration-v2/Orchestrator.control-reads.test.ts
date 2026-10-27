@@ -1434,42 +1434,30 @@ it.effect("explicit settle clears snooze atomically and stays idempotent after r
   }).pipe(Effect.provide(layerTest)),
 );
 
-it.effect(
-  "registers temporary roots before engine receipts and preserves the temporary flag",
-  () => {
-    const threadId = ThreadId.make("thread:temporary-root");
-    const owned = new Set<ThreadId>();
-    const storageLayer = Layer.mock(TemporaryThreadStorage.TemporaryThreadStorage)({
-      register: ({ threadId: id }) =>
-        Effect.sync(() => {
-          owned.add(id);
-        }),
-      isTemporary: (id) => Effect.sync(() => owned.has(id)),
-      isDiscarded: () => Effect.succeed(false),
-      family: (id) => Effect.succeed([id]),
+it.effect("commits temporary roots with storage ownership and preserves the temporary flag", () => {
+  const threadId = ThreadId.make("thread:temporary-root");
+  return Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    yield* orchestrator.dispatch({
+      type: "thread.create",
+      temporary: true,
+      threadId,
+      commandId: CommandId.make("temporary-root-create"),
+      projectId: ProjectId.make("project:temporary"),
+      title: "Temporary",
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdBy: "user",
+      creationSource: "web",
     });
-    return Effect.gen(function* () {
-      const orchestrator = yield* Orchestrator.OrchestratorV2;
-      yield* orchestrator.dispatch({
-        type: "thread.create",
-        temporary: true,
-        threadId,
-        commandId: CommandId.make("temporary-root-create"),
-        projectId: ProjectId.make("project:temporary"),
-        title: "Temporary",
-        modelSelection,
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        branch: null,
-        worktreePath: null,
-        createdBy: "user",
-        creationSource: "web",
-      });
-      assert.isTrue(owned.has(threadId));
-      assert.isTrue((yield* orchestrator.getThreadRecords(threadId, [])).thread.temporary);
-    }).pipe(Effect.provide(layerTest.pipe(Layer.provide(storageLayer))));
-  },
-);
+    const storage = yield* TemporaryThreadStorage.TemporaryThreadStorage;
+    assert.isTrue(yield* storage.isTemporary(threadId));
+    assert.isTrue((yield* orchestrator.getThreadRecords(threadId, [])).thread.temporary);
+  }).pipe(Effect.provide(layerTemporaryTest));
+});
 
 it.effect.each(["missing", "accepted", "rejected"] as const)(
   "temporary fork rejects a %s receipt without registering its target",
@@ -1591,9 +1579,9 @@ it.effect.each(["invalid-parent", "accepted-replay", "rejected-replay"] as const
     }).pipe(Effect.provide(layerTemporaryTest)),
 );
 
-it.effect(
-  "temporary child creation inherits storage ownership and closed families reject new work",
-  () =>
+it.effect.each([false, true])(
+  "temporary child creation inherits ownership after transaction failure=%s and closed families reject new work",
+  (failFirst) =>
     Effect.gen(function* () {
       const parentThreadId = yield* createTemporaryParent;
       const orchestrator = yield* Orchestrator.OrchestratorV2;
@@ -1626,6 +1614,22 @@ it.effect(
         createdBy: "agent",
         creationSource: "mcp",
       } as const;
+      if (failFirst) {
+        const eventsBefore = yield* stores.volatile.sql`SELECT * FROM orchestration_events`;
+        yield* stores.volatile
+          .sql`CREATE TRIGGER reject_child BEFORE INSERT ON orchestration_v2_projection_threads BEGIN SELECT RAISE(ABORT, 'test child failure'); END`;
+        const error = yield* orchestrator.dispatch(command).pipe(Effect.flip);
+        assert.instanceOf(error, Orchestrator.OrchestratorDispatchError);
+        assert.deepEqual(yield* storage.family(parentThreadId), [parentThreadId]);
+        assert.deepEqual(
+          yield* stores.volatile.sql`SELECT * FROM orchestration_events`,
+          eventsBefore,
+        );
+        assert.isTrue(
+          Option.isNone(yield* stores.volatile.commandReceipts.getByCommandId(command.commandId)),
+        );
+        yield* stores.volatile.sql`DROP TRIGGER reject_child`;
+      }
       const accepted = yield* orchestrator.dispatch(command);
       const updated = yield* orchestrator.getThreadRecords(parentThreadId, ["subagents"]);
       const childId = updated.subagents[0]!.childThreadId!;
@@ -1708,7 +1712,7 @@ it.effect.each([
   ([operation, target, temporary, rejects]) => {
     const threadId = ThreadId.make("thread:temporary-provider-switch");
     const otherSelection = { instanceId: ProviderInstanceId.make(target), model: "test" };
-    const owned = new Set<ThreadId>();
+    const owned = new Set<ThreadId>(temporary ? [threadId] : []);
     const storageLayer = Layer.mock(TemporaryThreadStorage.TemporaryThreadStorage)({
       register: ({ threadId: id }) =>
         Effect.sync(() => {

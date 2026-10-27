@@ -911,6 +911,7 @@ it.effect.each([
         } satisfies ModelSelection;
         for (const [index, temporary] of [firstTemporary, secondTemporary].entries()) {
           const threadId = ThreadId.make(`temporary-session-allocation-${index}`);
+          if (temporary) owned.add(threadId);
           yield* orchestrator.dispatch({
             type: "thread.create",
             commandId: CommandId.make(`allocation-create-${index}`),

@@ -570,6 +570,40 @@ it.effect.each(
   }).pipe(Effect.provide(layerTemporaryCreateTest)),
 );
 
+it.effect.each([false, true])(
+  "failed temporary transaction preserves reservation=%s and permits retry",
+  (reserved) =>
+    Effect.gen(function* () {
+      const threads = yield* ThreadManagementService.ThreadManagementService;
+      const storage = yield* TemporaryThreadStorage.TemporaryThreadStorage;
+      const stores = yield* TemporaryThreadStorage.TemporaryThreadStores;
+      const diagnostics = yield* TemporaryThreadDiagnostics.TemporaryThreadDiagnostics;
+      const threadId = ThreadId.make("temporary-transaction-failure");
+      const command = temporaryCreateCommand(threadId);
+      if (reserved) yield* storage.register({ threadId });
+      yield* stores.volatile
+        .sql`CREATE TRIGGER reject_create BEFORE INSERT ON orchestration_v2_projection_threads BEGIN SELECT RAISE(ABORT, 'test create failure'); END`;
+      const error = yield* threads.dispatch(command).pipe(Effect.flip);
+      expect(error._tag).toBe("OrchestratorDispatchError");
+      expect(yield* storage.isTemporary(threadId)).toBe(reserved);
+      expect(yield* storage.isDiscarded(threadId)).toBe(false);
+      expect(diagnostics.hasTemporaryThreads()).toBe(reserved);
+      expect(diagnostics.canRecord()).toBe(!reserved);
+      for (const store of [stores.durable, stores.volatile]) {
+        expect(yield* store.projectionStore.getThreadShell(threadId)).toBeNull();
+        expect(Option.isNone(yield* store.commandReceipts.getByCommandId(command.commandId))).toBe(
+          true,
+        );
+        expect(yield* store.sql`SELECT * FROM orchestration_events`).toEqual([]);
+        expect(yield* store.sql`SELECT * FROM orchestration_v2_effect_outbox`).toEqual([]);
+      }
+      yield* stores.volatile.sql`DROP TRIGGER reject_create`;
+      yield* threads.dispatch(command);
+      expect((yield* stores.volatile.projectionStore.getThread(threadId)).temporary).toBe(true);
+      expect(yield* stores.durable.projectionStore.getThreadShell(threadId)).toBeNull();
+    }).pipe(Effect.provide(layerTemporaryCreateTest)),
+);
+
 it.effect("temporary create stays volatile through replay and becomes durable on Keep", () =>
   Effect.gen(function* () {
     const threads = yield* ThreadManagementService.ThreadManagementService;

@@ -419,50 +419,60 @@ const make = Effect.gen(function* () {
     isTemporaryThreadStorageError(cause)
       ? cause
       : new TemporaryThreadStorageError({ operation, threadId, cause });
-  const storage = TemporaryThreadStorage.of({
-    register: Effect.fn("TemporaryThreadStorage.register")(function* ({
-      threadId,
-      parentThreadId,
-    }) {
-      let entered = false;
-      yield* locked(
-        Effect.gen(function* () {
-          if (
-            owners.get(threadId)?.state === "discarded" ||
-            (parentThreadId !== undefined && owners.get(parentThreadId)?.state === "discarded")
-          )
-            return yield* new TemporaryThreadStorageError({ operation: "discarded", threadId });
-          if (owners.has(threadId)) return;
-          if (parentThreadId !== undefined && !temporary(parentThreadId)) return;
-          if (Option.isSome(diagnostics)) {
-            diagnostics.value.enter(threadId);
-            entered = true;
-          }
-          const exists =
-            yield* durable.sql`SELECT 1 FROM orchestration_v2_projection_threads WHERE thread_id = ${threadId}`;
-          if (exists.length > 0) return yield* new TemporaryThreadAlreadyDurableError({ threadId });
-          const parent = parentThreadId === undefined ? undefined : owners.get(parentThreadId);
-          if (parent?.state === "discarding")
-            return yield* new TemporaryThreadStorageError({ operation: "discarding", threadId });
-          const generation = parent?.generation ?? nextGeneration();
-          yield* mirrorProjects();
-          owners.set(threadId, { root: parent?.root ?? threadId, state: "temporary", generation });
-          yield* emit("registered", [threadId], generation);
+  const registerOwner = Effect.fn("TemporaryThreadStorage.registerOwner")(function* ({
+    threadId,
+    parentThreadId,
+  }: Parameters<TemporaryThreadStorage["Service"]["register"]>[0]) {
+    let entered = false;
+    return yield* Effect.gen(function* () {
+      if (
+        owners.get(threadId)?.state === "discarded" ||
+        (parentThreadId !== undefined && owners.get(parentThreadId)?.state === "discarded")
+      )
+        return yield* new TemporaryThreadStorageError({ operation: "discarded", threadId });
+      if (owners.has(threadId)) return false;
+      if (parentThreadId !== undefined && !temporary(parentThreadId)) return false;
+      if (Option.isSome(diagnostics)) {
+        diagnostics.value.enter(threadId);
+        entered = true;
+      }
+      const exists =
+        yield* durable.sql`SELECT 1 FROM orchestration_v2_projection_threads WHERE thread_id = ${threadId}`;
+      if (exists.length > 0) return yield* new TemporaryThreadAlreadyDurableError({ threadId });
+      const parent = parentThreadId === undefined ? undefined : owners.get(parentThreadId);
+      if (parent?.state === "discarding")
+        return yield* new TemporaryThreadStorageError({ operation: "discarding", threadId });
+      const generation = parent?.generation ?? nextGeneration();
+      yield* mirrorProjects();
+      owners.set(threadId, { root: parent?.root ?? threadId, state: "temporary", generation });
+      return true;
+    }).pipe(
+      Effect.onError(() =>
+        Effect.sync(() => {
+          if (entered && !temporary(threadId) && Option.isSome(diagnostics))
+            diagnostics.value.leave(threadId, true);
         }),
-      ).pipe(
-        Effect.onError(() =>
-          Effect.sync(() => {
-            if (entered && !temporary(threadId) && Option.isSome(diagnostics))
-              diagnostics.value.leave(threadId, true);
-          }),
+      ),
+      Effect.mapError((cause) =>
+        cause._tag === "TemporaryThreadAlreadyDurableError"
+          ? cause
+          : mapStorageError("register", threadId)(cause),
+      ),
+    );
+  });
+  const storage = TemporaryThreadStorage.of({
+    register: Effect.fn("TemporaryThreadStorage.register")((input) =>
+      locked(
+        registerOwner(input).pipe(
+          Effect.tap((created) =>
+            created
+              ? emit("registered", [input.threadId], owners.get(input.threadId)!.generation)
+              : Effect.void,
+          ),
+          Effect.asVoid,
         ),
-        Effect.mapError((cause) =>
-          cause._tag === "TemporaryThreadAlreadyDurableError"
-            ? cause
-            : mapStorageError("register", threadId)(cause),
-        ),
-      );
-    }),
+      ),
+    ),
     isTemporary: Effect.fn("TemporaryThreadStorage.isTemporary")((id) =>
       Effect.sync(() => temporary(id)),
     ),
@@ -756,15 +766,51 @@ const make = Effect.gen(function* () {
       );
     }),
     commitCommand: Effect.fnUntraced(function* (input) {
-      return yield* writeSink(
-        [input.threadId, ...eventIds(input.events), ...input.effects.map((e) => e.threadId)],
-        (s) =>
-          assertCommandOwner(s, input.commandId, input.threadId).pipe(
-            Effect.andThen(
-              s.eventSink.commitCommand({ ...input, events: input.events.map(markTemporary) }),
-            ),
+      const registered: Array<ThreadId> = [];
+      return yield* locked(
+        Effect.gen(function* () {
+          for (const event of input.events) {
+            if (event.type !== "thread.created") continue;
+            const parentThreadId = event.payload.lineage.parentThreadId;
+            if (
+              (input.commandType === "thread.create" && event.payload.temporary === true) ||
+              (input.commandType === "delegated_task.request" &&
+                parentThreadId !== null &&
+                temporary(parentThreadId))
+            ) {
+              if (
+                yield* registerOwner({
+                  threadId: event.threadId,
+                  ...(parentThreadId === null ? {} : { parentThreadId }),
+                })
+              )
+                registered.push(event.threadId);
+            }
+          }
+          const stores = yield* assertWritable([
+            input.threadId,
+            ...eventIds(input.events),
+            ...input.effects.map((e) => e.threadId),
+          ]);
+          yield* assertCommandOwner(stores, input.commandId, input.threadId);
+          const committed = yield* stores.eventSink.commitCommand({
+            ...input,
+            events: input.events.map(markTemporary),
+          });
+          for (const id of registered) yield* emit("registered", [id], owners.get(id)!.generation);
+          return committed;
+        }).pipe(
+          Effect.onError(() =>
+            Effect.sync(() => {
+              for (const id of registered) {
+                owners.delete(id);
+                if (Option.isSome(diagnostics)) diagnostics.value.leave(id, true);
+              }
+            }),
           ),
-      );
+          Effect.uninterruptible,
+        ),
+      ).pipe(Effect.mapError(sinkError));
     }),
     commitRejectedCommand: Effect.fnUntraced(function* (input) {
       return yield* writeSink([input.threadId], (s) =>

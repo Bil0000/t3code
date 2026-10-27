@@ -12422,33 +12422,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ),
     );
 
-    if (
-      command.type === "thread.create" &&
-      command.temporary === true &&
-      Option.isSome(temporaryStorage)
-    ) {
-      yield* mapDispatchError(command)(
-        temporaryStorage.value.register({ threadId: command.threadId }),
-      );
-    }
-
-    if (
-      command.type === "delegated_task.request" &&
-      Option.isSome(temporaryStorage) &&
-      (yield* temporaryStorage.value.isTemporary(command.parentThreadId))
-    ) {
-      for (const event of plan.events) {
-        if (event.type === "thread.created") {
-          yield* mapDispatchError(command)(
-            temporaryStorage.value.register({
-              threadId: event.threadId,
-              parentThreadId: command.parentThreadId,
-            }),
-          );
-        }
-      }
-    }
-
     if (plan.events.length === 0 && plan.effects.length === 0) {
       // A settle that ended nothing still records its receipt: a replayed Stop
       // effect then finds it instead of settling work that appeared since.
