@@ -2463,7 +2463,8 @@ it.effect(
         ...launchInput({ command: "missing-temporary-owner", thread: "missing-temporary-owner" }),
         temporary: true,
       };
-      assert.isTrue(Exit.isFailure(yield* Effect.exit(launches.launch(input))));
+      const error = yield* launches.launch(input).pipe(Effect.flip);
+      assert.equal(error.cause, "Temporary lifecycle ownership is unavailable.");
       assert.isNull(yield* threads.getThreadShell(input.threadId));
     }).pipe(Effect.provide(harness.layer.pipe(Layer.provide(layerStorage))));
   },
