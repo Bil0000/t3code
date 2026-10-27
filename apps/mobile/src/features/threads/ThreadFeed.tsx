@@ -2302,7 +2302,7 @@ export const ThreadFeed = memo(function ThreadFeed({
     );
   };
   const onMarkdownLinkPress = (href: string, imageEmbed = false) => {
-    if (isTemporaryThread(props.environmentId, props.threadId)) {
+    if (temporary || isTemporaryThread(props.environmentId, props.threadId)) {
       Dialog.alert("Keep thread first", "Keep this thread before opening media or links.");
       return;
     }
@@ -3031,7 +3031,7 @@ export const ThreadFeed = memo(function ThreadFeed({
   };
 
   const onPressPreview = (source: FilePreviewSource) => {
-    if (isTemporaryThread(props.environmentId, props.threadId)) {
+    if (temporary || isTemporaryThread(props.environmentId, props.threadId)) {
       Dialog.alert("Keep thread first", "Keep this thread before opening media.");
       return;
     }

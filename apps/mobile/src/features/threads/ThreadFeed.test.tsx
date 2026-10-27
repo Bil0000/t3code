@@ -7,6 +7,7 @@ import { RegistryContext } from "@effect/atom-react";
 import { AtomRegistry } from "effect/reactivity";
 import type { OrchestrationV2ThreadProjection } from "@t3tools/contracts";
 import { setTemporaryThread } from "@t3tools/client-runtime/temporary-threads";
+import type { FilePreviewSource } from "../../components/FilePreviewModal";
 
 const { JSDOM } = NodeModule.createRequire(import.meta.url)("jsdom") as {
   JSDOM: new (html: string) => { window: { document: Document; close(): void } };
@@ -19,6 +20,8 @@ const state = await vi.hoisted(async () => {
     shellAtom: Atom.make({ temporary: true }),
     listeners: new Set<() => void>(),
     detailReads: vi.fn(),
+    alert: vi.fn(),
+    openPullRequest: vi.fn(),
     projections: new Map<string, OrchestrationV2ThreadProjection>(),
   };
 });
@@ -87,7 +90,15 @@ vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
 vi.mock("../../native/SelectableMarkdownText", () => ({
   SelectableMarkdownText: (props: {
     renderImage: (image: { href: string; alt: string }) => ReactNode;
-  }) => props.renderImage({ href: "https://example.test/markdown.png", alt: "Markdown image" }),
+    onLinkPress: (href: string) => void;
+  }) => (
+    <>
+      <button aria-label="Open link" onClick={() => props.onLinkPress("https://example.test/link")}>
+        Open link
+      </button>
+      {props.renderImage({ href: "https://example.test/markdown.png", alt: "Markdown image" })}
+    </>
+  ),
 }));
 vi.mock("./ThreadMarkdownImage", () => ({
   MarkdownImageAvailableWidthContext: createContext(400),
@@ -103,8 +114,22 @@ vi.mock("./thread-work-log", () => ({
   THREAD_DISCLOSURE_TRANSITION_MS: 0,
   WORK_GROUP_TOGGLE_HEIGHT: 40,
   collapsedWorkLogHeight: () => 40,
-  ThreadWorkLog: (props: { renderImage: (image: { href: string }) => ReactNode }) =>
-    props.renderImage({ href: "viewed.png" }),
+  ThreadWorkLog: (props: {
+    renderImage: (image: { href: string }) => ReactNode;
+    onPressPreview: (source: FilePreviewSource) => void;
+  }) => (
+    <>
+      <button
+        aria-label="Open media"
+        onClick={() =>
+          props.onPressPreview({ kind: "image", uri: "https://example.test/preview.png" })
+        }
+      >
+        Open media
+      </button>
+      {props.renderImage({ href: "viewed.png" })}
+    </>
+  ),
 }));
 vi.mock("./HtmlRenderWebView", () => ({
   ThreadHtmlRender: () => <div>HTML media</div>,
@@ -182,10 +207,18 @@ vi.mock("../../state/threads", async () => {
   };
 });
 vi.mock("../../components/ui/Button", () => ({ Button: () => null }));
+vi.mock("../../components/ui/Dialog", () => ({ alert: state.alert }));
 vi.mock("../../components/ComposerContextSheet", () => ({ ComposerContextSheet: () => null }));
 vi.mock("../../components/ui/AppActivityIndicator", () => ({ AppActivityIndicator: () => null }));
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
-vi.mock("../../components/FilePreviewModal", () => ({ FilePreviewModal: () => null }));
+vi.mock("../../components/FilePreviewModal", () => ({
+  FilePreviewModal: (props: { source: FilePreviewSource | null; onRequestClose: () => void }) =>
+    props.source ? (
+      <button aria-label="Close media preview" onClick={props.onRequestClose}>
+        Close media preview
+      </button>
+    ) : null,
+}));
 vi.mock("../../components/VideoPreviewModal", () => ({ VideoPreviewModal: () => null }));
 vi.mock("../../components/VideoAttachmentTile", () => ({ VideoAttachmentTile: () => null }));
 vi.mock("../../components/MediaVideoPlayer", () => ({ MediaVideoPlayer: () => null }));
@@ -225,7 +258,9 @@ vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => null }));
 vi.mock("../../state/query", () => ({ useEnvironmentQuery: () => null }));
 vi.mock("../../state/v2-item-support", () => ({ useV2ItemSupport: () => null }));
 vi.mock("./useOpenLinkedThread", () => ({ useOpenLinkedThread: () => null }));
-vi.mock("../../native/useOpenPullRequest", () => ({ useOpenPullRequest: () => null }));
+vi.mock("../../native/useOpenPullRequest", () => ({
+  useOpenPullRequest: () => state.openPullRequest,
+}));
 vi.mock("../../native/NativeWorkspaceColumns", () => ({
   useNativeWorkspaceColumnsSupported: () => null,
 }));
@@ -242,13 +277,15 @@ import { ThreadFeed } from "./ThreadFeed";
 import { useWorkflowOpening } from "./thread-workflow-opening";
 
 it.each([true, false])(
-  "admits workflow detail after launch and opens guest details and media after Keep with shell temporary=%s",
+  "admits workflow detail and guards media and links through Keep with shell temporary=%s",
   async (temporary) => {
     const environmentId = EnvironmentId.make("env");
     const threadId = ThreadId.make("thread");
     state.shell = { temporary };
     state.listeners.clear();
     state.detailReads.mockClear();
+    state.alert.mockClear();
+    state.openPullRequest.mockClear();
     state.projections.clear();
     const registry = AtomRegistry.make();
     registry.set(state.shellAtom, state.shell);
@@ -325,6 +362,18 @@ it.each([true, false])(
       expect(container.querySelectorAll("img")).toHaveLength(0);
       await act(async () => {
         setTemporaryThread(environmentId, threadId, false);
+      });
+      if (temporary) {
+        await act(async () => {
+          container.querySelector<HTMLButtonElement>('[aria-label="Open link"]')!.click();
+          container.querySelector<HTMLButtonElement>('[aria-label="Open media"]')!.click();
+        });
+        expect.soft(state.openPullRequest).not.toHaveBeenCalled();
+        expect.soft(container.textContent).not.toContain("Close media preview");
+        expect.soft(state.alert).toHaveBeenCalledTimes(2);
+        state.alert.mockClear();
+      }
+      await act(async () => {
         state.shell = { temporary: false };
         registry.set(state.shellAtom, state.shell);
         for (const listener of state.listeners) listener();
@@ -336,6 +385,25 @@ it.each([true, false])(
         "Markdown image",
         "Viewed image",
       ]);
+      await act(async () => {
+        container.querySelector<HTMLButtonElement>('[aria-label="Open link"]')!.click();
+        container.querySelector<HTMLButtonElement>('[aria-label="Open media"]')!.click();
+      });
+      expect(state.openPullRequest.mock.calls).toEqual([["https://example.test/link"]]);
+      expect(container.textContent).toContain("Close media preview");
+      expect(state.alert).not.toHaveBeenCalled();
+      await act(async () => {
+        container.querySelector<HTMLButtonElement>('[aria-label="Close media preview"]')!.click();
+      });
+      state.openPullRequest.mockClear();
+      setTemporaryThread(environmentId, threadId, true);
+      await act(async () => {
+        container.querySelector<HTMLButtonElement>('[aria-label="Open link"]')!.click();
+        container.querySelector<HTMLButtonElement>('[aria-label="Open media"]')!.click();
+      });
+      expect(state.openPullRequest).not.toHaveBeenCalled();
+      expect(container.textContent).not.toContain("Close media preview");
+      expect(state.alert).toHaveBeenCalledTimes(2);
     } finally {
       await act(async () => root.unmount());
       registry.dispose();
