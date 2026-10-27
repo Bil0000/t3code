@@ -43,7 +43,7 @@ import {
   removePersistedComposerAttachmentFile,
 } from "../../lib/composerImages";
 import { appendComposerDraftAttachments } from "../../state/use-composer-drafts";
-import { AttachmentDocumentBody, nativeViewerKind } from "./AttachmentFileScreen";
+import { AttachmentDocumentBody, nativeViewerKind } from "./AttachmentDocumentBody";
 import { FilePreviewLoading } from "./FilePreviewFeedback";
 import {
   buildZipTree,
