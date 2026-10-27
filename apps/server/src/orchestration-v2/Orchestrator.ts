@@ -1054,19 +1054,20 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const providerSessionIdFor = Effect.fn("orchestrationV2.providerSessionIdFor")(function* (input: {
     readonly adapter: ProviderAdapter.ProviderAdapterV2["Service"];
     readonly providerInstanceId: ProviderInstanceId;
-    readonly threadId: ThreadId;
+    readonly thread: OrchestrationV2AppThread;
   }) {
     const capabilities = yield* input.adapter.getCapabilities();
     const temporary =
-      Option.isSome(temporaryStorage) &&
-      (yield* temporaryStorage.value.isTemporary(input.threadId));
+      input.thread.temporary === true ||
+      (Option.isSome(temporaryStorage) &&
+        (yield* temporaryStorage.value.isTemporary(input.thread.id)));
     return capabilities.sessions.supportsMultipleProviderThreadsPerSession && !temporary
       ? idAllocator.derive.providerSession({
           providerInstanceId: input.providerInstanceId,
         })
       : yield* idAllocator.allocate.providerSession({
           providerInstanceId: input.providerInstanceId,
-          threadId: input.threadId,
+          threadId: input.thread.id,
         });
   });
 
@@ -1877,7 +1878,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             providerSessionIdFor({
               adapter,
               providerInstanceId: queuedRun.providerInstanceId,
-              threadId,
+              thread: projection.thread,
             }),
           ),
           Effect.mapError(
@@ -4666,7 +4667,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           providerSessionIdFor({
             adapter: targetAdapter,
             providerInstanceId: input.modelSelection.instanceId,
-            threadId: input.command.threadId,
+            thread: input.projection.thread,
           }),
         ));
       const targetProviderThreadBase: OrchestrationV2ProviderThread =
@@ -5889,7 +5890,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           providerSessionIdFor({
             adapter,
             providerInstanceId: modelSelection.instanceId,
-            threadId: command.threadId,
+            thread: projection.thread,
           }),
         ));
       const providerThreadId =
@@ -6272,7 +6273,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         providerSessionIdFor({
           adapter,
           providerInstanceId: modelSelection.instanceId,
-          threadId: command.threadId,
+          thread: projection.thread,
         }),
       ));
     const existingProviderSession = projection.providerSessions.find(
@@ -12226,16 +12227,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             cause: "Keep this thread before merging it.",
           });
         }
-        if (command.type === "thread.fork" || command.type === "delegated_task.request") {
-          yield* mapDispatchError(command)(
-            storage.register({
-              threadId:
-                command.type === "thread.fork"
-                  ? command.targetThreadId
-                  : idAllocator.derive.delegatedTaskThread({ commandId: command.commandId }),
-              parentThreadId: sourceId,
-            }),
-          );
+        if (command.type === "thread.fork") {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "Keep this thread before using this operation.",
+          });
         }
       }
     }
@@ -12388,6 +12385,23 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       yield* mapDispatchError(command)(
         temporaryStorage.value.register({ threadId: command.threadId }),
       );
+    }
+
+    if (
+      command.type === "delegated_task.request" &&
+      Option.isSome(temporaryStorage) &&
+      (yield* temporaryStorage.value.isTemporary(command.parentThreadId))
+    ) {
+      for (const event of plan.events) {
+        if (event.type === "thread.created") {
+          yield* mapDispatchError(command)(
+            temporaryStorage.value.register({
+              threadId: event.threadId,
+              parentThreadId: command.parentThreadId,
+            }),
+          );
+        }
+      }
     }
 
     if (plan.events.length === 0 && plan.effects.length === 0) {
