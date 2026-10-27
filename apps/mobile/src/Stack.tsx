@@ -1,5 +1,6 @@
 import { useTemporaryThreadViews } from "./state/use-temporary-thread-views";
-import { isDraftThreadRoute } from "./features/threads/thread-route-state";
+import { isDraftThreadRoute, selectedChatRoute } from "./features/threads/thread-route-state";
+import { useAtomValue } from "@effect/atom-react";
 import { ComponentCatalogScreen } from "./features/development/ComponentCatalogScreen";
 import { PullRequestGuideStopScreen } from "./features/pull-requests/guide/PullRequestGuideScreen";
 import { PullRequestInlineCommentScreen } from "./features/pull-requests/PullRequestInlineCommentScreen";
@@ -89,7 +90,12 @@ import {
   ExistingThreadSettingsRouteScreen,
   NewTaskThreadSettingsRouteScreen,
 } from "./features/threads/ThreadSettingsSheet";
-import { NewTaskFlowProvider, useNewTaskFlow } from "./features/threads/new-task-flow-provider";
+import { NewTaskFlowProvider } from "./features/threads/new-task-flow-provider";
+import {
+  INACTIVE_FLOW_KEY,
+  newTaskFlowKey,
+  newTaskFlowStateAtom,
+} from "./features/threads/new-task-flow-state";
 import { NewTaskRouteScreen } from "./features/threads/NewTaskRouteScreen";
 import { SettingsNavigationRouteScreen } from "./features/settings/SettingsNavigationRouteScreen";
 import { SettingsAppearanceRouteScreen } from "./features/settings/SettingsAppearanceRouteScreen";
@@ -483,16 +489,25 @@ export function workspaceLocationFromState(state: NavigationState) {
       ? ({ ...state, routes, index: routes.length - 1 } as NavigationState)
       : state;
   const path = getPathFromState(effectiveState, navigationPathConfig);
+  const route = effectiveState.routes[effectiveState.index];
   return {
     pathname: path.startsWith("/") ? path : `/${path}`,
-    routeKey: effectiveState.routes[effectiveState.index]?.key,
+    routeKey: route?.key,
+    routeName: route?.name,
+    routeKeys: effectiveState.routes.map((stackRoute) => stackRoute.key),
   };
 }
 
 function TemporaryThreadViewWorker(props: { readonly state: NavigationState }) {
-  const flow = useNewTaskFlow();
+  const route = selectedChatRoute(props.state, Platform.OS);
+  const flowKey =
+    route?.key === undefined ? undefined : newTaskFlowKey({ ...route, key: route.key });
+  const flow = useAtomValue(newTaskFlowStateAtom(flowKey ?? INACTIVE_FLOW_KEY));
+  const routeDraftId = isDraftThreadRoute(route) ? route.params.draft.draftId : undefined;
+  const draftKey =
+    flow.draftKey ?? (Array.isArray(routeDraftId) ? routeDraftId[0] : routeDraftId) ?? null;
   const navigation = useNavigation();
-  useTemporaryThreadViews(props.state, flow.draftKey, navigation);
+  useTemporaryThreadViews(props.state, draftKey, navigation);
   return null;
 }
 
@@ -508,7 +523,12 @@ function RootStackLayout(props: {
       .slice(0, props.state.index + 1)
       .filter((route) => !isWorkspaceOverlayRoute(route.name)),
   );
-  const draftRoute = props.state.routes.findLast((route) => route.name === "Thread");
+  // The flow follows the draft route even while a pushed Thread covers it, so
+  // its state lives exactly as long as the route.
+  const draftRoute = props.state.routes.findLast(isDraftThreadRoute);
+  const draftRouteOnTop =
+    draftRoute !== undefined &&
+    props.state.routes.findLast((route) => route.name === "Thread") === draftRoute;
   const draftParams = (
     draftRoute?.params as { draft?: { draftId?: string | string[] } } | undefined
   )?.draft;
@@ -517,7 +537,11 @@ function RootStackLayout(props: {
     : draftParams?.draftId;
 
   return (
-    <NewTaskFlowProvider active={isDraftThreadRoute(draftRoute)} routeDraftId={routeDraftId}>
+    <NewTaskFlowProvider
+      active={draftRouteOnTop}
+      flowKey={draftRoute === undefined ? undefined : newTaskFlowKey(draftRoute)}
+      routeDraftId={routeDraftId}
+    >
       <HardwareKeyboardCommandProvider pathname={pathname}>
         <TemporaryThreadViewWorker state={props.state} />
         <ShowcaseCaptureCoordinator pathname={pathname} />
@@ -527,6 +551,8 @@ function RootStackLayout(props: {
               <AdaptiveWorkspaceLayout
                 pathname={workspaceLocation.pathname}
                 workspaceRouteKey={workspaceLocation.routeKey}
+                workspaceRouteName={workspaceLocation.routeName}
+                workspaceRouteKeys={workspaceLocation.routeKeys}
                 selectedPullRequestKey={selectedPullRequestKey(props.state)}
               >
                 {props.children}

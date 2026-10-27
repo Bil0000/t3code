@@ -1,6 +1,10 @@
 import { AsyncResult, Atom } from "effect/reactivity";
 import { CommandId, EnvironmentId, MessageId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
+import { act, createElement } from "react";
+import { createRoot } from "react-dom/client";
+import * as NodeModule from "node:module";
+import type { NavigationState } from "@react-navigation/native";
 import type { QueuedThreadMessage } from "./thread-outbox-model";
 import type { ThreadNavigationState } from "../features/threads/thread-route-state";
 
@@ -10,8 +14,12 @@ const transport = vi.hoisted(() => ({
   write: async () => {},
 }));
 
+const draftState = vi.hoisted(() => ({
+  drafts: {} as Record<string, { text: string; temporary?: boolean }>,
+}));
+
 vi.mock("react-native", () => ({
-  AppState: { currentState: "active" },
+  AppState: { currentState: "active", addEventListener: () => ({ remove: () => {} }) },
   Platform: {
     get OS() {
       return transport.platform;
@@ -27,12 +35,16 @@ vi.mock("@t3tools/client-runtime/state/runtime", () => ({
   ) => transport.send(input),
 }));
 vi.mock("./threads", () => ({ threadEnvironment: { updateTemporaryViews: {} } }));
-vi.mock("./use-remote-environment-registry", () => ({ useRemoteConnectionStatus: () => ({}) }));
+vi.mock("./use-remote-environment-registry", () => ({
+  useRemoteConnectionStatus: () => ({ connectedEnvironments: [] }),
+}));
 vi.mock("./entities", () => ({ useThreadShells: () => [] }));
 vi.mock("./use-composer-drafts", () => ({
-  clearComposerDraft: () => {},
+  clearComposerDraft: (key: string) => {
+    delete draftState.drafts[key];
+  },
   composerDraftsAtom: Atom.make({}),
-  isTemporaryComposerDraft: () => false,
+  isTemporaryComposerDraft: (key: string) => draftState.drafts[key]?.temporary === true,
 }));
 vi.mock("../lib/uuid", () => ({ uuidv4: () => "mobile-view" }));
 vi.mock("./thread-outbox", async () => {
@@ -58,7 +70,90 @@ import {
   isTemporaryThreadViewOpen,
   reconcileTemporaryThreadViews,
   startThreadTurnWithTemporaryView,
+  useTemporaryThreadViews,
 } from "./use-temporary-thread-views";
+
+const { JSDOM } = NodeModule.createRequire(import.meta.url)("jsdom") as {
+  JSDOM: new (html: string) => { window: { document: Document; close(): void } };
+};
+
+it.each([
+  ["ios", "draft"],
+  ["ios", "live"],
+  ["android", "draft"],
+  ["android", "live"],
+])(
+  "clears a private draft on %s when a %s chat covers it, preserving saved drafts and same-chat overlays",
+  async (platform, destination) => {
+    transport.platform = platform;
+    transport.send = async () => AsyncResult.success(undefined);
+    draftState.drafts = {
+      "new-task:private-a": { text: "Private", temporary: true },
+      "new-task:saved-a": { text: "Saved" },
+    };
+    const dom = new JSDOM("<html><body></body></html>");
+    vi.stubGlobal("window", dom.window);
+    vi.stubGlobal("document", dom.window.document);
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const root = createRoot(document.createElement("div"));
+    let state: NavigationState;
+    const navigation = {
+      getState: () => state,
+      addListener: () => () => {},
+    };
+    function Probe({ draftKey }: { draftKey: string | null }) {
+      useTemporaryThreadViews(state, draftKey, navigation);
+      return null;
+    }
+    const routeA = { key: "draft-a", name: "Thread", params: { draft: {} } };
+    const render = (routes: NavigationState["routes"], draftKey: string | null) => {
+      state = {
+        stale: false,
+        type: "stack",
+        key: "stack",
+        routeNames: [],
+        index: routes.length - 1,
+        routes,
+      };
+      act(() => root.render(createElement(Probe, { draftKey })));
+    };
+    try {
+      render([routeA], "new-task:private-a");
+      for (const name of ["Connections", "SettingsAuth", "NewTaskProject"]) {
+        render([routeA, { key: name, name }], "new-task:private-a");
+        expect(draftState.drafts["new-task:private-a"]?.text).toBe("Private");
+      }
+      render(
+        [
+          routeA,
+          {
+            key: "chat-b",
+            name: "Thread",
+            params:
+              destination === "draft" ? { draft: {} } : { environmentId: "env", threadId: "other" },
+          },
+        ],
+        destination === "draft" ? "new-task:draft-b" : null,
+      );
+      expect(draftState.drafts["new-task:private-a"]).toBeUndefined();
+
+      render([routeA], "new-task:saved-a");
+      render(
+        [
+          routeA,
+          { key: "live-b", name: "Thread", params: { environmentId: "env", threadId: "other" } },
+        ],
+        null,
+      );
+      expect(draftState.drafts["new-task:saved-a"]?.text).toBe("Saved");
+    } finally {
+      await act(async () => root.unmount());
+      await reconcileTemporaryThreadViews();
+      vi.unstubAllGlobals();
+      dom.window.close();
+    }
+  },
+);
 
 function deferred() {
   let resolve!: () => void;

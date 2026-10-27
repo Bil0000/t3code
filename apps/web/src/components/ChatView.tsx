@@ -1630,7 +1630,7 @@ export default function ChatView(props: ChatViewProps) {
     (model) => model.slug === providerSubagentModelSlug,
   );
   const providerSubagentModelLabel = providerSubagentCatalogModel
-    ? getTriggerDisplayModelName(providerSubagentCatalogModel)
+    ? getTriggerDisplayModelName(providerSubagentCatalogModel, selectedProviderEntry?.driverKind)
     : formatModelSlugName(activeThread?.modelSelection.model ?? "");
   const providerSubagentEffortLabel =
     activeThread === undefined
