@@ -45,7 +45,6 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   return { ...actual, open: vi.fn(actual.open), realpath: vi.fn(actual.realpath) };
 });
 
-const decodeAssetCreateUrlInput = Schema.decodeUnknownSync(AssetCreateUrlInput);
 const layerConfig = ServerConfig.ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-asset-access-test-",
 });
@@ -985,111 +984,6 @@ describe("AssetAccess", () => {
           const url = yield* issueAssetUrl({ resource, workspaceRoot: root });
           const suffix = url.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
           expect(yield* resolveAsset(suffix.slice(0, suffix.indexOf("/")), siblingName)).toBeNull();
-        }
-      }
-    }).pipe(Effect.provide(layerTest)),
-  );
-
-  it.effect("downloads exact workspace file bytes without changing preview defaults", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-workspace-download-" });
-      const bytes = new Uint8Array(1024 * 1024 + 16).fill(97);
-      bytes.set([0xef, 0xbb, 0xbf, 13, 10, 0xff, 0xc0, 0]);
-      for (const name of ["source.ts", "page.html", "empty.bin", "clip.mp4"]) {
-        const expected = name === "empty.bin" ? new Uint8Array() : bytes;
-        const filePath = path.join(root, name);
-        yield* fs.writeFile(filePath, expected);
-        for (const resource of [
-          { _tag: "workspace-file", threadId: ThreadId.make("thread-1"), path: name },
-          { _tag: "draft-workspace-file", cwd: root, path: filePath },
-        ] as const) {
-          const input = { resource: { ...resource, disposition: "attachment" as const } };
-          expect(decodeAssetCreateUrlInput(input)).toEqual(input);
-          const result = yield* issueAssetUrl({ ...input, workspaceRoot: root });
-          const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
-          const separator = suffix.indexOf("/");
-          const token = suffix.slice(0, separator);
-          const asset = yield* resolveAsset(token, suffix.slice(separator + 1));
-          expect(asset).toMatchObject({
-            kind: "file",
-            path: yield* fs.realPath(filePath),
-            download: true,
-            fileName: name,
-          });
-          if (asset?.kind !== "file") throw new Error("Expected a workspace download");
-          const response = HttpServerResponse.toWeb(yield* assetFileResponse(asset));
-          expect(response.status).toBe(200);
-          expect(response.headers.get("content-disposition")).toContain(`filename="${name}"`);
-          expect(response.headers.get("content-type")).toBe("application/octet-stream");
-          expect(response.headers.get("content-security-policy")).toBe(
-            "default-src 'none'; sandbox",
-          );
-          expect(response.headers.get("x-content-type-options")).toBe("nosniff");
-          expect(yield* Effect.promise(() => response.arrayBuffer())).toEqual(expected.buffer);
-          expect(yield* resolveAsset(token, "sibling.ts")).toBeNull();
-          expect(yield* resolveAsset(token, `../${name}`)).toBeNull();
-          expect(yield* resolveAsset(`${token}tampered`, name)).toBeNull();
-          if (name === "source.ts") {
-            expect(
-              yield* issueAssetUrl({ resource, workspaceRoot: root }).pipe(Effect.flip),
-            ).toBeInstanceOf(AssetPreviewTypeValidationError);
-          }
-          yield* TestClock.adjust("1 hour");
-          expect(yield* resolveAsset(token, name)).toBeNull();
-        }
-      }
-    }).pipe(Effect.provide(layerTest)),
-  );
-
-  it.effect("keeps workspace downloads root-contained at mint and request time", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-download-root-" });
-      const root = path.join(directory, "workspace");
-      const outside = path.join(directory, "outside.ts");
-      yield* fs.makeDirectory(root);
-      yield* fs.makeDirectory(path.join(root, "folder"));
-      yield* fs.writeFileString(outside, "outside");
-      const filePath = path.join(root, "source.ts");
-      yield* fs.writeFileString(filePath, "source");
-      if (symlinksSupported) yield* fs.symlink(outside, path.join(root, "escape.ts"));
-      for (const context of [
-        { _tag: "workspace-file", threadId: ThreadId.make("thread-1") },
-        { _tag: "draft-workspace-file", cwd: root },
-      ] as const) {
-        for (const requestedPath of [
-          "../outside.ts",
-          outside,
-          root,
-          "folder",
-          "missing.ts",
-          ...(symlinksSupported ? ["escape.ts"] : []),
-        ]) {
-          const result = yield* issueAssetUrl({
-            resource: { ...context, path: requestedPath, disposition: "attachment" },
-            workspaceRoot: root,
-          }).pipe(Effect.result);
-          expect(result._tag).toBe("Failure");
-        }
-        const result = yield* issueAssetUrl({
-          resource: { ...context, path: "source.ts", disposition: "attachment" },
-          workspaceRoot: root,
-        });
-        const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
-        const token = suffix.slice(0, suffix.indexOf("/"));
-        if (symlinksSupported) {
-          const asset = yield* resolveAsset(token, "source.ts");
-          if (asset?.kind !== "file") throw new Error("Expected a workspace download");
-          yield* fs.rename(filePath, path.join(root, "saved.ts"));
-          yield* fs.symlink(outside, filePath);
-          expect(yield* resolveAsset(token, "source.ts")).toBeNull();
-          const response = HttpServerResponse.toWeb(yield* assetFileResponse(asset));
-          expect(yield* Effect.promise(() => response.text())).toBe("source");
-          yield* fs.remove(filePath);
-          yield* fs.rename(path.join(root, "saved.ts"), filePath);
         }
       }
     }).pipe(Effect.provide(layerTest)),

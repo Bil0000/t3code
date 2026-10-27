@@ -4,6 +4,7 @@ import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 import "~/index.css";
+import { ComposerHandleContext, type ComposerHandleRef } from "~/composerHandleContext";
 
 const { refresh, assetUrlState } = vi.hoisted(() => ({
   refresh: vi.fn<() => Promise<string | null>>(),
@@ -2254,13 +2255,12 @@ it.each(["archive", "sqlite"] as const)(
       await act(() =>
         screen.container.querySelector<HTMLButtonElement>('[role="alert"] button')!.click(),
       );
-      await vi.waitFor(
-        () =>
-          expect(screen.container.textContent).toContain(
-            kind === "archive" ? "recovered.txt" : "retry succeeded",
-          ),
-        10_000,
-      );
+      await vi.waitFor(() => {
+        if (kind === "sqlite")
+          return expect(screen.container.textContent).toContain("retry succeeded");
+        const tree = screen.container.querySelector("file-tree-container")?.shadowRoot;
+        expect(tree?.querySelector('[data-item-path="recovered.txt"]')).not.toBeNull();
+      }, 10_000);
       expect(refresh).toHaveBeenCalledTimes(2);
     } finally {
       URL.revokeObjectURL(bad);
@@ -2648,4 +2648,129 @@ it.each([
   await expect(factory.fetch({ kind, filename: "missing" })).rejects.toThrow(
     `Unsupported PDF ${directory} asset.`,
   );
+});
+
+describe("ZIP attachments", () => {
+  const PNG_1X1 = Uint8Array.from(
+    atob(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=",
+    ),
+    (character) => character.charCodeAt(0),
+  );
+  const zipBlob = async (files: Record<string, string | Uint8Array>) => {
+    const zip = new JSZip();
+    for (const [path, contents] of Object.entries(files)) zip.file(path, contents);
+    return new Blob([await zip.generateAsync({ type: "arraybuffer", compression: "DEFLATE" })], {
+      type: "application/zip",
+    });
+  };
+  const hugePng = () => {
+    const bytes = PNG_1X1.slice();
+    new DataView(bytes.buffer).setUint32(16, 9000);
+    new DataView(bytes.buffer).setUint32(20, 9000);
+    return bytes;
+  };
+
+  async function openZip(file: Blob, composer: ComposerHandleRef | null = null) {
+    const container = document.createElement("div");
+    container.style.cssText = "display: flex; width: 900px; height: 480px;";
+    return render(
+      <ComposerHandleContext value={composer}>
+        <AttachmentFilePreview
+          name="project.zip"
+          mimeType="application/zip"
+          sizeBytes={file.size}
+          file={file}
+          origin="Draft"
+        />
+      </ComposerHandleContext>,
+      { container },
+    );
+  }
+
+  const treeRows = (screen: Screen) => [
+    ...(screen.container
+      .querySelector("file-tree-container")
+      ?.shadowRoot?.querySelectorAll<HTMLElement>("[data-item-path]") ?? []),
+  ];
+
+  async function selectEntry(screen: Screen, path: string) {
+    const row = await vi.waitFor(() => {
+      const row = treeRows(screen).find((row) => row.dataset.itemPath === path);
+      expect(row, path).toBeDefined();
+      return row!;
+    });
+    await userEvent.click(row);
+  }
+
+  it("browses folders, filters entries and opens text and image entries", async () => {
+    await using screen = await openZip(
+      await zipBlob({ "src/app.ts": "export const answer = 42;", "assets/logo.png": PNG_1X1 }),
+    );
+    await vi.waitFor(() =>
+      expect(treeRows(screen).map((row) => row.dataset.itemPath)).toEqual(
+        expect.arrayContaining(["src/app.ts", "assets/logo.png"]),
+      ),
+    );
+
+    const filter = screen.getByRole("searchbox", { name: "Search ZIP files" });
+    await userEvent.fill(filter, "missing");
+    await expect.element(screen.getByText("No files match “missing”")).toBeVisible();
+    await userEvent.fill(filter, "app");
+    await selectEntry(screen, "src/app.ts");
+    await vi.waitFor(() =>
+      expect(screen.container.querySelector("pre")?.textContent).toBe("export const answer = 42;"),
+    );
+
+    await userEvent.fill(filter, "");
+    await selectEntry(screen, "assets/logo.png");
+    await vi.waitFor(() => expect(screen.container.querySelector("img")?.src).toMatch(/^blob:/));
+  });
+
+  it("saves one entry and adds it to the chat", async () => {
+    const addDroppedFiles = vi.fn<(files: File[]) => void>();
+    const composer = {
+      current: { addDroppedFiles } as unknown as NonNullable<ComposerHandleRef["current"]>,
+    };
+    const saved: { name: string; href: string }[] = [];
+    using _click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      saved.push({ name: this.download, href: this.href });
+    });
+    await using screen = await openZip(
+      await zipBlob({ "src/app.ts": "export const answer = 42;", "README.md": "# Hi" }),
+      composer,
+    );
+    await selectEntry(screen, "src/app.ts");
+    await vi.waitFor(() => expect(screen.container.querySelector("pre")).not.toBeNull());
+
+    await userEvent.click(screen.getByRole("button", { name: "Save file" }));
+    await vi.waitFor(() => expect(saved.map((entry) => entry.name)).toEqual(["app.ts"]));
+    expect(await (await fetch(saved[0]!.href)).text()).toBe("export const answer = 42;");
+
+    await userEvent.click(screen.getByRole("button", { name: "Add to chat" }));
+    await vi.waitFor(() => expect(addDroppedFiles).toHaveBeenCalledOnce());
+    const [added] = addDroppedFiles.mock.calls[0]![0];
+    expect(added!.name).toBe("app.ts");
+    expect(await added!.text()).toBe("export const answer = 42;");
+  });
+
+  it("explains why an encrypted ZIP cannot be browsed", async () => {
+    const file = await zipBlob({ "secret.txt": "data" });
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const view = new DataView(bytes.buffer);
+    const directory = view.getUint32(bytes.length - 6, true);
+    view.setUint16(directory + 8, view.getUint16(directory + 8, true) | 1, true);
+    await using screen = await openZip(new Blob([bytes], { type: "application/zip" }));
+    await expect.element(screen.getByText("This ZIP is password-protected")).toBeVisible();
+    await expect.element(screen.getByRole("button", { name: "Save ZIP" })).toBeVisible();
+  });
+
+  it("refuses to decode an image entry above the pixel limit", async () => {
+    await using screen = await openZip(await zipBlob({ "huge.png": hugePng(), "a.txt": "a" }));
+    await selectEntry(screen, "huge.png");
+    await expect.element(screen.getByText("Too large to preview safely")).toBeVisible();
+    expect(screen.container.querySelector("img")).toBeNull();
+  });
 });

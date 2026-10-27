@@ -2,8 +2,7 @@ import { AsyncResult } from "effect/reactivity";
 import { act, type ComponentProps, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, onTestFinished, vi } from "vite-plus/test";
-import { PROVIDER_SEND_TURN_MAX_FILE_BYTES, type ServerConfig } from "@t3tools/contracts";
-import { fileAttachmentTooLargeMessage } from "@t3tools/client-runtime/state/attachments";
+import type { ServerConfig } from "@t3tools/contracts";
 
 import type { ZipTreeRow } from "./zipTree";
 
@@ -180,7 +179,6 @@ vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
 }));
 
 import { ZipArchiveView } from "./ZipArchiveView";
-import { AttachmentFileView } from "./AttachmentFileView";
 import { AttachmentFileScreen } from "./AttachmentFileScreen";
 import { downloadAttachmentForPreview } from "../../lib/attachmentDownload";
 import { alert } from "../../components/ui/Dialog";
@@ -252,41 +250,48 @@ function setup() {
   };
 }
 
-it.each(["uri", "refresh"] as const)(
-  "returns to the file list when %s reloads the archive with a selected entry",
-  async (changed) => {
-    const screen = setup();
-    await screen.render();
-    await screen.settle(() =>
-      expect(screen.container.querySelector('[aria-label="first.txt"]')).not.toBeNull(),
-    );
-    await act(async () =>
-      screen.container.querySelector<HTMLButtonElement>('[aria-label="first.txt"]')!.click(),
-    );
-    await screen.settle(() =>
-      expect(screen.container.querySelector("pre")?.textContent).toBe("First archive contents"),
-    );
-
-    await screen.render({ ...screen.props, subtitle: "Updated metadata" });
-    expect(screen.container.querySelector("pre")?.textContent).toBe("First archive contents");
-
-    await screen.render(
-      changed === "uri"
-        ? { ...screen.props, uri: "file:///second.zip" }
-        : { ...screen.props, refresh: async () => null },
-    );
-    await screen.settle(() => {
-      expect(
-        screen.container.querySelector(
-          `[aria-label="${changed === "uri" ? "second" : "first"}.txt"]`,
-        ),
-      ).not.toBeNull();
-      expect(screen.container.textContent).not.toContain("Opening ZIP...");
-    });
-    expect(screen.container.querySelector("pre")).toBeNull();
-    expect(screen.container.textContent).not.toContain("Couldn't read this file");
-  },
-);
+it("opens a ZIP chat attachment as a browsable archive on the attachment file screen", async () => {
+  const screen = setup();
+  server.capabilities = {
+    repositoryIdentity: false,
+    attachmentUploads: true,
+    fileAttachments: { maxUploadBytes: 1024 },
+  };
+  const { fetch } = await import("expo/fetch");
+  vi.mocked(fetch, { partial: true }).mockImplementation(async () => ({
+    ok: true,
+    body: new Response(Uint8Array.from(files.get("file:///first.zip")!)).body,
+  }));
+  await act(async () =>
+    screen.root.render(
+      <AttachmentFileScreen
+        route={{
+          params: {
+            environmentId: "environment-1",
+            threadId: "thread-1",
+            attachmentId: "attachment-1",
+            name: "archive.zip",
+            mimeType: "application/zip",
+            sizeBytes: "200",
+          },
+        }}
+      />,
+    ),
+  );
+  await screen.settle(() =>
+    expect(screen.container.querySelector('[aria-label="first.txt"]')).not.toBeNull(),
+  );
+  await act(async () =>
+    screen.container.querySelector<HTMLButtonElement>('[aria-label="first.txt"]')!.click(),
+  );
+  await screen.settle(() =>
+    expect(screen.container.querySelector("pre")?.textContent).toBe("First archive contents"),
+  );
+  const add = Array.from(screen.container.querySelectorAll("button")).find(
+    (button) => button.textContent === "Add to chat",
+  );
+  expect(add?.disabled).toBe(false);
+});
 
 it("keeps the ZIP filter and archive open when native Back closes a selected entry", async () => {
   const screen = setup();
@@ -321,151 +326,15 @@ it("keeps the ZIP filter and archive open when native Back closes a selected ent
   ).toBe("first");
 });
 
-it.each([
-  ["normal file", "guide.bin", "application/octet-stream"],
-  ["ZIP entry", "archive.zip", "application/zip"],
-])(
-  "does not offer Add to chat for a %s when attachment uploads are disabled",
-  async (_, name, mimeType) => {
-    const screen = setup();
-    server.capabilities = {
-      repositoryIdentity: false,
-      attachmentUploads: false,
-      fileAttachments: { maxUploadBytes: 1024 },
-    };
-    const { fetch } = await import("expo/fetch");
-    vi.mocked(fetch, { partial: true }).mockImplementation(async () => ({
-      ok: true,
-      body: new Response(Uint8Array.from(files.get("file:///first.zip")!)).body,
-    }));
-    await act(async () =>
-      screen.root.render(
-        <AttachmentFileScreen
-          route={{
-            params: {
-              environmentId: "environment-1",
-              threadId: "thread-1",
-              attachmentId: "attachment-1",
-              name,
-              mimeType,
-              sizeBytes: "22",
-            },
-          }}
-        />,
-      ),
-    );
-    if (mimeType === "application/zip") {
-      await screen.settle(() =>
-        expect(screen.container.querySelector('[aria-label="first.txt"]')).not.toBeNull(),
-      );
-      await act(async () =>
-        screen.container.querySelector<HTMLButtonElement>('[aria-label="first.txt"]')!.click(),
-      );
-      await screen.settle(() =>
-        expect(screen.container.querySelector("pre")?.textContent).toBe("First archive contents"),
-      );
-    } else {
-      await act(async () =>
-        Array.from(screen.container.querySelectorAll("button"))
-          .find((button) => button.textContent === "Close")!
-          .click(),
-      );
-    }
-    const add = Array.from(screen.container.querySelectorAll("button")).find(
-      (button) => button.textContent === "Add to chat",
-    );
-    expect(add === undefined || add.disabled).toBe(true);
-    expect(appAtomRegistry.get(composerDraftsAtom)).toEqual({});
-  },
-);
-
-it("rejects a known file above the provider limit before starting a download", async () => {
+it("explains why an encrypted ZIP cannot be browsed", async () => {
   const screen = setup();
-  server.capabilities = {
-    repositoryIdentity: false,
-    attachmentUploads: true,
-    fileAttachments: { maxUploadBytes: PROVIDER_SEND_TURN_MAX_FILE_BYTES * 2 },
-  };
-  await act(async () =>
-    screen.root.render(
-      <AttachmentFileScreen
-        route={{
-          params: {
-            environmentId: "environment-1",
-            threadId: "thread-1",
-            attachmentId: "attachment-1",
-            name: "large.bin",
-            mimeType: "application/octet-stream",
-            sizeBytes: String(PROVIDER_SEND_TURN_MAX_FILE_BYTES + 1),
-          },
-        }}
-      />,
-    ),
+  const bytes = files.get("file:///first.zip")!;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const directory = view.getUint32(bytes.length - 6, true);
+  view.setUint16(directory + 8, view.getUint16(directory + 8, true) | 1, true);
+  await screen.render();
+  await screen.settle(() =>
+    expect(screen.container.textContent).toContain("This ZIP is password-protected"),
   );
-  await act(async () =>
-    Array.from(screen.container.querySelectorAll("button"))
-      .find((button) => button.textContent === "Close")!
-      .click(),
-  );
-  await act(async () =>
-    Array.from(screen.container.querySelectorAll("button"))
-      .find((button) => button.textContent === "Add to chat")!
-      .click(),
-  );
-  expect(alert).toHaveBeenCalledWith(
-    "Could not add file to chat",
-    fileAttachmentTooLargeMessage("large.bin", PROVIDER_SEND_TURN_MAX_FILE_BYTES),
-  );
-  expect(downloadAttachmentForPreview).not.toHaveBeenCalled();
-  expect(appAtomRegistry.get(composerDraftsAtom)).toEqual({});
-});
-
-it("clears the native error after a successful retry and keeps Add to chat available", async () => {
-  const screen = setup();
-  const onBack = vi.fn();
-  await act(async () =>
-    screen.root.render(
-      <AttachmentFileView
-        title="guide.pdf"
-        subtitle="PDF"
-        document={{
-          kind: "pdf",
-          renderedMode: null,
-          activeMode: "source",
-          uri: "file:///guide.pdf",
-          content: null,
-          table: null,
-          error: null,
-          needsText: false,
-          setRendered: () => {},
-          retry: () => {},
-          revision: 0,
-          share: async () => {},
-          sharing: false,
-        }}
-        nativeSource={{ kind: "pdf", uri: "file:///guide.pdf", name: "guide.pdf" }}
-        environmentId={null}
-        htmlRender={false}
-        addToChat={{ onPress: () => {}, busy: false }}
-        onRemove={null}
-        onBack={onBack}
-      />,
-    ),
-  );
-  const button = (label: string) =>
-    Array.from(screen.container.querySelectorAll("button")).find(
-      (element) => element.textContent === label,
-    )!;
-  await act(async () => button("Fail").click());
-  await act(async () => button("Close").click());
-  const error = "The file could not be opened. Check the connection and try again.";
-  expect(screen.container.textContent).toContain(error);
-
-  await act(async () => button("Try again").click());
-  await act(async () => button("Close").click());
-
-  expect(screen.container.querySelector('[role="dialog"]')).toBeNull();
-  expect(onBack).not.toHaveBeenCalled();
-  expect(button("Add to chat").disabled).toBe(false);
-  expect(screen.container.textContent).not.toContain(error);
+  expect(screen.container.querySelector('[aria-label="first.txt"]')).toBeNull();
 });

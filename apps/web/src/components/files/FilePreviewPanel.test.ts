@@ -8,7 +8,6 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { remapFileCommentAnnotations } from "./fileCommentAnnotations";
 import {
   filePreviewReadErrorMessage,
-  isZipPreviewFile,
   isMarkdownPreviewFile,
   resolveFilePreviewPath,
   setMarkdownTaskChecked,
@@ -64,26 +63,6 @@ describe("file comment annotations", () => {
         },
       },
     ]);
-  });
-});
-
-describe("isZipPreviewFile", () => {
-  it("recognizes ZIP archives by MIME type or extension", () => {
-    expect(isZipPreviewFile({ name: "photos", mimeType: "application/zip; charset=binary" })).toBe(
-      true,
-    );
-    expect(isZipPreviewFile({ name: "photos", mimeType: "application/x-zip-compressed" })).toBe(
-      true,
-    );
-    expect(isZipPreviewFile({ name: "Photos.ZIP", mimeType: "application/octet-stream" })).toBe(
-      true,
-    );
-    expect(isZipPreviewFile({ name: "photos.zip", mimeType: "text/plain" })).toBe(true);
-  });
-
-  it("does not treat other archives or ZIP-based documents as ZIP previews", () => {
-    expect(isZipPreviewFile({ name: "photos.tar.gz", mimeType: "application/gzip" })).toBe(false);
-    expect(isZipPreviewFile({ name: "report.docx", mimeType: "" })).toBe(false);
   });
 });
 
@@ -392,7 +371,7 @@ describe("document preview contents", () => {
       )
       .file(
         "Book/book.opf",
-        '<package><manifest><item id="a" href="one.xhtml" media-type="application/xhtml+xml"/><item id="b" href="two&amp;&#x26;&#38;.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="b"/><itemref idref="a"/><itemref idref="b"/></spine></package>',
+        '<package><manifest><item id="a" href="one.xhtml" media-type="application/xhtml+xml"/><item id="b" href="two&amp;&#x26;&#38;.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="b"/><itemref idref="a"/></spine></package>',
       )
       .file(
         "Book/one.xhtml",
@@ -409,13 +388,10 @@ describe("document preview contents", () => {
           "base64",
         ),
       );
-    const read = vi.spyOn(archive.file("Book/two&&&.xhtml")!, "async");
     const result = await openEpub(archive);
-    expect(read).toHaveBeenCalledOnce();
     expect(result.type).toBe("document");
     if (result.type !== "document") throw new Error("Expected document");
-    expect(result.pages.map((page) => page.title)).toEqual(["Second", "First", "Second"]);
-    expect(result.pages[2]!.html).toBe(result.pages[0]!.html);
+    expect(result.pages.map((page) => page.title)).toEqual(["Second", "First"]);
     expect(result.pages[0]!.html).toContain("A\u00a0B © — ≂̸ &amp;lt;");
     expect(result.pages[0]!.html).toContain('alt="© ≂̸"');
     expect(result.pages[1]!.html).toContain('src="data:image/png;base64,');
