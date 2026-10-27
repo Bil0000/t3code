@@ -1,9 +1,11 @@
 import "~/index.css";
 import { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { expect, it, vi } from "vite-plus/test";
+import { page, userEvent } from "vite-plus/test/browser";
 
 const mocks = vi.hoisted(() => ({
   update: vi.fn<(input: unknown) => Promise<{ _tag: "Success" | "Failure" }>>(),
+  notify: vi.fn(),
 }));
 vi.mock(
   import("~/state/pullRequests"),
@@ -14,7 +16,11 @@ vi.mock(
   () => ({ useAtomCommand: () => mocks.update }) as never,
 );
 
+vi.mock(import("../ui/toast"), () => ({ toastManager: { add: mocks.notify } }) as never);
+
 import { render } from "../../../test/render";
+import { Menu, MenuPopup, MenuTrigger } from "../ui/menu";
+
 import { PullRequestMaintainerEdits } from "./PullRequestMaintainerEdits";
 
 const reference = { projectId: ProjectId.make("project"), repository: "owner/repo", number: 7 };
@@ -22,15 +28,21 @@ const environmentId = EnvironmentId.make("environment");
 
 function setup() {
   mocks.update.mockReset().mockResolvedValue({ _tag: "Success" });
+  mocks.notify.mockReset();
   const onSaved = vi.fn();
   const control = (allowed = true) => (
-    <PullRequestMaintainerEdits
-      environmentId={environmentId}
-      reference={reference}
-      enabled={true}
-      allowed={allowed}
-      onSaved={onSaved}
-    />
+    <Menu>
+      <MenuTrigger>More pull request actions</MenuTrigger>
+      <MenuPopup keepMounted>
+        <PullRequestMaintainerEdits
+          environmentId={environmentId}
+          reference={reference}
+          enabled={true}
+          allowed={allowed}
+          onSaved={onSaved}
+        />
+      </MenuPopup>
+    </Menu>
   );
   return { control, onSaved };
 }
@@ -38,7 +50,14 @@ function setup() {
 it("saves both directions without waiting for a refreshed detail", async () => {
   const { control, onSaved } = setup();
   await using screen = await render(control());
-  const checkbox = screen.getByRole("checkbox", { name: "Allow edits from maintainers" });
+  await screen.getByRole("button", { name: "More pull request actions" }).click();
+  expect(document.querySelector('[role="menuitemcheckbox"]')).not.toBeNull();
+  const checkbox = page.getByRole("menuitemcheckbox", { name: "Allow edits from maintainers" });
+  await expect
+    .element(checkbox)
+    .toHaveAccessibleDescription(
+      "Maintainers can push to this branch. If your fork has workflows, this can also give access to its secrets.",
+    );
   await checkbox.click();
   await expect.element(checkbox).not.toBeChecked();
   await vi.waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
@@ -50,7 +69,7 @@ it("saves both directions without waiting for a refreshed detail", async () => {
   ]);
 });
 
-it("locks the control while a save is in flight", async () => {
+it("locks the control while a save is in flight, including after reopening the menu", async () => {
   const { control } = setup();
   let settle!: (value: { _tag: "Success" }) => void;
   const pending = new Promise<{ _tag: "Success" }>((resolve) => {
@@ -58,37 +77,54 @@ it("locks the control while a save is in flight", async () => {
   });
   mocks.update.mockReturnValue(pending);
   await using screen = await render(control());
-  const checkbox = screen.getByRole("checkbox");
+  await screen.getByRole("button", { name: "More pull request actions" }).click();
+  const checkbox = page.getByRole("menuitemcheckbox");
   await checkbox.click();
-  await expect.element(checkbox).toBeDisabled();
-  await expect.element(screen.getByRole("status")).toHaveTextContent("Saving…");
+  await expect.element(checkbox).toHaveAttribute("aria-disabled", "true");
+  await expect.element(page.getByRole("status")).toHaveTextContent("Saving…");
+  await userEvent.keyboard("{Escape}");
+  await screen.getByRole("button", { name: "More pull request actions" }).click();
+  await expect.element(checkbox).toHaveAttribute("aria-disabled", "true");
   expect(mocks.update).toHaveBeenCalledTimes(1);
   settle({ _tag: "Success" });
-  await expect.element(checkbox).toBeEnabled();
+  await expect.element(checkbox).not.toHaveAttribute("aria-disabled", "true");
 });
 
-it("restores the last saved value after a failed save and lets the user retry", async () => {
+it("reports a failed save after closing the menu and lets the user retry", async () => {
   const { control, onSaved } = setup();
   await using screen = await render(control());
-  const checkbox = screen.getByRole("checkbox");
+  await screen.getByRole("button", { name: "More pull request actions" }).click();
+  const checkbox = page.getByRole("menuitemcheckbox");
   await checkbox.click();
   await expect.element(checkbox).not.toBeChecked();
   await vi.waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
-  mocks.update.mockResolvedValueOnce({ _tag: "Failure" });
+  let settle!: (value: { _tag: "Failure" }) => void;
+  mocks.update.mockReturnValueOnce(
+    new Promise<{ _tag: "Failure" }>((resolve) => {
+      settle = resolve;
+    }),
+  );
   await checkbox.click();
-  await expect
-    .element(screen.getByRole("alert"))
-    .toHaveTextContent("Could not save maintainer access. Try again.");
+  await userEvent.keyboard("{Escape}");
+  settle({ _tag: "Failure" });
+  await vi.waitFor(() =>
+    expect(mocks.notify).toHaveBeenCalledWith({
+      type: "error",
+      title: "Could not save maintainer access",
+      description: "Try again.",
+    }),
+  );
+  await screen.getByRole("button", { name: "More pull request actions" }).click();
   await expect.element(checkbox).not.toBeChecked();
   expect(onSaved).toHaveBeenCalledTimes(1);
   await checkbox.click();
   await expect.element(checkbox).toBeChecked();
-  await expect.element(screen.getByRole("alert")).not.toBeInTheDocument();
 });
 
 it("blocks a session without source control write access", async () => {
   const { control } = setup();
   await using screen = await render(control(false));
-  await expect.element(screen.getByRole("checkbox")).toBeDisabled();
+  await screen.getByRole("button", { name: "More pull request actions" }).click();
+  await expect.element(page.getByRole("menuitemcheckbox")).toHaveAttribute("aria-disabled", "true");
   expect(mocks.update).not.toHaveBeenCalled();
 });

@@ -44,6 +44,7 @@ import {
 } from "./pullRequestDetail.logic";
 import { PullRequestGlyph } from "./pullRequestIcons";
 import type { PickableEnvironment } from "./pullRequestProjectAssignment.logic";
+import { PullRequestMaintainerEdits } from "./PullRequestMaintainerEdits";
 import { PullRequestThreadLinks } from "./PullRequestThreadLinks";
 import { useInlineActionConfirm } from "./useInlineActionConfirm";
 
@@ -83,6 +84,8 @@ export function PullRequestActionsMenu({
   onSelectMergeMethod,
   showsDeleteBranch,
   environmentConnected,
+  canWriteSourceControl,
+  onMaintainerEditsSaved,
   confirmDeleteBranch,
   pendingAction,
   perform,
@@ -92,7 +95,16 @@ export function PullRequestActionsMenu({
   environmentId: EnvironmentId;
   reference: PullRequestRef;
   pullRequestKey: string;
-  detail: Pick<PullRequestDetail, "url" | "state" | "isDraft" | "headBranch">;
+  detail: Pick<
+    PullRequestDetail,
+    | "url"
+    | "state"
+    | "isDraft"
+    | "headBranch"
+    | "capabilities"
+    | "viewerPermissions"
+    | "maintainerCanModify"
+  >;
   terminology: ChangeRequestTerminology;
   linkThreadRef: ScopedThreadRef | null;
   onThreadPickerOpenChange: (open: boolean) => void;
@@ -123,6 +135,8 @@ export function PullRequestActionsMenu({
   onSelectMergeMethod: (method: PullRequestMergeMethod) => void;
   showsDeleteBranch: boolean;
   environmentConnected: boolean;
+  canWriteSourceControl: boolean;
+  onMaintainerEditsSaved: () => void;
   confirmDeleteBranch: () => Promise<void>;
   pendingAction: PullRequestAction | null;
   perform: PerformPullRequestAction;
@@ -132,6 +146,10 @@ export function PullRequestActionsMenu({
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const inlineConfirm = useInlineActionConfirm(pullRequestKey);
   const actionPending = pendingAction !== null;
+  const showsMaintainerEdits =
+    detail.capabilities.edit?.maintainerEdits === true &&
+    detail.viewerPermissions.maintainerEdits === true &&
+    detail.maintainerCanModify !== undefined;
   return (
     <Menu>
       <Tooltip>
@@ -164,7 +182,7 @@ export function PullRequestActionsMenu({
             : `More ${terminology.singular} actions`}
         </TooltipPopup>
       </Tooltip>
-      <MenuPopup align="end" side="bottom">
+      <MenuPopup align="end" side="bottom" keepMounted={showsMaintainerEdits}>
         <PullRequestThreadLinks
           display="menu-item"
           environmentId={environmentId}
@@ -218,6 +236,19 @@ export function PullRequestActionsMenu({
           />
         ) : null}
         <MenuSeparator />
+        {showsMaintainerEdits && detail.maintainerCanModify !== undefined ? (
+          <>
+            <PullRequestMaintainerEdits
+              key={`${detail.url}:${detail.maintainerCanModify}`}
+              environmentId={environmentId}
+              reference={reference}
+              enabled={detail.maintainerCanModify}
+              allowed={canWriteSourceControl && environmentConnected}
+              onSaved={onMaintainerEditsSaved}
+            />
+            <MenuSeparator />
+          </>
+        ) : null}
         {detail.state === "open" ? (
           <>
             {showsDraftToggle ? (

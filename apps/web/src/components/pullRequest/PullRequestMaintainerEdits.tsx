@@ -3,7 +3,8 @@ import { useId, useRef, useState } from "react";
 
 import { pullRequestEnvironment } from "~/state/pullRequests";
 import { useAtomCommand } from "~/state/use-atom-command";
-import { Checkbox } from "../ui/checkbox";
+import { MenuCheckboxItem } from "../ui/menu";
+import { toastManager } from "../ui/toast";
 
 export function PullRequestMaintainerEdits({
   environmentId,
@@ -22,14 +23,12 @@ export function PullRequestMaintainerEdits({
   const update = useAtomCommand(pullRequestEnvironment.update, { reportFailure: false });
   const [value, setValue] = useState(enabled);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState(false);
   const inFlight = useRef(false);
   const save = async (next: boolean) => {
     if (!allowed || inFlight.current) return;
     const previous = value;
     inFlight.current = true;
     setSaving(true);
-    setError(false);
     setValue(next);
     const result = await update({
       environmentId,
@@ -39,44 +38,37 @@ export function PullRequestMaintainerEdits({
     setSaving(false);
     if (result._tag === "Failure") {
       setValue(previous);
-      setError(true);
+      toastManager.add({
+        type: "error",
+        title: "Could not save maintainer access",
+        description: "Try again.",
+      });
       return;
     }
     onSaved();
   };
 
   return (
-    <div className="mt-4 border-t border-border/60 pt-3">
-      <div className="flex items-start gap-2.5 text-xs">
-        <span className="pt-0.5">
-          <Checkbox
-            id={id}
-            checked={value}
-            disabled={!allowed || saving}
-            aria-describedby={`${id}-hint`}
-            onCheckedChange={(next) => void save(next)}
-          />
+    <MenuCheckboxItem
+      checked={value}
+      disabled={!allowed || saving}
+      closeOnClick={false}
+      aria-label="Allow edits from maintainers"
+      aria-describedby={`${id}-hint`}
+      onCheckedChange={(next) => void save(next)}
+    >
+      <span className="flex max-w-xs flex-col gap-0.5">
+        <span>Allow edits from maintainers</span>
+        <span id={`${id}-hint`} className="text-xs text-muted-foreground">
+          Maintainers can push to this branch. If your fork has workflows, this can also give access
+          to its secrets.
         </span>
-        <div className="min-w-0 space-y-1">
-          <label htmlFor={id} className="block font-medium text-foreground">
-            Allow edits from maintainers
-          </label>
-          <span id={`${id}-hint`} className="block max-w-sm leading-relaxed text-muted-foreground">
-            Maintainers can push to this branch. If your fork has workflows, this can also give
-            access to its secrets.
+        {saving ? (
+          <span role="status" className="text-xs text-muted-foreground">
+            Saving…
           </span>
-        </div>
-      </div>
-      {saving ? (
-        <p role="status" className="mt-2 text-xs text-muted-foreground">
-          Saving…
-        </p>
-      ) : null}
-      {error ? (
-        <p role="alert" className="mt-2 text-xs text-destructive">
-          Could not save maintainer access. Try again.
-        </p>
-      ) : null}
-    </div>
+        ) : null}
+      </span>
+    </MenuCheckboxItem>
   );
 }

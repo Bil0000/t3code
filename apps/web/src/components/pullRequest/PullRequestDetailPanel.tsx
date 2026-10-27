@@ -1383,6 +1383,8 @@ export function PullRequestDetailPanel({
                 onSelectMergeMethod={selectMergeMethod}
                 showsDeleteBranch={showsDeleteBranch}
                 environmentConnected={environmentConnected}
+                canWriteSourceControl={canWriteSourceControl}
+                onMaintainerEditsSaved={refreshDetail}
                 confirmDeleteBranch={confirmDeleteBranch}
                 pendingAction={pendingAction}
                 perform={perform}
@@ -1736,7 +1738,6 @@ export function PullRequestDetailPanel({
                   detail={detail}
                   activityPending={activityPending}
                   checksStale={checksStale}
-                  canWriteSourceControl={canWriteSourceControl && environmentConnected}
                   activityError={activityError}
                   pendingFinding={handoff}
                   fixFindingLabel={handoffLabels.fixFinding}
