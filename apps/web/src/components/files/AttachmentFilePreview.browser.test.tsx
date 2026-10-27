@@ -21,10 +21,25 @@ vi.mock(import("./ReadOnlySourcePreview"), () => ({
   default: ({ text }: { text: string }) => <pre>{text}</pre>,
 }));
 
+vi.mock(import("pdfjs-dist/build/pdf.worker.min.mjs?url"), async () => {
+  const { default: source } = await import("pdfjs-dist/build/pdf.worker.min.mjs?raw");
+  return {
+    default: URL.createObjectURL(new Blob([source], { type: "text/javascript" })),
+  };
+});
+
 import { AttachmentFilePreview } from "./AttachmentFilePreview";
+import { WorkspaceLargeTextPreview } from "./FilePreviewPanel";
 import LargeTextViewer from "./LargeTextViewer";
 import VirtualTablePreview from "./VirtualTablePreview";
 import { OfficeFilePreview } from "./OfficeFilePreview";
+import PdfViewer from "./PdfViewer";
+import NotebookPreview from "./NotebookPreview";
+import "./PreviewImageContent";
+import { openNotebook } from "./extendedDocumentPreview";
+import { OfficePages } from "./office/OfficePages";
+import { EXPANDED_WORD_ROLES, expandedWordFixture } from "../../../test/officePreviewFixtures";
+import Spreadsheet from "./office/Spreadsheet";
 import { MermaidFilePreview } from "./MermaidFilePreview";
 import JSZip from "jszip";
 import { boundedZip } from "./boundedZip";
@@ -34,6 +49,23 @@ import type { BinaryWorkerResult } from "./binaryPreviewProtocol";
 
 // Real worker imports and WASM initialization can exceed waitFor's default second
 // when the full browser project runs concurrently on CI.
+const generatedSqlite = (async () => {
+  const [{ default: initSqlJs }, { default: wasmUrl }] = await Promise.all([
+    import("sql.js"),
+    import("sql.js/dist/sql-wasm.wasm?url"),
+  ]);
+  const SQL = await initSqlJs({ locateFile: () => wasmUrl });
+  const database = new SQL.Database();
+  try {
+    database.run(
+      "CREATE TABLE sqliteData (price INTEGER, quantity INTEGER, total INTEGER GENERATED ALWAYS AS (price * quantity) STORED, doubled INTEGER GENERATED ALWAYS AS (price * 2) VIRTUAL); INSERT INTO sqliteData(price, quantity) VALUES (7, 3); CREATE TABLE zzInventory (stock INTEGER); INSERT INTO zzInventory VALUES(42)",
+    );
+    return new Blob([new Uint8Array(database.export())]);
+  } finally {
+    database.close();
+  }
+})();
+
 describe("bounded binary previews", () => {
   it("preserves length-delimited local and global PAX attributes", async () => {
     const encode = (value: string) => new TextEncoder().encode(value);
@@ -222,17 +254,7 @@ describe("bounded binary previews", () => {
     "shows generated SQLite columns and retains picker focus at %i px",
     async (width) => {
       await page.viewport(width, 800);
-      const [{ default: initSqlJs }, { default: wasmUrl }] = await Promise.all([
-        import("sql.js"),
-        import("sql.js/dist/sql-wasm.wasm?url"),
-      ]);
-      const SQL = await initSqlJs({ locateFile: () => wasmUrl });
-      const database = new SQL.Database();
-      database.run(
-        "CREATE TABLE sqliteData (price INTEGER, quantity INTEGER, total INTEGER GENERATED ALWAYS AS (price * quantity) STORED, doubled INTEGER GENERATED ALWAYS AS (price * 2) VIRTUAL); INSERT INTO sqliteData(price, quantity) VALUES (7, 3); CREATE TABLE zzInventory (stock INTEGER); INSERT INTO zzInventory VALUES(42)",
-      );
-      const src = URL.createObjectURL(new Blob([new Uint8Array(database.export())]));
-      database.close();
+      const src = URL.createObjectURL(await generatedSqlite);
       try {
         await using screen = await render(
           <BinaryViewer src={src} name="orders.sqlite" kind="sqlite" />,
@@ -293,11 +315,7 @@ describe("bounded binary previews", () => {
         asset={{ environmentId: EnvironmentId.make("test-environment"), attachmentId: "image" }}
       />,
     );
-    await vi.waitFor(() =>
-      expect(screen.container.querySelector('[role="alert"]')?.textContent).toContain(
-        "Unable to load image.",
-      ),
-    );
+    await expect.element(screen.getByRole("alert")).toMatchTextContent(/Unable to load image\./);
     await act(() =>
       screen.container.querySelector<HTMLButtonElement>('[role="alert"] button')!.click(),
     );
@@ -437,91 +455,107 @@ describe("bounded binary previews", () => {
 import { OFFICE_PREVIEW_MAX_COLUMNS, type OfficeWorkerResult } from "./officePreviewProtocol";
 
 describe("large text preview recovery", () => {
-  it("retains the workspace viewer across URL renewals and reloads revisions and manual refreshes", async () => {
-    const { WorkspaceLargeTextPreview } = await import("./FilePreviewPanel");
-    const original = URL.createObjectURL(new Blob(["original\n".repeat(1000)]));
-    const changed = URL.createObjectURL(new Blob(["changed\n".repeat(1000)]));
-    const workers: Worker[] = [];
-    using _worker = stubGlobal(
-      "Worker",
-      class extends Worker {
-        constructor(...args: ConstructorParameters<typeof Worker>) {
-          super(...args);
-          workers.push(this);
-        }
-      },
-    );
-    const preview = (mutation: string, key = 0) => (
-      <div style={{ display: "flex", flexDirection: "column", height: 400, width: 600 }}>
-        <WorkspaceLargeTextPreview
-          key={key}
-          environmentId={EnvironmentId.make("test")}
-          threadRef={{ environmentId: EnvironmentId.make("test"), threadId: ThreadId.make("test") }}
-          absolutePath="/repo/large.txt"
-          name="large.txt"
-          delimiter={null}
-          workspaceMutationId={mutation}
-          revealLine={null}
-          revealRequestId={0}
-        />
-      </div>
-    );
-    const state = (url: string, fileRevision?: string) =>
-      assetUrlState.mockReturnValue({
-        _tag: "Success",
-        url,
-        expiresAt: Date.now() + 3_600_000,
-        ...(fileRevision === undefined ? {} : { fileRevision }),
-      });
-    refresh.mockResolvedValue(`${original}#renewed`);
-    try {
-      state(`${original}#initial`, "one");
-      await using screen = await render(preview("first"));
-      await vi.waitFor(() => expect(workers).toHaveLength(1));
-      await vi.waitFor(() => expect(screen.container.textContent).toContain("original"));
-      await vi.waitFor(() => expect(screen.container.textContent).toContain("1,000 lines"));
-      const viewport = screen.container.querySelector<HTMLElement>('[tabindex="0"]')!;
-      await act(() =>
-        viewport.dispatchEvent(
-          new WheelEvent("wheel", { deltaY: 250, bubbles: true, cancelable: true }),
-        ),
+  it.each(["URL renewals and revisions", "manual refreshes and legacy revisions"] as const)(
+    "retains the workspace viewer across %s",
+    async (scenario) => {
+      const original = URL.createObjectURL(new Blob(["original\n".repeat(1000)]));
+      const changed = URL.createObjectURL(new Blob(["changed\n".repeat(1000)]));
+      const workers: Worker[] = [];
+      using _worker = stubGlobal(
+        "Worker",
+        class extends Worker {
+          constructor(...args: ConstructorParameters<typeof Worker>) {
+            super(...args);
+            workers.push(this);
+          }
+        },
       );
-      await vi.waitFor(() => expect(viewport.scrollTop).toBeGreaterThan(0));
-      const scrollTop = viewport.scrollTop;
-      state(`${original}#renewed`, "one");
-      await screen.rerender(preview("unrelated-command"));
-      expect(screen.container.querySelector('[tabindex="0"]')).toBe(viewport);
-      expect(viewport.scrollTop).toBe(scrollTop);
-      expect(workers).toHaveLength(1);
-      state(`${changed}#updated`, "two");
-      await screen.rerender(preview("file-edit"));
-      await vi.waitFor(() => expect(screen.container.textContent).toContain("changed"));
-      expect(workers).toHaveLength(2);
-      await screen.rerender(preview("file-edit", 1));
-      await vi.waitFor(() => expect(workers).toHaveLength(3));
-      await vi.waitFor(() => expect(screen.container.textContent).toContain("changed"));
-      state(`${original}#legacy`);
-      await screen.rerender(preview("legacy-edit", 1));
-      await vi.waitFor(() => expect(screen.container.textContent).toContain("original"));
-      expect(workers).toHaveLength(4);
-      assetUrlState.mockReturnValue({ _tag: "Failure" });
-      await screen.rerender(preview("legacy-edit", 1));
-      expect(screen.container.textContent).toContain("Unable to load file preview.");
-      refresh.mockClear();
-      refresh.mockImplementation(async () => {
-        state(`${changed}#retried`);
-        return changed;
-      });
-      await screen.getByRole("button", { name: "Try again" }).click();
-      expect(refresh).toHaveBeenCalledOnce();
-      await screen.rerender(preview("legacy-edit", 1));
-      await vi.waitFor(() => expect(screen.container.textContent).toContain("changed"));
-      expect(screen.container.querySelector('[role="alert"]')).toBeNull();
-    } finally {
-      URL.revokeObjectURL(original);
-      URL.revokeObjectURL(changed);
-    }
-  });
+      const preview = (mutation: string, key = 0) => (
+        <div style={{ display: "flex", flexDirection: "column", height: 400, width: 600 }}>
+          <WorkspaceLargeTextPreview
+            key={key}
+            environmentId={EnvironmentId.make("test")}
+            threadRef={{
+              environmentId: EnvironmentId.make("test"),
+              threadId: ThreadId.make("test"),
+            }}
+            absolutePath="/repo/large.txt"
+            name="large.txt"
+            delimiter={null}
+            workspaceMutationId={mutation}
+            revealLine={null}
+            revealRequestId={0}
+          />
+        </div>
+      );
+      const state = (url: string, fileRevision?: string) =>
+        assetUrlState.mockReturnValue({
+          _tag: "Success",
+          url,
+          expiresAt: Date.now() + 3_600_000,
+          ...(fileRevision === undefined ? {} : { fileRevision }),
+        });
+      const initial = scenario === "URL renewals and revisions" ? original : changed;
+      refresh.mockResolvedValue(`${initial}#renewed`);
+      try {
+        state(`${initial}#initial`, scenario === "URL renewals and revisions" ? "one" : "two");
+        await using screen = await render(preview("first"));
+        await expect.element(screen.getByText(/1,000 lines/)).toBeInTheDocument();
+        expect(workers).toHaveLength(1);
+        expect(screen.container.textContent).toContain(
+          scenario === "URL renewals and revisions" ? "original" : "changed",
+        );
+        if (scenario === "URL renewals and revisions") {
+          const viewport = screen.container.querySelector<HTMLElement>('[tabindex="0"]')!;
+          await act(() =>
+            viewport.dispatchEvent(
+              new WheelEvent("wheel", { deltaY: 250, bubbles: true, cancelable: true }),
+            ),
+          );
+          await vi.waitFor(() => expect(viewport.scrollTop).toBeGreaterThan(0));
+          const scrollTop = viewport.scrollTop;
+          state(`${original}#renewed`, "one");
+          await screen.rerender(preview("unrelated-command"));
+          expect(screen.container.querySelector('[tabindex="0"]')).toBe(viewport);
+          expect(viewport.scrollTop).toBe(scrollTop);
+          expect(workers).toHaveLength(1);
+          state(`${changed}#updated`, "two");
+          await screen.rerender(preview("file-edit"));
+          await expect.element(screen.getByText(/1,000 lines/)).toBeInTheDocument();
+          expect(workers).toHaveLength(2);
+          expect(screen.container.textContent).toContain("changed");
+          return;
+        }
+        await screen.rerender(preview("first", 1));
+        await expect.element(screen.getByText(/1,000 lines/)).toBeInTheDocument();
+        expect(workers).toHaveLength(2);
+        expect(screen.container.textContent).toContain("changed");
+        state(`${original}#legacy`);
+        await screen.rerender(preview("legacy-edit", 1));
+        await expect.element(screen.getByText(/1,000 lines/)).toBeInTheDocument();
+        expect(workers).toHaveLength(3);
+        expect(screen.container.textContent).toContain("original");
+        assetUrlState.mockReturnValue({ _tag: "Failure" });
+        await screen.rerender(preview("legacy-edit", 1));
+        expect(screen.container.textContent).toContain("Unable to load file preview.");
+        refresh.mockClear();
+        refresh.mockImplementation(async () => {
+          state(`${changed}#retried`);
+          return changed;
+        });
+        await act(() =>
+          screen.container.querySelector<HTMLButtonElement>('[role="alert"] button')!.click(),
+        );
+        expect(refresh).toHaveBeenCalledOnce();
+        await screen.rerender(preview("legacy-edit", 1));
+        await expect.element(screen.locator).toMatchTextContent(/changed/);
+        expect(screen.container.querySelector('[role="alert"]')).toBeNull();
+      } finally {
+        URL.revokeObjectURL(original);
+        URL.revokeObjectURL(changed);
+      }
+    },
+  );
 
   it("scrolls within a wrapped row when the row-count track is shorter than the viewport", async () => {
     await using screen = await render(
@@ -978,6 +1012,20 @@ it.each(["utf-16le", "utf-16be", "windows-1252"])(
   },
 );
 
+it("warns when the preparation worker omits expanded Word parts", async () => {
+  const file = await expandedWordFixture("footnotes");
+  const src = URL.createObjectURL(file);
+  try {
+    await using screen = await render(
+      <OfficeFilePreview src={src} name="expanded.docx" kind="docx" sizeBytes={file.size} />,
+    );
+    await expect.element(screen.locator).toMatchTextContent(/Preview limited/);
+    expect(screen.container.querySelector('[role="alert"]')).toBeNull();
+  } finally {
+    URL.revokeObjectURL(src);
+  }
+});
+
 it.each([
   ["", "worksheets/./sheet1.xml", false],
   ["x:", "../xl/worksheets/sheet1.xml", false],
@@ -1146,7 +1194,7 @@ it.each([
       scenario === "renamed XML" ? "word/footnotes.dat" : "word/footnotes.xml",
       `<w:footnotes>${"<w:p/>".repeat(50_001)}</w:footnotes>`,
     );
-  const file = await archive.generateAsync({ type: "blob", compression: "DEFLATE" });
+  const file = await archive.generateAsync({ type: "blob" });
   const src = URL.createObjectURL(file);
   try {
     const worker = new Worker(new URL("./officePreview.worker.ts", import.meta.url), {
@@ -1259,70 +1307,6 @@ it.each([
   }
 });
 
-const EXPANDED_WORD_ROLES = [
-  "footnotes",
-  "note roots",
-  "endnotes",
-  "header",
-  "footer",
-  "comments",
-  "styles",
-  "style chain",
-  "style count",
-  "style visits",
-  "numbering",
-  "picture numbering",
-] as const;
-
-async function expandedWordFixture(role: (typeof EXPANDED_WORD_ROLES)[number]) {
-  const archive = new JSZip();
-  const ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
-  const type = role.startsWith("style")
-    ? "styles"
-    : role === "picture numbering"
-      ? "numbering"
-      : role === "note roots"
-        ? "footnotes"
-        : role;
-  archive.file(
-    "_rels/.rels",
-    '<Relationships><Relationship Id="doc" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>',
-  );
-  const text = (value: string) => `<w:p><w:r><w:t>${value}</w:t></w:r></w:p>`;
-  // Each copy of the 2,000-paragraph payload costs 8,000 markup units, so 20
-  // references (or pages) exceed the 100,000-unit expansion budget.
-  archive.file(
-    "word/document.xml",
-    `<w:document xmlns:w="${ns}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>${text("body retained")}${Array.from({ length: 20 }, () => `<w:p><w:r><w:footnoteReference w:id="1"/><w:endnoteReference w:id="1"/><w:commentReference w:id="1"/><w:br w:type="page"/></w:r></w:p>`).join("")}<w:sectPr><w:headerReference w:type="default" r:id="aux"/><w:footerReference w:type="default" r:id="aux"/></w:sectPr></w:body></w:document>`,
-  );
-  archive.file(
-    "word/_rels/document.xml.rels",
-    `<Relationships><Relationship Id="aux" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/${type}" Target="media/aux.xml"/></Relationships>`,
-  );
-  const xml =
-    role === "style chain" || role === "style count" || role === "style visits"
-      ? `<w:styles xmlns:w="${ns}">${Array.from({ length: role === "style count" ? 3_000 : 1_000 }, (_, i) => `<w:style w:styleId="s${i}" w:type="paragraph">${i ? `<w:basedOn w:val="s${role === "style visits" && i >= 30 ? 29 : i - 1}"/>` : ""}<w:pPr><w:spacing w:after="120"/></w:pPr></w:style>`).join("")}</w:styles>`
-      : role === "styles"
-        ? `<w:styles xmlns:w="${ns}">${Array.from({ length: 100 }, (_, i) => `<w:style w:styleId="${"s".repeat(2_000)}${i}" w:type="paragraph"><w:basedOn w:val="s0"/><w:pPr><w:spacing w:after="120"/></w:pPr></w:style>`).join("")}</w:styles>`
-        : role.includes("numbering")
-          ? `<w:numbering xmlns:w="${ns}">${role === "picture numbering" ? '<w:numPicBullet w:numPicBulletId="1"/>' : ""}<w:abstractNum w:abstractNumId="1">${Array.from({ length: 9 }, (_, i) => `<w:lvl w:ilvl="${i}"><w:lvlText w:val="%1."/></w:lvl>`).join("")}</w:abstractNum>${Array.from({ length: 100 }, (_, i) => `<w:num w:numId="${i}"><w:abstractNumId w:val="1"/></w:num>`).join("")}</w:numbering>`
-          : role === "header" || role === "footer"
-            ? `<w:${role === "header" ? "hdr" : "ftr"} xmlns:w="${ns}">${text("omitted payload").repeat(2_000)}</w:${role === "header" ? "hdr" : "ftr"}>`
-            : `<w:${role} xmlns:w="${ns}"><w:${role.slice(0, -1)} w:id="1">${text("omitted payload").repeat(2_000)}</w:${role.slice(0, -1)}></w:${role}>`;
-  archive.file("word/media/aux.xml", xml);
-  if (role === "note roots") {
-    archive.file(
-      "word/document.xml",
-      `<w:document xmlns:w="${ns}"><w:body>${text("body retained")}${Array.from({ length: 200 }, (_, id) => `<w:p><w:r><w:footnoteReference w:id="${id}"/></w:r></w:p>`).join("")}</w:body></w:document>`,
-    );
-    archive.file(
-      "word/media/aux.xml",
-      `<w:footnotes xmlns:w="${ns}" padding="${"x".repeat(32_000)}">${Array.from({ length: 200 }, (_, id) => `<w:footnote w:id="${id}">${text("omitted payload")}</w:footnote>`).join("")}</w:footnotes>`,
-    );
-  }
-  return archive.generateAsync({ type: "blob", compression: "DEFLATE" });
-}
-
 // Rendering starts a layout engine per case, which dominated this file on loaded CI
 // runners. The omission decision lives in prepareOffice, so every role is checked there.
 it.each(EXPANDED_WORD_ROLES)(
@@ -1352,38 +1336,6 @@ it.each(EXPANDED_WORD_ROLES)(
         if (!entry.dir) expect(await entry.async("string")).not.toContain("omitted payload");
     } finally {
       parse.mockRestore();
-    }
-  },
-);
-
-// Two full renders prove the engine accepts a prepared body whose parts were removed
-// (body references for notes, section references for headers and footers) and show the warning.
-it.each(["footnotes", "footer"] as const)(
-  "renders the body and warns when omitting expanded %s",
-  async (role) => {
-    const file = await expandedWordFixture(role);
-    const src = URL.createObjectURL(file);
-    try {
-      const container = document.createElement("div");
-      container.style.cssText = "display:flex;flex-direction:column;width:640px;height:700px";
-      await using screen = await render(
-        <OfficeFilePreview src={src} name="expanded.docx" kind="docx" sizeBytes={file.size} />,
-        { container },
-      );
-      await vi.waitFor(
-        () => {
-          expect(screen.container.querySelector('[role="alert"]')?.textContent ?? "").toBe("");
-          expect(screen.container.textContent).toContain("body retained");
-        },
-        { timeout: 30_000 },
-      );
-      expect(screen.container.textContent).toContain("Preview limited");
-      expect(screen.container.textContent).not.toContain("omitted payload");
-      await vi.waitFor(() =>
-        expect(screen.container.querySelector("canvas")!.width).toBeGreaterThan(0),
-      );
-    } finally {
-      URL.revokeObjectURL(src);
     }
   },
 );
@@ -1506,125 +1458,67 @@ it.each([
       ),
     );
   }
-  const file = await archive.generateAsync({ type: "blob", compression: "DEFLATE" });
-  const src = URL.createObjectURL(file);
-  try {
-    const container = document.createElement("div");
-    container.style.cssText = "display:flex;flex-direction:column;width:640px;height:700px";
-    await using screen = await render(
-      <OfficeFilePreview src={src} name="ordinary.docx" kind="docx" />,
-      { container },
-    );
-    await vi.waitFor(() => expect(screen.container.textContent).toContain("ordinary body"), {
-      timeout: 30_000,
-    });
-    expect(screen.container.textContent).not.toContain("Preview limited");
-    await vi.waitFor(() =>
-      expect(screen.container.querySelector("canvas")!.width).toBeGreaterThan(0),
-    );
-    if (scenario === "default template styles")
-      expect(screen.container.textContent).toContain("styled cell");
-    if (ordinary) {
-      expect(screen.container.textContent).toContain("header retained");
-      expect(screen.container.textContent).toContain("footer retained");
-    }
-  } finally {
-    URL.revokeObjectURL(src);
+  const { prepareOffice } = await import("./officeArchive");
+  const prepared = await prepareOffice(
+    await archive.generateAsync({ type: "arraybuffer", compression: "DEFLATE" }),
+    "docx",
+  );
+  expect(prepared.truncated).toBe(false);
+  const bounded = await JSZip.loadAsync(prepared.bytes);
+  const markup = await bounded.file("word/document.xml")!.async("string");
+  expect(markup).toContain("ordinary body");
+  expect(markup).toContain("styled body");
+  expect(await bounded.file("word/styles.xml")!.async("string")).toBe(
+    await archive.file("word/styles.xml")!.async("string"),
+  );
+  if (scenario === "default template styles") expect(markup).toContain("styled cell");
+  if (ordinary) {
+    expect(markup).toMatch(/<w:headerReference/);
+    expect(markup).toMatch(/<w:footerReference/);
+    for (const role of ["header", "footer", "footnotes", "endnotes", "comments"])
+      expect(await bounded.file(`word/${role}.xml`)!.async("string")).toContain(`${role} retained`);
   }
 });
 
-it.each([false, true])(
-  "bounds shared-string text including CDATA %s per cell and across sheets in the worker and viewer",
-  async (cdata) => {
-    const { default: JSZip } = await import("jszip");
-    const archive = new JSZip();
-    archive.file(
-      "xl/workbook.xml",
-      '<workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="one" sheetId="1" r:id="s"/><sheet name="two" sheetId="2" r:id="s"/></sheets></workbook>',
-    );
-    archive.file(
-      "xl/_rels/workbook.xml.rels",
-      '<Relationships><Relationship Id="s" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>',
-    );
-    const sharedPath = cdata ? "customStrings.xml" : "sharedStrings.xml";
-    archive.file(
-      "xl/_rels/workbook.xml.rels",
-      (await archive.file("xl/_rels/workbook.xml.rels")!.async("string")).replace(
-        "</Relationships>",
-        `<Relationship Id="strings" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="${sharedPath}"/></Relationships>`,
-      ),
-    );
-    const content = "x".repeat(32_767);
-    archive.file(
-      `xl/${sharedPath}`,
-      `<sst><si><t>${cdata ? `<![CDATA[${content}]]>` : content}</t></si></sst>`,
-    );
-    archive.file(
-      "xl/worksheets/sheet1.xml",
-      `<worksheet><sheetData>${Array.from({ length: 500 }, (_, i) => `<row r="${i + 1}">${Array.from({ length: 50 }, (_, j) => `<c r="${j < 26 ? String.fromCharCode(65 + j) : "A" + String.fromCharCode(65 + j - 26)}${i + 1}" t="s"><v>${cdata ? "<![CDATA[0]]>" : "0"}</v></c>`).join("")}</row>`).join("")}</sheetData></worksheet>`.replace(
-        '<c r="A1" t="s"><v><![CDATA[0]]></v></c>',
-        `<c r="A1" t="inlineStr"><is><t><![CDATA[${content}]]></t></is></c>`,
-      ),
-    );
-    const file = await archive.generateAsync({ type: "blob", compression: "DEFLATE" });
-    const worker = new Worker(new URL("./officePreview.worker.ts", import.meta.url), {
-      type: "module",
-    });
-    try {
-      const result = await new Promise<OfficeWorkerResult>((resolve) => {
-        worker.addEventListener(
-          "message",
-          (event: MessageEvent<OfficeWorkerResult>) => resolve(event.data),
-          { once: true },
-        );
-        void file
-          .arrayBuffer()
-          .then((bytes) => worker.postMessage({ type: "open", kind: "xlsx", bytes }, [bytes]));
-      });
-      expect(result.type).toBe("xlsx");
-      if (result.type !== "xlsx") throw new Error("Expected bounded workbook");
-      const bounded = await JSZip.loadAsync(result.bytes);
-      const sheet = new DOMParser().parseFromString(
-        await bounded.file("xl/worksheets/sheet1.xml")!.async("string"),
-        "application/xml",
-      );
-      const cells = [...sheet.getElementsByTagName("t")].map((cell) => cell.textContent ?? "");
-      expect(cells.reduce((total, cell) => total + cell.length, 0)).toBe(1024 * 1024);
-      expect(Math.max(...cells.map((cell) => cell.length))).toBe(4096);
-      expect(result.truncated).toBe(true);
-    } finally {
-      worker.terminate();
-    }
-    const src = URL.createObjectURL(file);
-    try {
-      const container = document.createElement("div");
-      container.style.cssText = "display:flex;flex-direction:column;width:640px;height:480px";
-      await using screen = await render(
-        <OfficeFilePreview src={src} name="shared.xlsx" kind="xlsx" />,
-        { container },
-      );
-      await vi.waitFor(
-        () =>
-          expect(screen.container.querySelector('[role="gridcell"]')?.textContent).toHaveLength(
-            4096,
-          ),
-        { timeout: 30_000 },
-      );
-      expect(screen.container.textContent).toContain("Preview limited");
-      const canvas = screen.container.querySelector("canvas")!;
-      await vi.waitFor(() => expect(canvas.width).toBeGreaterThan(0));
-      const scroll = screen.container.querySelector<HTMLElement>('[role="grid"]')!;
-      await act(() => {
-        scroll.scrollTop = 200;
-        scroll.scrollLeft = 200;
-      });
-      await vi.waitFor(() => expect(scroll.scrollTop).toBe(200));
-      expect(canvas.getBoundingClientRect().top).toBeCloseTo(scroll.getBoundingClientRect().top, 0);
-    } finally {
-      URL.revokeObjectURL(src);
-    }
-  },
-);
+it("renders a bounded spreadsheet cell and keeps its canvas fixed while scrolling", async () => {
+  const archive = new JSZip();
+  archive.file(
+    "xl/workbook.xml",
+    '<workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="one" sheetId="1" r:id="s"/></sheets></workbook>',
+  );
+  archive.file(
+    "xl/_rels/workbook.xml.rels",
+    '<Relationships><Relationship Id="s" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>',
+  );
+  archive.file(
+    "xl/worksheets/sheet1.xml",
+    `<worksheet><cols><col min="1" max="2" width="80" customWidth="1"/></cols><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>${"x".repeat(4096)}</t></is></c><c r="B1"><v>1</v></c></row><row r="130"><c r="B130"><v>1</v></c></row></sheetData></worksheet>`,
+  );
+  const { prepareOffice } = await import("./officeArchive");
+  const prepared = await prepareOffice(
+    await archive.generateAsync({ type: "arraybuffer" }),
+    "xlsx",
+  );
+  const onError = vi.fn();
+  await using screen = await render(
+    <div style={{ display: "flex", flexDirection: "column", width: 640, height: 480 }}>
+      <Spreadsheet bytes={prepared.bytes} onDetails={vi.fn()} onError={onError} />
+    </div>,
+  );
+  await expect.element(screen.getByRole("gridcell").first()).toHaveTextContent("x".repeat(4096));
+  const canvas = screen.container.querySelector("canvas")!;
+  const scroll = screen.container.querySelector<HTMLElement>('[role="grid"]')!;
+  await act(() => {
+    scroll.scrollTop = 200;
+    scroll.scrollLeft = 200;
+  });
+  await vi.waitFor(() => {
+    expect(scroll.scrollTop).toBe(200);
+    expect(scroll.scrollLeft).toBe(200);
+  });
+  expect(canvas.getBoundingClientRect().top).toBeCloseTo(scroll.getBoundingClientRect().top, 0);
+  expect(onError).not.toHaveBeenCalled();
+});
 
 it.each([1, 145])(
   "counts shared Word settings once with %s text repetitions",
@@ -1692,7 +1586,7 @@ it.each(["repeated binary", "XML relationship alias", "duplicate relationship ID
       "word/document.xml",
       `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p>${'<w:r><a:blip r:embed="image"/></w:r>'.repeat(7)}</w:p></w:body></w:document>`,
     );
-    const bytes = await archive.generateAsync({ type: "arraybuffer", compression: "DEFLATE" });
+    const bytes = await archive.generateAsync({ type: "arraybuffer" });
     const worker = new Worker(new URL("./officePreview.worker.ts", import.meta.url), {
       type: "module",
     });
@@ -1841,44 +1735,58 @@ it("keeps spreadsheet dates on their calendar day west of UTC", async () => {
   }
 });
 
-it.each([60, 100])("renders all %i pages of a table-heavy Word report", async (pages) => {
-  const { default: JSZip } = await import("jszip");
-  const archive = new JSZip();
-  const paragraph = (text: string) =>
-    `<w:p><w:pPr><w:spacing w:after="120"/><w:jc w:val="left"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Calibri"/><w:sz w:val="22"/></w:rPr><w:t>${text}</w:t></w:r></w:p>`;
-  archive.file(
-    "word/document.xml",
-    `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${Array.from({ length: pages }, (_, page) => paragraph(`page ${page + 1}`) + `<w:tbl>${Array.from({ length: 10 }, () => `<w:tr>${Array.from({ length: 5 }, () => `<w:tc><w:tcPr><w:tcW w:w="1800"/></w:tcPr>${paragraph("report entry")}</w:tc>`).join("")}</w:tr>`).join("")}</w:tbl>`).join("")}</w:body></w:document>`,
-  );
-  archive.file(
-    "_rels/.rels",
-    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>',
-  );
-  archive.file(
-    "[Content_Types].xml",
-    '<Types><Default Extension="png" ContentType="image/png"/></Types>',
-  );
-  // Binary media must not consume the document's markup budget.
-  archive.file("word/media/image.png", new Uint8Array(2_500_000));
-  const file = await archive.generateAsync({ type: "blob", compression: "DEFLATE" });
+it.each([60, 100])(
+  "retains all %i pages of a table-heavy Word report during preparation",
+  async (pages) => {
+    const archive = new JSZip();
+    const paragraph = (text: string) =>
+      `<w:p><w:pPr><w:spacing w:after="120"/><w:jc w:val="left"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Calibri"/><w:sz w:val="22"/></w:rPr><w:t>${text}</w:t></w:r></w:p>`;
+    const report = `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${Array.from({ length: pages }, (_, page) => paragraph(`page ${page + 1}`) + `<w:tbl>${Array.from({ length: 10 }, () => `<w:tr>${Array.from({ length: 5 }, () => `<w:tc><w:tcPr><w:tcW w:w="1800"/></w:tcPr>${paragraph("report entry")}</w:tc>`).join("")}</w:tr>`).join("")}</w:tbl>`).join("")}</w:body></w:document>`;
+    archive.file("word/document.xml", report);
+    archive.file(
+      "_rels/.rels",
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>',
+    );
+    archive.file(
+      "[Content_Types].xml",
+      '<Types><Default Extension="png" ContentType="image/png"/></Types>',
+    );
+    // Binary media must not consume the document's markup budget.
+    archive.file("word/media/image.png", new Uint8Array(2_500_000));
+    const { prepareOffice } = await import("./officeArchive");
+    const prepared = await prepareOffice(
+      await archive.generateAsync({ type: "arraybuffer", compression: "DEFLATE" }),
+      "docx",
+    );
+    expect(prepared.truncated).toBe(false);
+    const bounded = await JSZip.loadAsync(prepared.bytes);
+    expect(await bounded.file("word/document.xml")!.async("string")).toBe(
+      await archive.file("word/document.xml")!.async("string"),
+    );
+  },
+);
+
+it("scrolls to the final Office page beyond the initial mounting batches", async () => {
+  const onError = vi.fn();
   await using screen = await render(
-    <AttachmentFilePreview
-      name="report.docx"
-      mimeType="application/octet-stream"
-      file={file}
-      sizeBytes={file.size}
-    />,
+    <div style={{ display: "flex", height: 700, width: 640 }}>
+      <OfficePages
+        pages={Array.from({ length: 100 }, () => ({ width: 612, height: 792 }))}
+        label="Page"
+        paint={async () => {}}
+        overlay={(index) => <span>page {index + 1}</span>}
+        onError={onError}
+      />
+    </div>,
   );
-  await vi.waitFor(() => expect(screen.container.textContent).toMatch(/\d+ pages/), {
-    timeout: 30_000,
-  });
-  expect(screen.container.textContent).not.toContain("Preview limited");
-  expect(screen.container.querySelector('[role="alert"]')).toBeNull();
+  await expect.element(screen.getByLabelText("Page 100", { exact: true })).toBeInTheDocument();
+  expect(screen.container.querySelectorAll("canvas")).toHaveLength(100);
+  expect(screen.container.textContent).not.toContain("page 100");
   const scroll = screen.container.querySelector<HTMLElement>("[data-office-pages]")!;
   await act(() => scroll.scrollTo({ top: scroll.scrollHeight }));
-  await vi.waitFor(() => expect(screen.container.textContent).toContain("page " + pages), {
-    timeout: 30_000,
-  });
+  await expect.element(screen.getByText("page 100", { exact: true })).toBeVisible();
+  expect(screen.container.querySelectorAll("span").length).toBeLessThan(10);
+  expect(onError).not.toHaveBeenCalled();
 });
 
 describe("standalone Mermaid previews", () => {
@@ -1892,11 +1800,7 @@ describe("standalone Mermaid previews", () => {
       .spyOn(HTMLImageElement.prototype, "src", "set")
       .mockImplementation(() => {});
     await using screen = await render(<MermaidFilePreview text={`flowchart LR\n${node}`} />);
-    await vi.waitFor(() =>
-      expect(screen.container.querySelector('[role="alert"]')?.textContent).toContain(
-        "Show Mermaid source",
-      ),
-    );
+    await expect.element(screen.getByRole("alert")).toMatchTextContent(/Show Mermaid source/);
     expect(imageSource).not.toHaveBeenCalled();
     expect(screen.container.querySelector("svg")).toBeNull();
   });
@@ -1916,9 +1820,23 @@ describe("standalone Mermaid previews", () => {
   });
 });
 
-it("reloads a workspace Word file after a preview remount", async () => {
-  const { default: JSZip } = await import("jszip");
+it("reloads and prepares a workspace Word file after a preview remount", async () => {
   let heading = "Original outlook";
+  let receivePrepared!: (bytes: ArrayBuffer) => void;
+  const original = new Promise<ArrayBuffer>((resolve) => {
+    receivePrepared = resolve;
+  });
+  using _worker = stubGlobal(
+    "Worker",
+    class extends Worker {
+      constructor(...args: ConstructorParameters<typeof Worker>) {
+        super(...args);
+        this.addEventListener("message", (event: MessageEvent<OfficeWorkerResult>) => {
+          if (event.data.type === "docx") receivePrepared(event.data.bytes);
+        });
+      }
+    },
+  );
   using _fetch = stubGlobal(
     "fetch",
     vi.fn(async () => {
@@ -1940,8 +1858,10 @@ it("reloads a workspace Word file after a preview remount", async () => {
       asset={asset}
     />,
   );
-  await vi.waitFor(() => expect(screen.container.textContent).toContain("Original outlook"), {
-    timeout: 10_000,
+  const first = await JSZip.loadAsync(await original);
+  expect(await first.file("word/document.xml")!.async("string")).toContain("Original outlook");
+  const revised = new Promise<ArrayBuffer>((resolve) => {
+    receivePrepared = resolve;
   });
   heading = "Revised outlook";
   await screen.rerender(
@@ -1953,10 +1873,10 @@ it("reloads a workspace Word file after a preview remount", async () => {
       asset={asset}
     />,
   );
-  await vi.waitFor(() => expect(screen.container.textContent).toContain("Revised outlook"), {
-    timeout: 10_000,
-  });
-  expect(screen.container.textContent).not.toContain("Original outlook");
+  const updated = await JSZip.loadAsync(await revised);
+  const body = await updated.file("word/document.xml")!.async("string");
+  expect(body).toContain("Revised outlook");
+  expect(body).not.toContain("Original outlook");
 });
 
 it("clears an Office metadata error when the same URL becomes previewable", async () => {
@@ -2012,6 +1932,11 @@ describe("attachment HTML preview recovery", () => {
     await act(async () => button!.click());
   };
   const alert = (screen: Screen) => screen.container.querySelector('[role="alert"]');
+  const attachmentFetches = () =>
+    vi
+      .mocked(fetch)
+      .mock.calls.map(([url]) => url)
+      .filter((url) => typeof url === "string" && url.startsWith("data:text/html"));
 
   it("keeps a renewed URL for subsequent rendered and source views", async () => {
     setup();
@@ -2028,7 +1953,7 @@ describe("attachment HTML preview recovery", () => {
     await act(async () => {
       await import("./ReadOnlySourcePreview");
     });
-    expect(fetch).toHaveBeenCalledExactlyOnceWith(renewedUrl, expect.any(Object));
+    expect(attachmentFetches()).toEqual([renewedUrl]);
     await vi.waitFor(() =>
       expect(screen.container.querySelector("pre")?.textContent).toBe("<p>Captured HTML</p>"),
     );
@@ -2037,7 +1962,7 @@ describe("attachment HTML preview recovery", () => {
     expect(screen.container.querySelector("iframe")?.getAttribute("src")).toBe(renewedUrl);
     await toggleMode(screen, "Show HTML source");
     expect(refresh).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(fetch).mock.calls.map(([url]) => url)).toEqual([renewedUrl, renewedUrl]);
+    expect(attachmentFetches()).toEqual([renewedUrl, renewedUrl]);
   });
 
   it("does not fetch or mark an expired URL fresh when reauthorization is unavailable", async () => {
@@ -2052,13 +1977,13 @@ describe("attachment HTML preview recovery", () => {
     now = 61 * 60_000;
     refresh.mockResolvedValue(null);
     await toggleMode(screen, "Show HTML source");
-    expect(fetch).not.toHaveBeenCalled();
+    expect(attachmentFetches()).toEqual([]);
     expect(alert(screen)?.textContent).toContain("Reconnect to the environment and try again.");
 
     await toggleMode(screen, "Show rendered page");
     await toggleMode(screen, "Show HTML source");
     expect(refresh).toHaveBeenCalledTimes(3);
-    expect(fetch).not.toHaveBeenCalled();
+    expect(attachmentFetches()).toEqual([]);
   });
 
   it("can return to rendered HTML after local source decoding fails", async () => {
@@ -2182,13 +2107,13 @@ it("refreshes authorization and retries a failed streamed attachment", async () 
         asset={{ environmentId: EnvironmentId.make("test"), attachmentId: "retry" }}
       />,
     );
-    await vi.waitFor(() =>
-      expect(screen.container.textContent).toContain("This file contains binary data."),
-    );
+    await expect
+      .element(screen.getByRole("alert"))
+      .toMatchTextContent(/This file contains binary data\./);
     await act(() =>
       screen.container.querySelector<HTMLButtonElement>('[role="alert"] button')!.click(),
     );
-    await vi.waitFor(() => expect(screen.container.textContent).toContain("recovered text"));
+    await expect.element(screen.locator).toMatchTextContent(/recovered text/);
     expect(refresh).toHaveBeenCalledTimes(2);
   } finally {
     URL.revokeObjectURL(bad);
@@ -2225,13 +2150,11 @@ it.each([
           <OfficeFilePreview name="custom.xlsx" src={src} kind="xlsx" sizeBytes={file.size} />
         </div>,
       );
-      await vi.waitFor(
-        () =>
-          expect(screen.container.textContent).toContain(
-            row > 250000 ? "This workbook exceeds the preview limit" : "worksheet value",
-          ),
-        { timeout: 10_000 },
-      );
+      await expect
+        .element(screen.locator)
+        .toMatchTextContent(
+          row > 250000 ? /This workbook exceeds the preview limit/ : /worksheet value/,
+        );
     } finally {
       URL.revokeObjectURL(src);
     }
@@ -2245,7 +2168,11 @@ it("copies every indexed line rather than the mounted preview rows", async () =>
     <LargeTextViewer name="whole.txt" text={text} delimiter={null} copyContents={copyContents} />,
   );
   await vi.waitFor(() => expect(screen.container.textContent).toContain("line-0"));
-  await vi.waitFor(async () => expect(await copyContents.current!()).toBe(text));
+  await expect.element(screen.getByText(/10,000 lines/)).toBeInTheDocument();
+  await expect
+    .element(screen.getByText("Loading the rest of the file…", { exact: true }))
+    .not.toBeInTheDocument();
+  expect(await copyContents.current!()).toBe(text);
   const first = copyContents.current!();
   await expect(copyContents.current!()).rejects.toThrow("Another copy is in progress.");
   expect(await first).toBe(text);
@@ -2333,6 +2260,7 @@ it("loads a font attachment through the lazy preview", async () => {
       file={file}
     />,
   );
+  await expect.element(screen.getByTitle("Carlito.ttf")).toBeInTheDocument();
   await vi.waitFor(() => {
     const frame = screen.container.querySelector("iframe");
     expect(frame?.title).toBe("Carlito.ttf");
@@ -2353,132 +2281,156 @@ it("toggles a Mermaid attachment between diagram and source through the lazy pre
       file={file}
     />,
   );
+  const press = async (label: string) => {
+    const button = document.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
+    expect(button.disabled).toBe(false);
+    await act(() => button.click());
+  };
+  await expect.element(screen.getByRole("button", { name: "Expand diagram" })).toBeVisible();
   await vi.waitFor(() =>
     expect(screen.container.querySelector("[data-markdown-mermaid] svg path")).not.toBeNull(),
   );
-  await screen.getByRole("button", { name: "Expand diagram" }).click();
+  await press("Expand diagram");
   await vi.waitFor(() => {
     const image = document.querySelector<HTMLImageElement>('[role="dialog"] img');
     expect(image?.alt).toBe("Mermaid diagram");
     expect(image?.naturalWidth).toBeGreaterThan(0);
   });
-  await page.getByRole("button", { name: "Close image preview" }).click();
+  await press("Close image preview");
   await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
-  await screen.getByRole("button", { name: "Show Mermaid source" }).click();
-  await vi.waitFor(() => expect(screen.container.querySelector("pre")?.textContent).toBe(text));
-  await screen.getByRole("button", { name: "Show rendered diagram" }).click();
+  await press("Show Mermaid source");
+  await expect.element(screen.locator).toMatchTextContent(/flowchart LR\s+A --> B/);
+  expect(screen.container.querySelector("pre")?.textContent).toBe(text);
+  await press("Show rendered diagram");
+  await expect.element(screen.getByRole("button", { name: "Expand diagram" })).toBeVisible();
   await vi.waitFor(() =>
     expect(screen.container.querySelector("[data-markdown-mermaid] svg path")).not.toBeNull(),
   );
   expect(screen.container.querySelector('[role="alert"]')).toBeNull();
 });
 
-it("navigates, searches, zooms, and selects mixed-height PDF pages", async () => {
-  const objects = [
-    "<< /Type /Catalog /Pages 2 0 R >>",
-    "<< /Type /Pages /Count 3 /Kids [3 0 R 5 0 R 7 0 R] >>",
-  ];
-  for (const [index, title] of [
-    "Quarterly outlook",
-    "Delivery milestones",
-    "Budget and risks",
-  ].entries()) {
-    const text = `/GS1 gs BT /F1 24 Tf 30 ${index === 0 ? 70 : 700} Td ${index === 0 ? "(Quarter) Tj /F2 24 Tf (ly outlook) Tj" : `(${title}) Tj`} ET`;
-    objects.push(
-      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 ${index === 0 ? 140 : 792}] /Rotate ${index === 2 ? 90 : 0} /Resources << /Font << /F1 9 0 R /F2 10 0 R >> /ExtGState << /GS1 << /TR << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 2 >> >> >> >> /Contents ${4 + index * 2} 0 R >>`,
-      `<< /Length ${text.length} >>\nstream\n${text}\nendstream`,
-    );
-  }
-  objects.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
-  objects.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>");
-  let source = "%PDF-1.4\n";
-  const offsets = [0];
-  for (const [index, object] of objects.entries()) {
-    offsets.push(source.length);
-    source += `${index + 1} 0 obj\n${object}\nendobj\n`;
-  }
-  const xref = source.length;
-  source += `xref\n0 11\n0000000000 65535 f \n${offsets
-    .slice(1)
-    .map((offset) => `${String(offset).padStart(10, "0")} 00000 n \n`)
-    .join("")}trailer\n<< /Size 11 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
-  const file = new Blob([source], { type: "application/pdf" });
-  const { default: PdfViewer } = await import("./PdfViewer");
-  const url = URL.createObjectURL(file);
-  try {
-    await using screen = await render(
-      <div style={{ display: "flex", height: 600, width: 320 }}>
-        <PdfViewer src={url} title="Planning PDF" />
-      </div>,
-    );
-    await vi.waitFor(() => expect(screen.container.textContent).toContain("1 / 3 pages"), {
-      timeout: 15_000,
-    });
-    const region = screen.container.querySelector<HTMLElement>('[role="region"]')!;
-    await vi.waitFor(() => {
-      expect(region.scrollWidth).toBe(region.clientWidth);
-      expect(region.querySelector("canvas")!.getBoundingClientRect().width).toBeLessThan(
-        region.clientWidth,
+it.each(["navigation and sizing", "search and selection"] as const)(
+  "supports %s in mixed-height PDF pages",
+  async (scenario) => {
+    const objects = [
+      "<< /Type /Catalog /Pages 2 0 R >>",
+      "<< /Type /Pages /Count 3 /Kids [3 0 R 5 0 R 7 0 R] >>",
+    ];
+    for (const [index, title] of [
+      "Quarterly outlook",
+      "Delivery milestones",
+      "Budget and risks",
+    ].entries()) {
+      const text = `/GS1 gs BT /F1 24 Tf 30 ${index === 0 ? 70 : 700} Td ${index === 0 ? "(Quarter) Tj /F2 24 Tf (ly outlook) Tj" : `(${title}) Tj`} ET`;
+      objects.push(
+        `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 ${index === 0 ? 140 : 792}] /Rotate ${index === 2 ? 90 : 0} /Resources << /Font << /F1 9 0 R /F2 10 0 R >> /ExtGState << /GS1 << /TR << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 2 >> >> >> >> /Contents ${4 + index * 2} 0 R >>`,
+        `<< /Length ${text.length} >>\nstream\n${text}\nendstream`,
       );
-      expect(screen.container.textContent).toContain("Fit width");
-    });
-    await act(() => {
-      (screen.container.firstElementChild as HTMLElement).style.width = "500px";
-    });
-    await vi.waitFor(() =>
-      expect(region.querySelector("canvas")!.getBoundingClientRect().width).toBe(468),
-    );
-    await screen.getByRole("button", { name: "Next page", exact: true }).click();
-    await vi.waitFor(() => expect(screen.container.textContent).toContain("2 / 3 pages"));
-    await screen.getByRole("button", { name: "Previous page", exact: true }).click();
-    await vi.waitFor(() => expect(screen.container.textContent).toContain("1 / 3 pages"));
-    await screen.getByRole("button", { name: "Zoom in", exact: true }).click();
-    await vi.waitFor(() => expect(region.scrollWidth).toBeGreaterThan(region.clientWidth));
-    await screen.getByRole("button", { name: "Fit width", exact: true }).click();
-    await vi.waitFor(() => expect(region.scrollWidth).toBe(region.clientWidth));
-    await screen.getByRole("searchbox", { name: "Find in PDF" }).fill("Quarterly outlook");
-    await vi.waitFor(() => {
-      expect(screen.container.querySelector('[role="status"]')?.textContent).toBe("1/1");
-      expect(
-        Array.from(region.querySelectorAll(".pdf-find-match")).map((span) => span.textContent),
-      ).toEqual(["Quarter", "ly outlook"]);
-    });
-    await screen.getByRole("searchbox", { name: "Find in PDF" }).fill("Budget");
-    await vi.waitFor(() => expect(screen.container.textContent).toContain("3 / 3 pages"));
-    await screen.getByRole("button", { name: "Zoom in", exact: true }).click();
-    await vi.waitFor(() => expect(screen.container.textContent).toContain("3 / 3 pages"));
-    await vi.waitFor(() => {
-      const span = Array.from(screen.container.querySelectorAll("[data-pdf-text-layer] span")).find(
-        (node) => node.textContent === "Budget and risks",
+    }
+    objects.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
+    objects.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>");
+    let source = "%PDF-1.4\n";
+    const offsets = [0];
+    for (const [index, object] of objects.entries()) {
+      offsets.push(source.length);
+      source += `${index + 1} 0 obj\n${object}\nendobj\n`;
+    }
+    const xref = source.length;
+    source += `xref\n0 11\n0000000000 65535 f \n${offsets
+      .slice(1)
+      .map((offset) => `${String(offset).padStart(10, "0")} 00000 n \n`)
+      .join("")}trailer\n<< /Size 11 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
+    const file = new Blob([source], { type: "application/pdf" });
+    const url = URL.createObjectURL(file);
+    try {
+      await using screen = await render(
+        <div
+          style={{
+            display: "flex",
+            height: 600,
+            width: scenario === "navigation and sizing" ? 320 : 500,
+          }}
+        >
+          <PdfViewer src={url} title="Planning PDF" />
+        </div>,
       );
-      expect(span).toBeDefined();
-      const textBounds = span!.getBoundingClientRect();
-      const pageBounds = span!.parentElement!.getBoundingClientRect();
-      expect(textBounds.width).toBeGreaterThan(0);
-      expect(textBounds.height).toBeGreaterThan(0);
-      expect(textBounds.left).toBeGreaterThanOrEqual(pageBounds.left - 1);
-      expect(textBounds.top).toBeGreaterThanOrEqual(pageBounds.top - 1);
-      expect(textBounds.right).toBeLessThanOrEqual(pageBounds.right + 1);
-      expect(textBounds.bottom).toBeLessThanOrEqual(pageBounds.bottom + 1);
-      const range = document.createRange();
-      range.selectNodeContents(span!);
-      const selection = window.getSelection()!;
-      selection.removeAllRanges();
-      selection.addRange(range);
-      expect(selection.toString()).toBe("Budget and risks");
-      expect(getComputedStyle(span!).userSelect).toBe("text");
-      selection.removeAllRanges();
-    });
-    await screen.getByRole("button", { name: "Fit width", exact: true }).click();
-    await vi.waitFor(() => expect(screen.container.textContent).toContain("3 / 3 pages"));
-    await screen.getByRole("searchbox", { name: "Find in PDF" }).fill(" ");
-    await vi.waitFor(() =>
-      expect(screen.container.querySelector('[role="status"]')?.textContent).toBe("0/0"),
-    );
-  } finally {
-    URL.revokeObjectURL(url);
-  }
-});
+      await vi.waitFor(() => expect(screen.container.textContent).toContain("1 / 3 pages"), {
+        timeout: 15_000,
+      });
+      const region = screen.container.querySelector<HTMLElement>('[role="region"]')!;
+      const press = async (label: string) => {
+        const button = screen.container.querySelector<HTMLButtonElement>(
+          `button[aria-label="${label}"]`,
+        )!;
+        expect(button.disabled).toBe(false);
+        await act(() => button.click());
+      };
+      if (scenario === "navigation and sizing") {
+        await vi.waitFor(() => {
+          expect(region.scrollWidth).toBe(region.clientWidth);
+          expect(region.querySelector("canvas")!.getBoundingClientRect().width).toBeLessThan(
+            region.clientWidth,
+          );
+          expect(screen.container.textContent).toContain("Fit width");
+        });
+        await act(() => {
+          (screen.container.firstElementChild as HTMLElement).style.width = "500px";
+        });
+        await vi.waitFor(() =>
+          expect(region.querySelector("canvas")!.getBoundingClientRect().width).toBe(468),
+        );
+        await press("Next page");
+        await vi.waitFor(() => expect(screen.container.textContent).toContain("2 / 3 pages"));
+        await press("Previous page");
+        await vi.waitFor(() => expect(screen.container.textContent).toContain("1 / 3 pages"));
+        await press("Zoom in");
+        await vi.waitFor(() => expect(region.scrollWidth).toBeGreaterThan(region.clientWidth));
+        await press("Fit width");
+        await vi.waitFor(() => expect(region.scrollWidth).toBe(region.clientWidth));
+        return;
+      }
+      await screen.getByRole("searchbox", { name: "Find in PDF" }).fill("Quarterly outlook");
+      await expect.element(screen.getByRole("status")).toHaveTextContent("1/1");
+      await vi.waitFor(() => {
+        expect(
+          Array.from(region.querySelectorAll(".pdf-find-match")).map((span) => span.textContent),
+        ).toEqual(["Quarter", "ly outlook"]);
+      });
+      await screen.getByRole("searchbox", { name: "Find in PDF" }).fill("Budget");
+      await expect.element(screen.locator).toMatchTextContent(/3 \/ 3 pages/);
+      await press("Zoom in");
+      await vi.waitFor(() => expect(screen.container.textContent).toContain("3 / 3 pages"));
+      await vi.waitFor(() => {
+        const span = Array.from(
+          screen.container.querySelectorAll("[data-pdf-text-layer] span"),
+        ).find((node) => node.textContent === "Budget and risks");
+        expect(span).toBeDefined();
+        const textBounds = span!.getBoundingClientRect();
+        const pageBounds = span!.parentElement!.getBoundingClientRect();
+        expect(textBounds.width).toBeGreaterThan(0);
+        expect(textBounds.height).toBeGreaterThan(0);
+        expect(textBounds.left).toBeGreaterThanOrEqual(pageBounds.left - 1);
+        expect(textBounds.top).toBeGreaterThanOrEqual(pageBounds.top - 1);
+        expect(textBounds.right).toBeLessThanOrEqual(pageBounds.right + 1);
+        expect(textBounds.bottom).toBeLessThanOrEqual(pageBounds.bottom + 1);
+        const range = document.createRange();
+        range.selectNodeContents(span!);
+        const selection = window.getSelection()!;
+        selection.removeAllRanges();
+        selection.addRange(range);
+        expect(selection.toString()).toBe("Budget and risks");
+        expect(getComputedStyle(span!).userSelect).toBe("text");
+        selection.removeAllRanges();
+      });
+      await press("Fit width");
+      await vi.waitFor(() => expect(screen.container.textContent).toContain("3 / 3 pages"));
+      await screen.getByRole("searchbox", { name: "Find in PDF" }).fill(" ");
+      await expect.element(screen.getByRole("status")).toHaveTextContent("0/0");
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  },
+);
 it("mounts a bounded set of saved notebook outputs as the reader scrolls", async () => {
   const notebook = {
     nbformat: 4,
@@ -2493,20 +2445,15 @@ it("mounts a bounded set of saved notebook outputs as the reader scrolls", async
       })),
     })),
   };
-  const file = new Blob([JSON.stringify(notebook)]);
+  const bytes = new TextEncoder().encode(JSON.stringify(notebook));
+  const parsed = openNotebook(bytes.buffer);
+  if (parsed.type !== "notebook") throw new Error("Expected saved notebook");
   await using screen = await render(
     <div style={{ display: "flex", height: 400, width: 600 }}>
-      <AttachmentFilePreview
-        name="observations.ipynb"
-        mimeType="application/json"
-        sizeBytes={file.size}
-        file={file}
-      />
+      <NotebookPreview notebook={parsed} sizeBytes={bytes.byteLength} />
     </div>,
   );
-  await vi.waitFor(() =>
-    expect(screen.container.querySelectorAll("iframe").length).toBeGreaterThan(0),
-  );
+  await expect.element(screen.getByTitle("Cell 1 HTML output").first()).toBeInTheDocument();
   expect(screen.container.querySelectorAll("iframe").length).toBeLessThanOrEqual(16);
   const first = screen.container.querySelector("iframe")!;
   expect(first.srcdoc).toContain("saved 0-0");
@@ -2614,41 +2561,6 @@ it.each(["rtf", "epub", "ods"] as const)(
             String.raw`{\rtf1\ansi 10\endash 20 \emdash \bullet \lquote a\rquote \ldblquote b\rdblquote\par Name\cell Value\cell\row 12\cell 34\cell\row{\*\private hidden\endash\cell\row}Unicode:\u8211\endash end}`,
           ])
         : await archive.generateAsync({ type: "blob" });
-    const bytes = await file.arrayBuffer();
-    const worker = new Worker(new URL("./officePreview.worker.ts", import.meta.url), {
-      type: "module",
-    });
-    try {
-      const result = await new Promise<OfficeWorkerResult>((resolve) => {
-        worker.addEventListener(
-          "message",
-          (event: MessageEvent<OfficeWorkerResult>) => resolve(event.data),
-          { once: true },
-        );
-        worker.postMessage({ type: "open", kind, bytes }, [bytes]);
-      });
-      if (kind === "ods") {
-        expect(result.type).toBe("ods");
-        if (result.type !== "ods") throw new Error("Expected spreadsheet");
-        expect(result.sheets[0]!.rows).toEqual([["North", "150"]]);
-      } else {
-        expect(result.type).toBe("document");
-        if (result.type !== "document") throw new Error("Expected document");
-        const body = new DOMParser().parseFromString(result.pages[0]!.html, "text/html").body;
-        if (kind === "epub") {
-          expect(body.querySelectorAll("br")).toHaveLength(2);
-          expect(body.querySelectorAll("hr")).toHaveLength(1);
-        } else {
-          expect(body.textContent).toContain("10–20 —•‘a’“b”");
-          expect(body.textContent).toContain("Name\tValue\t12\t34\t");
-          expect(body.textContent).toContain("Unicode:–end");
-          expect(body.textContent).not.toContain("hidden");
-          expect(body.querySelectorAll("br")).toHaveLength(3);
-        }
-      }
-    } finally {
-      worker.terminate();
-    }
     await using screen = await render(
       <div style={{ display: "flex", height: 400, width: 600 }}>
         <AttachmentFilePreview
@@ -2659,16 +2571,33 @@ it.each(["rtf", "epub", "ods"] as const)(
         />
       </div>,
     );
+    if (kind !== "ods")
+      await expect.element(screen.getByTitle(new RegExp(`^report\\.${kind}:`))).toBeInTheDocument();
+    else await expect.element(screen.locator).toMatchTextContent(/North/);
     await vi.waitFor(() => {
       if (kind === "ods") {
         expect(screen.container.textContent).toContain("North");
         expect(screen.container.textContent).toContain("150");
+        expect(
+          [...screen.container.querySelectorAll('[role="cell"]')].map((cell) => cell.textContent),
+        ).toEqual(["North", "150"]);
         expect(screen.container.textContent).not.toContain("private note");
         expect(screen.container.textContent).toContain("1 rows · 2 columns");
         expect(screen.container.textContent).not.toContain("Limited to 500");
       } else {
-        const frame = screen.container.querySelector("iframe");
-        expect(frame?.srcdoc).toContain(kind === "rtf" ? "10–20" : "first<br>second<br>third");
+        const frame = screen.container.querySelector("iframe")!;
+        expect(frame.srcdoc).toContain(kind === "rtf" ? "10–20" : "first<br>second<br>third");
+        const body = new DOMParser().parseFromString(frame.srcdoc, "text/html").body;
+        if (kind === "epub") {
+          expect(body.querySelectorAll("br")).toHaveLength(2);
+          expect(body.querySelectorAll("hr")).toHaveLength(1);
+        } else {
+          expect(body.textContent).toContain("10–20 —•‘a’“b”");
+          expect(body.textContent).toContain("Name\tValue\t12\t34\t");
+          expect(body.textContent).toContain("Unicode:–end");
+          expect(body.textContent).not.toContain("hidden");
+          expect(body.querySelectorAll("br")).toHaveLength(3);
+        }
       }
     });
     expect(screen.container.querySelector('[role="alert"]')).toBeNull();
