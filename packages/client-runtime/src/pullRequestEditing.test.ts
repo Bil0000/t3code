@@ -10,6 +10,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   canEditPullRequestChangeRequest,
   canEditPullRequestComment,
+  canEditPullRequestMaintainerEdits,
   canResolvePullRequestThread,
 } from "./pullRequestEditing.ts";
 
@@ -139,6 +140,21 @@ describe("canEditPullRequestChangeRequest", () => {
       ),
     ).toBe(true);
   });
+});
+
+describe("canEditPullRequestMaintainerEdits", () => {
+  it.each(["open", "closed", "merged"] as const)(
+    "only allows an open pull request when cached permissions allow edits: %s",
+    (state) => {
+      const detail = {
+        state,
+        capabilities: capabilities({ changeRequest: true, comment: true, maintainerEdits: true }),
+        viewerPermissions: permissions({ maintainerEdits: true }),
+        maintainerCanModify: false,
+      };
+      expect(canEditPullRequestMaintainerEdits(detail)).toBe(state === "open");
+    },
+  );
 });
 
 describe("canEditPullRequestComment", () => {

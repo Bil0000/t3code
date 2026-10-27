@@ -1,4 +1,5 @@
 import { useAtomRefresh } from "@effect/atom-react";
+import { canEditPullRequestMaintainerEdits } from "@t3tools/client-runtime/pull-request-editing";
 import type { PullRequestDetail } from "@t3tools/contracts";
 import { AsyncResult } from "effect/reactivity";
 import { useRef, useState } from "react";
@@ -24,10 +25,7 @@ export function usePullRequestMaintainerEdits(
   const value = selection.key === key ? selection.value : (pr?.maintainerCanModify ?? false);
   const [saving, setSaving] = useState(false);
   const inFlight = useRef(false);
-  const visible =
-    pr?.capabilities.edit?.maintainerEdits === true &&
-    pr.viewerPermissions.maintainerEdits === true &&
-    pr.maintainerCanModify !== undefined;
+  const visible = pr !== null && canEditPullRequestMaintainerEdits(pr);
   const save = async (next: boolean) => {
     if (!visible || !permissions.canEditChangeRequest || inFlight.current) return;
     const previous = value;

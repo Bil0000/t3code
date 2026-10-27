@@ -1,4 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
+import { canEditPullRequestMaintainerEdits } from "@t3tools/client-runtime/pull-request-editing";
 import type { ChangeRequestTerminology } from "@t3tools/client-runtime/source-control-clients";
 import type {
   EnvironmentId,
@@ -146,10 +147,7 @@ export function PullRequestActionsMenu({
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const inlineConfirm = useInlineActionConfirm(pullRequestKey);
   const actionPending = pendingAction !== null;
-  const showsMaintainerEdits =
-    detail.capabilities.edit?.maintainerEdits === true &&
-    detail.viewerPermissions.maintainerEdits === true &&
-    detail.maintainerCanModify !== undefined;
+  const showsMaintainerEdits = canEditPullRequestMaintainerEdits(detail);
   return (
     <Menu>
       <Tooltip>

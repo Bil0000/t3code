@@ -25,6 +25,20 @@ export function canEditPullRequestChangeRequest(detail: EditingSubject): boolean
   );
 }
 
+export function canEditPullRequestMaintainerEdits(
+  detail: Pick<
+    PullRequestDetail,
+    "state" | "capabilities" | "viewerPermissions" | "maintainerCanModify"
+  >,
+): boolean {
+  return (
+    detail.state === "open" &&
+    detail.capabilities.edit?.maintainerEdits === true &&
+    detail.viewerPermissions.maintainerEdits === true &&
+    detail.maintainerCanModify !== undefined
+  );
+}
+
 /** Hosts do not support rewriting review summaries through comment mutations. */
 export function canEditPullRequestComment(
   detail: EditingSubject,
