@@ -121,7 +121,6 @@ const AssetClaimsSchema = Schema.Union([
     kind: Schema.Literal("workspace-file-exact"),
     workspaceRoot: Schema.String,
     relativePath: Schema.String,
-    download: Schema.optionalKey(Schema.Literal(true)),
     expiresAt: Schema.Number,
   }),
   Schema.Struct({
@@ -449,7 +448,6 @@ const finalizeWorkspaceFileAsset = Effect.fn("AssetAccess.finalizeWorkspaceFileA
     readonly requestedPath: string;
     readonly resource: AssetResource;
     readonly expiresAt: number;
-    readonly download?: boolean;
   }) {
     const path = yield* Path.Path;
     const fileSystem = yield* FileSystem.FileSystem;
@@ -472,7 +470,7 @@ const finalizeWorkspaceFileAsset = Effect.fn("AssetAccess.finalizeWorkspaceFileA
       input.resource._tag === "draft-workspace-file" &&
       (isWorkspaceAudioPreviewPath(resolved.relativePath) ||
         isWorkspaceVideoPreviewPath(resolved.relativePath));
-    if (!input.download && !isDraftMedia && !isWorkspacePreviewEntryPath(resolved.relativePath)) {
+    if (!isDraftMedia && !isWorkspacePreviewEntryPath(resolved.relativePath)) {
       return yield* new AssetPreviewTypeValidationError({
         resource: input.resource,
       });
@@ -494,7 +492,7 @@ const finalizeWorkspaceFileAsset = Effect.fn("AssetAccess.finalizeWorkspaceFileA
         resource: input.resource,
       });
     }
-    if (isDraftMedia && !input.download) {
+    if (isDraftMedia) {
       return yield* finalizeAbsoluteMediaFileAsset({
         ...input,
         requestedPath: canonicalFile,
@@ -516,23 +514,21 @@ const finalizeWorkspaceFileAsset = Effect.fn("AssetAccess.finalizeWorkspaceFileA
       ? yield* readImageDimensionsFromHeader(canonicalFile)
       : null;
     return {
-      claims:
-        input.download || !/\.html?$/i.test(resolved.relativePath)
-          ? {
-              version: 1 as const,
-              kind: "workspace-file-exact" as const,
-              workspaceRoot: canonicalWorkspaceRoot,
-              relativePath: resolved.relativePath,
-              ...(input.download ? { download: true as const } : {}),
-              expiresAt: input.expiresAt,
-            }
-          : {
-              version: 1 as const,
-              kind: "workspace-file" as const,
-              workspaceRoot: canonicalWorkspaceRoot,
-              baseRelativePath: path.dirname(resolved.relativePath),
-              expiresAt: input.expiresAt,
-            },
+      claims: !/\.html?$/i.test(resolved.relativePath)
+        ? {
+            version: 1 as const,
+            kind: "workspace-file-exact" as const,
+            workspaceRoot: canonicalWorkspaceRoot,
+            relativePath: resolved.relativePath,
+            expiresAt: input.expiresAt,
+          }
+        : {
+            version: 1 as const,
+            kind: "workspace-file" as const,
+            workspaceRoot: canonicalWorkspaceRoot,
+            baseRelativePath: path.dirname(resolved.relativePath),
+            expiresAt: input.expiresAt,
+          },
       fileName: path.basename(resolved.relativePath),
       imageDimensions,
       fileRevision: undefined,
@@ -606,7 +602,6 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
         requestedPath: input.resource.path,
         resource: input.resource,
         expiresAt,
-        download: input.resource.disposition === "attachment",
       });
       claims = finalized.claims;
       fileName = finalized.fileName;
@@ -618,7 +613,7 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
       const hostPath = input.resource.path.startsWith("~/")
         ? expandHomePath(input.resource.path, yield* HostProcess.HomeDirectory)
         : input.resource.path;
-      if (path.isAbsolute(hostPath) && input.resource.disposition !== "attachment") {
+      if (path.isAbsolute(hostPath)) {
         const finalized = yield* finalizeAbsoluteMediaFileAsset({
           requestedPath: hostPath,
           workspaceRoot: draftWorkspaceRoot,
@@ -642,10 +637,9 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
       );
       const finalized = yield* finalizeWorkspaceFileAsset({
         workspaceRoot,
-        requestedPath: hostPath,
+        requestedPath: input.resource.path,
         resource: input.resource,
         expiresAt,
-        download: input.resource.disposition === "attachment",
       });
       claims = finalized.claims;
       fileName = finalized.fileName;
@@ -1028,26 +1022,6 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
       workspaceRoot: claims.workspaceRoot,
       relativePath: claims.relativePath,
     });
-    if (exactWorkspaceFile && claims.download) {
-      const file = yield* openMediaFile(exactWorkspaceFile).pipe(
-        Effect.tapError((cause) =>
-          Effect.logError("Failed to open workspace download.", {
-            filePath: exactWorkspaceFile,
-            cause,
-          }),
-        ),
-        Effect.orElseSucceed(() => null),
-      );
-      return file
-        ? ({
-            kind: "file",
-            path: exactWorkspaceFile,
-            download: true,
-            fileName: path.basename(claims.relativePath),
-            file,
-          } satisfies ResolvedAsset)
-        : null;
-    }
     return exactWorkspaceFile
       ? ({ kind: "file", path: exactWorkspaceFile } satisfies ResolvedAsset)
       : null;

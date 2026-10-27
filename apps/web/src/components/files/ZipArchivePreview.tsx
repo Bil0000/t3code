@@ -1,6 +1,14 @@
 import { FileTree, useFileTree, useFileTreeSearch } from "@pierre/trees/react";
 import { formatAttachmentSize } from "@t3tools/client-runtime/state/attachments";
-import { filePreviewKind } from "@t3tools/shared/filePreview";
+import {
+  checkZipArchiveSize,
+  loadZipArchive,
+  readZipArchiveStream,
+  withZipAbort,
+  ZipPreviewError,
+  type ZipPreviewEntry,
+} from "@t3tools/client-runtime/zip-preview";
+import { decodeFilePreviewText, filePreviewKind } from "@t3tools/shared/filePreview";
 import {
   ArrowLeftIcon,
   DownloadIcon,
@@ -10,6 +18,7 @@ import {
   ListTreeIcon,
   MessageSquarePlusIcon,
   Trash2Icon,
+  XIcon,
 } from "lucide-react";
 import { LegendList } from "@legendapp/list/react";
 import { useEffect, useRef, useState } from "react";
@@ -30,24 +39,17 @@ import { useComposerHandleContext } from "~/composerHandleContext";
 import { useTheme } from "~/hooks/useTheme";
 import { observeResize } from "~/lib/observeResize";
 import { cn } from "~/lib/utils";
-import {
-  loadZipPreview,
-  readZipPreviewResponse,
-  ZipPreviewError,
-  type ZipPreviewEntry,
-} from "~/lib/zipPreview";
 import { T3_PIERRE_ICONS } from "~/pierre-icons";
 import { PIERRE_TREE_UNSAFE_CSS, pierreTreeStyle } from "~/pierre-tree-theme";
 
 import { AttachmentFilePreview, ReadOnlySourcePreview } from "./AttachmentFilePreview";
-import { useZipFileCounts } from "./filePreviewMode";
 import {
   FILE_SURFACE_SUBHEADER_CLASS,
   FileSurfaceAction,
   FileSurfaceLoading,
 } from "./fileSurfaceChrome";
 
-type ZipArchive = Awaited<ReturnType<typeof loadZipPreview>>;
+type ZipArchive = Awaited<ReturnType<typeof loadZipArchive>>;
 type ZipFailureReason = ZipPreviewError["reason"];
 
 const MIB = 1024 * 1024;
@@ -58,6 +60,10 @@ function errorMessage(cause: unknown, fallback: string) {
   return cause instanceof Error ? cause.message : fallback;
 }
 
+function entryBlob(bytes: Uint8Array<ArrayBuffer>, entry: ZipPreviewEntry) {
+  return new Blob([bytes], { type: entry.mimeType ?? "application/octet-stream" });
+}
+
 function saveBlob(blob: Blob, name: string) {
   const url = URL.createObjectURL(blob);
   setTimeout(() => URL.revokeObjectURL(url), 30_000);
@@ -65,6 +71,18 @@ function saveBlob(blob: Blob, name: string) {
   anchor.href = url;
   anchor.download = name;
   anchor.click();
+}
+
+async function readZipResponse(
+  response: Response,
+  signal: AbortSignal,
+  onProgress: (receivedBytes: number) => void,
+) {
+  if (!response.ok || !response.body) {
+    void response.body?.cancel().catch(() => {});
+    throw new Error("Could not load this ZIP file.");
+  }
+  return readZipArchiveStream(response.body, signal, onProgress);
 }
 
 function folderOf(path: string) {
@@ -183,8 +201,12 @@ function ZipEntryPreview(props: {
     const read = prefixRequested
       ? archive
           .readTextPrefix(entry, controller.signal)
-          .then((result) => () => setPrefix(result.text))
-      : archive.readFile(entry, controller.signal).then((blob) => () => setFile(blob));
+          .then(
+            (result) => () => setPrefix(decodeFilePreviewText(result.bytes, result.truncated).text),
+          )
+      : archive
+          .readFile(entry, controller.signal)
+          .then((bytes) => () => setFile(entryBlob(bytes, entry)));
     read.then(
       (apply) => {
         if (!controller.signal.aborted) apply();
@@ -261,9 +283,9 @@ function ZipImageTile(props: {
     const controller = new AbortController();
     let objectUrl: string | null = null;
     archive.readFile(entry, controller.signal).then(
-      (blob) => {
+      (bytes) => {
         if (controller.signal.aborted) return;
-        objectUrl = URL.createObjectURL(blob);
+        objectUrl = URL.createObjectURL(entryBlob(bytes, entry));
         setUrl(objectUrl);
       },
       () => {},
@@ -383,6 +405,7 @@ function ZipArchiveBrowser(props: {
   readonly sizeBytes: number;
   readonly onSaveZip: () => void;
   readonly onRemove: (() => void) | undefined;
+  readonly onClose: (() => void) | undefined;
 }) {
   const { resolvedTheme } = useTheme();
   const composerRef = useComposerHandleContext();
@@ -450,7 +473,7 @@ function ZipArchiveBrowser(props: {
   const saveEntry = (entry: ZipPreviewEntry) => {
     const controller = new AbortController();
     archive.readFileForSave(entry, controller.signal).then(
-      (blob) => saveBlob(blob, entry.name),
+      (bytes) => saveBlob(entryBlob(bytes, entry), entry.name),
       (cause: unknown) =>
         toastManager.add({
           type: "error",
@@ -467,9 +490,11 @@ function ZipArchiveBrowser(props: {
     extraction.current = controller;
     setAdding(true);
     archive.readFileForSave(entry, controller.signal).then(
-      (blob) => {
+      (bytes) => {
         if (controller.signal.aborted) return;
-        composer.addDroppedFiles([new File([blob], entry.name, { type: blob.type })]);
+        composer.addDroppedFiles([
+          new File([bytes], entry.name, { type: entry.mimeType ?? "application/octet-stream" }),
+        ]);
         setAdding(false);
       },
       (cause: unknown) => {
@@ -549,6 +574,11 @@ function ZipArchiveBrowser(props: {
         {props.onRemove ? (
           <FileSurfaceAction label="Remove from draft" onPress={props.onRemove}>
             <Trash2Icon className="size-3.5" />
+          </FileSurfaceAction>
+        ) : null}
+        {props.onClose ? (
+          <FileSurfaceAction label="Close" onPress={props.onClose}>
+            <XIcon className="size-3.5" />
           </FileSurfaceAction>
         ) : null}
       </div>
@@ -704,33 +734,35 @@ export default function ZipArchivePreview(props: {
   readonly url: string;
   readonly sizeBytes: number;
   readonly origin: string;
-  readonly countKey: string | null;
   readonly onRetry: () => void;
   readonly onSaveZip: () => void;
   readonly onRemove?: () => void;
+  readonly onClose?: () => void;
 }) {
   const [archive, setArchive] = useState<ZipArchive | null>(null);
   const [failure, setFailure] = useState<{ reason: ZipFailureReason | null; message: string }>();
   const [progress, setProgress] = useState({ received: 0, seconds: 0 });
   const [cancelled, setCancelled] = useState(false);
   const download = useRef<AbortController | null>(null);
-  const { file, url, countKey } = props;
+  const { file, url } = props;
   // oxlint-disable-next-line t3code/react-effect-budget -- Load the archive bytes and cancel the download on cleanup.
   useEffect(() => {
     const controller = new AbortController();
     download.current = controller;
     const startedAt = Date.now();
     void (async () => {
-      const blob =
-        file ??
-        (await readZipPreviewResponse(
-          await fetch(url, { signal: controller.signal }),
-          controller.signal,
-          (received) => setProgress({ received, seconds: (Date.now() - startedAt) / 1000 }),
-        ));
-      const loaded = await loadZipPreview(blob, controller.signal);
+      if (file) checkZipArchiveSize(file.size);
+      const loaded = await loadZipArchive(
+        file
+          ? new Uint8Array(await withZipAbort(file.arrayBuffer(), controller.signal))
+          : await readZipResponse(
+              await fetch(url, { signal: controller.signal }),
+              controller.signal,
+              (received) => setProgress({ received, seconds: (Date.now() - startedAt) / 1000 }),
+            ),
+        controller.signal,
+      );
       if (controller.signal.aborted) return;
-      if (countKey) useZipFileCounts.setState({ [countKey]: loaded.fileCount });
       setArchive(loaded);
     })().catch((cause: unknown) => {
       if (controller.signal.aborted) return;
@@ -740,7 +772,7 @@ export default function ZipArchivePreview(props: {
       });
     });
     return () => controller.abort();
-  }, [file, url, countKey]);
+  }, [file, url]);
 
   const saveZip = (
     <Button size="sm" variant="outline" onClick={props.onSaveZip}>
@@ -828,6 +860,7 @@ export default function ZipArchivePreview(props: {
       sizeBytes={props.sizeBytes}
       onSaveZip={props.onSaveZip}
       onRemove={props.onRemove}
+      onClose={props.onClose}
     />
   );
 }

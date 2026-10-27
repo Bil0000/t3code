@@ -116,15 +116,6 @@ export function zipFolderLabel(label: string) {
   return { prefix: parts.length > 1 ? `${parts.slice(0, -1).join("/")}/` : "", name };
 }
 
-export function isZipAttachment(input: { readonly name: string; readonly mimeType: string }) {
-  const mime = input.mimeType.split(";", 1)[0]?.trim().toLowerCase();
-  return (
-    mime === "application/zip" ||
-    mime === "application/x-zip-compressed" ||
-    input.name.toLowerCase().endsWith(".zip")
-  );
-}
-
 export function zipDownloadTimeLeft(input: {
   readonly receivedBytes: number;
   readonly totalBytes: number;

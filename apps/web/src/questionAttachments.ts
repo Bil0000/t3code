@@ -5,7 +5,7 @@ import {
 } from "@t3tools/client-runtime/state/thread-requests";
 import type { EnvironmentId, ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 import { create } from "zustand";
-import { type ComposerThreadTarget, DraftId, useComposerDraftStore } from "./composerDraftStore";
+import { DraftId, useComposerDraftStore } from "./composerDraftStore";
 import { releaseDraftAttachments } from "./lib/attachmentUploadQueue";
 
 export function questionAttachmentDraftPrefix(
@@ -23,20 +23,6 @@ export function questionAttachmentDraftId(
 ): DraftId {
   return DraftId.make(
     `${questionAttachmentDraftPrefix(environmentId, threadId)}${encodeURIComponent(JSON.stringify([requestId, questionId]))}`,
-  );
-}
-
-export function isQuestionAttachmentRemovalBlocked(input: {
-  target: ComposerThreadTarget;
-  environmentId: EnvironmentId;
-  threadId: ThreadId | null;
-  responding: boolean;
-}): boolean {
-  return (
-    input.responding &&
-    input.threadId !== null &&
-    typeof input.target === "string" &&
-    input.target.startsWith(questionAttachmentDraftPrefix(input.environmentId, input.threadId))
   );
 }
 

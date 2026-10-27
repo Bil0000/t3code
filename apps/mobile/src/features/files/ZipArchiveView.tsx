@@ -27,12 +27,18 @@ import { Toolbar } from "../../components/ui/Toolbar";
 import { useNativeColumnLayoutMetrics } from "../../native/native-layout-metrics";
 import { NativeScrollView } from "../../native/NativeScrollViewMarker";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
-import { writeGeneratedAttachmentFile } from "../../lib/attachmentDownload";
+import * as Dialog from "../../components/ui/Dialog";
+import { FilePreviewModal } from "../../components/FilePreviewModal";
+import {
+  nativeViewerErrorMessage,
+  shareGeneratedAttachment,
+  writeGeneratedAttachmentFile,
+} from "../../lib/attachmentDownload";
 import { attachmentDocumentPresentation } from "../../lib/attachmentDocumentPresentation";
-import { AttachmentFileView, type FileViewerDocument } from "./AttachmentFileView";
+import { createComposerFileAttachment } from "../../lib/composerImages";
+import { appendComposerDraftAttachments } from "../../state/use-composer-drafts";
+import { AttachmentDocumentBody } from "./AttachmentFileScreen";
 import { FilePreviewLoading } from "./FilePreviewFeedback";
-import { useFileActions } from "./useFileActions";
-import { addZipEntryToDraft, withExtractedZipEntry } from "./zipEntryActions";
 import {
   buildZipTree,
   flattenZipTree,
@@ -443,7 +449,6 @@ export function ZipArchiveView(props: {
   readonly refresh: () => Promise<string | null>;
   readonly environmentId: EnvironmentId | null;
   readonly draftKey: string | null;
-  readonly questionPrefix: string | null;
   readonly maxAttachmentBytes: number | undefined;
   readonly onSave: () => void;
   readonly onRemove: (() => void) | null;
@@ -514,7 +519,6 @@ export function ZipArchiveView(props: {
             entry={selected}
             environmentId={props.environmentId}
             draftKey={props.draftKey}
-            questionPrefix={props.questionPrefix}
             maxAttachmentBytes={props.maxAttachmentBytes}
             onBack={() => setSelection(null)}
           />
@@ -522,6 +526,36 @@ export function ZipArchiveView(props: {
       ) : null}
     </View>
   );
+}
+
+async function addZipEntryToDraft(input: {
+  readonly archive: ZipArchive;
+  readonly entry: ZipPreviewEntry;
+  readonly draftKey: string;
+  readonly maxBytes: number;
+  readonly signal: AbortSignal;
+}) {
+  const { entry, signal } = input;
+  const mimeType = entry.mimeType ?? "application/octet-stream";
+  const file = await writeGeneratedAttachmentFile({
+    bytes: await input.archive.readFileForSave(entry, signal),
+    attachment: { name: entry.name, mimeType },
+  });
+  try {
+    signal.throwIfAborted();
+    const attachment = await createComposerFileAttachment({
+      uri: file.uri,
+      name: entry.name,
+      mimeType,
+      sizeBytes: entry.sizeBytes,
+      maxBytes: input.maxBytes,
+    });
+    signal.throwIfAborted();
+    if (appendComposerDraftAttachments(input.draftKey, [attachment], { appendReference: true }))
+      throw new Error("This message already has as many attachments as it can hold.");
+  } finally {
+    file.dispose();
+  }
 }
 
 type EntryContent =
@@ -536,20 +570,25 @@ function ZipEntryView(props: {
   readonly entry: ZipPreviewEntry;
   readonly environmentId: EnvironmentId | null;
   readonly draftKey: string | null;
-  readonly questionPrefix: string | null;
   readonly maxAttachmentBytes: number | undefined;
   readonly onBack: () => void;
 }) {
-  const { archive, entry } = props;
+  const { archive, entry, draftKey, maxAttachmentBytes } = props;
   const mimeType = entry.mimeType ?? "application/octet-stream";
   const previewKind = filePreviewKind({ name: entry.name, mimeType });
   const isText = previewKind === "text" || previewKind === "markdown" || previewKind === "html";
+  // Archive HTML is shown as source: a rendered page could load its sibling files.
   const kind = previewKind === "html" ? "text" : previewKind;
   const [content, setContent] = useState<EntryContent>({ status: "loading" });
   const [prefixRequested, setPrefixRequested] = useState(false);
   const [rendered, setRendered] = useState(true);
   const [revision, setRevision] = useState(0);
-  const { busy, run } = useFileActions(entry.name);
+  const [viewerError, setViewerError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<"save" | "attach" | null>(null);
+  const action = useRef<AbortController | null>(null);
+  const pendingViewerError = useRef<string | null>(null);
+  // oxlint-disable-next-line t3code/react-effect-budget -- Cancel a pending save or attach when the entry closes.
+  useEffect(() => () => action.current?.abort(), []);
   // oxlint-disable-next-line t3code/react-effect-budget -- Read the selected entry and release its cached file on cleanup.
   useEffect(() => {
     const controller = new AbortController();
@@ -592,114 +631,203 @@ function ZipEntryView(props: {
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Retry must reread the entry.
   }, [archive, entry, isText, mimeType, prefixRequested, revision]);
 
+  const run = (kind: "save" | "attach", task: (signal: AbortSignal) => Promise<unknown>) => {
+    if (busy) return;
+    setBusy(kind);
+    const controller = new AbortController();
+    action.current = controller;
+    void task(controller.signal).then(
+      () => {
+        if (controller.signal.aborted) return;
+        setBusy(null);
+        if (kind === "attach")
+          Dialog.alert("Added to chat", `${entry.name} is attached to your message.`);
+      },
+      (cause: unknown) => {
+        if (controller.signal.aborted) return;
+        setBusy(null);
+        Dialog.alert(
+          kind === "save" ? "Could not save file" : "Could not add file to chat",
+          errorMessage(cause, "Please try again."),
+        );
+      },
+    );
+  };
   const save = () =>
-    run("save", (signal) => withExtractedZipEntry(archive, entry, signal, (file) => file.share()));
-  const { draftKey, questionPrefix, maxAttachmentBytes } = props;
+    run("save", async (signal) =>
+      shareGeneratedAttachment({
+        bytes: await archive.readFileForSave(entry, signal),
+        attachment: { name: entry.name, mimeType },
+        signal,
+      }),
+    );
+  const canAddToChat = draftKey !== null && maxAttachmentBytes !== undefined;
+  const addToChat = () => {
+    if (draftKey === null || maxAttachmentBytes === undefined) return;
+    run("attach", (signal) =>
+      addZipEntryToDraft({ archive, entry, draftKey, maxBytes: maxAttachmentBytes, signal }),
+    );
+  };
+
   const text = content.status === "text" ? content : null;
   const delimiter = filePreviewDelimiter({ name: entry.name, mimeType });
   const table = text && delimiter ? parseDelimitedPreview(text.text, delimiter) : null;
   const uri = content.status === "file" ? content.uri : null;
-  const document: FileViewerDocument = {
+  const { renderedMode, activeMode } = attachmentDocumentPresentation({
     kind,
-    ...attachmentDocumentPresentation({
-      kind,
-      hasTable: table !== null,
-      hasEnvironment: props.environmentId !== null,
-      rendered,
-    }),
-    uri,
-    content: text && { text: text.text, truncated: text.truncated },
-    table,
-    error: null,
-    needsText: isText,
-    setRendered,
-    retry: () => setRevision((value) => value + 1),
-    revision,
-    share: async () => save(),
-    sharing: busy === "save",
-  };
-  const folders = entry.path.split("/").slice(0, -1);
+    hasTable: table !== null,
+    hasEnvironment: props.environmentId !== null,
+    rendered,
+  });
   const failure = content.status === "failed" ? content : null;
   const tooBig = failure?.reason === "file-limit" && isText && !prefixRequested;
+  const folders = entry.path.split("/").slice(0, -1);
+  const subtitle = `${[props.archiveName, ...folders].join(" / ")} · ${formatAttachmentSize(entry.sizeBytes)}`;
+  const isAndroid = Platform.OS === "android";
   return (
-    <AttachmentFileView
-      title={entry.name}
-      subtitle={`${[props.archiveName, ...folders].join(" / ")} · ${formatAttachmentSize(entry.sizeBytes)}`}
-      document={document}
-      nativeSource={
-        uri
-          ? {
-              kind: kind === "image" ? "image" : kind === "pdf" ? "pdf" : "document",
-              name: entry.name,
-              mimeType,
-              uri,
+    <View className="flex-1 bg-sheet">
+      <NativeStackScreenOptions
+        options={{
+          headerShown: !isAndroid,
+          headerTitle: entry.name,
+          title: entry.name,
+          unstable_headerSubtitle: isAndroid ? undefined : subtitle,
+        }}
+      />
+      {isAndroid ? (
+        <AndroidScreenHeader
+          title={entry.name}
+          subtitle={subtitle}
+          onBack={props.onBack}
+          actions={[
+            ...(renderedMode
+              ? [
+                  {
+                    accessibilityLabel: rendered ? "Show source" : "Show preview",
+                    icon: rendered ? ("doc.text" as const) : ("eye" as const),
+                    onPress: () => setRendered((value) => !value),
+                  },
+                ]
+              : []),
+            ...(canAddToChat
+              ? [
+                  {
+                    accessibilityLabel: "Add to chat",
+                    icon: "plus.bubble" as const,
+                    onPress: addToChat,
+                    disabled: busy !== null,
+                  },
+                ]
+              : []),
+            {
+              accessibilityLabel: "Save file",
+              icon: "square.and.arrow.up",
+              onPress: save,
+              loading: busy === "save",
+            },
+          ]}
+        />
+      ) : (
+        <Toolbar placement="right">
+          <Toolbar.Menu accessibilityLabel="File actions" icon="ellipsis">
+            {renderedMode ? (
+              <Toolbar.MenuAction
+                icon={rendered ? "doc.text" : "eye"}
+                onPress={() => setRendered((value) => !value)}
+              >
+                {rendered ? "Show source" : "Show preview"}
+              </Toolbar.MenuAction>
+            ) : null}
+            {canAddToChat ? (
+              <Toolbar.MenuAction icon="plus.bubble" disabled={busy !== null} onPress={addToChat}>
+                Add to chat
+              </Toolbar.MenuAction>
+            ) : null}
+            <Toolbar.MenuAction icon="square.and.arrow.up" disabled={busy !== null} onPress={save}>
+              Save file
+            </Toolbar.MenuAction>
+          </Toolbar.Menu>
+        </Toolbar>
+      )}
+      {failure ? (
+        <ScrollView contentContainerClassName="flex-grow items-center justify-center px-6">
+          <EmptyState
+            variant="plain"
+            title={
+              tooBig
+                ? "Too big to preview in full"
+                : failure.reason === "image-limit"
+                  ? "Too large to preview safely"
+                  : failure.reason === "file-limit"
+                    ? "Too big to preview"
+                    : "Couldn't read this file"
             }
-          : null
-      }
-      environmentId={props.environmentId}
-      htmlRender={false}
-      addToChat={
-        draftKey !== null && maxAttachmentBytes !== undefined
-          ? {
-              busy: busy !== null,
-              onPress: () =>
-                run("attach", (signal) =>
-                  addZipEntryToDraft({
-                    archive,
-                    entry,
-                    draftKey,
-                    questionPrefix,
-                    maxBytes: maxAttachmentBytes,
-                    signal,
-                  }),
-                ),
+            detail={
+              tooBig
+                ? "Previews stop at 10 MB. You can read the start of the file or save the whole file."
+                : failure.reason === "image-limit"
+                  ? "It could freeze the app, so it isn't decoded. Save it to view it in another app."
+                  : failure.message
             }
-          : null
-      }
-      onRemove={null}
-      onBack={props.onBack}
-      failure={
-        failure ? (
-          <ScrollView contentContainerClassName="flex-grow items-center justify-center px-6">
-            <EmptyState
-              variant="plain"
-              title={
-                tooBig
-                  ? "Too big to preview in full"
-                  : failure.reason === "image-limit"
-                    ? "Too large to preview safely"
-                    : failure.reason === "file-limit"
-                      ? "Too big to preview"
-                      : "Couldn't read this file"
-              }
-              detail={
-                tooBig
-                  ? "Previews stop at 10 MB. You can read the start of the file or save the whole file."
-                  : failure.reason === "image-limit"
-                    ? "It could freeze the app, so it isn't decoded. Save it to view it in another app."
-                    : failure.message
-              }
-              action={
-                <View className="flex-row gap-3">
-                  {tooBig ? (
-                    <Button
-                      tone="primary"
-                      label="Show first 1 MB"
-                      onPress={() => setPrefixRequested(true)}
-                    />
-                  ) : null}
+            action={
+              <View className="flex-row gap-3">
+                {tooBig ? (
                   <Button
-                    tone={tooBig ? "secondary" : "primary"}
-                    label="Save file"
-                    loading={busy === "save"}
-                    onPress={save}
+                    tone="primary"
+                    label="Show first 1 MB"
+                    onPress={() => setPrefixRequested(true)}
                   />
-                </View>
-              }
-            />
-          </ScrollView>
-        ) : undefined
-      }
-    />
+                ) : null}
+                <Button
+                  tone={tooBig ? "secondary" : "primary"}
+                  label="Save file"
+                  loading={busy === "save"}
+                  onPress={save}
+                />
+              </View>
+            }
+          />
+        </ScrollView>
+      ) : (
+        <AttachmentDocumentBody
+          document={{
+            kind,
+            activeMode,
+            uri,
+            content: text,
+            table,
+            error: null,
+            needsText: isText,
+            retry: () => setRevision((value) => value + 1),
+            revision,
+          }}
+          name={entry.name}
+          environmentId={props.environmentId}
+          htmlRender={false}
+          nativeViewer={uri ? (viewerError ? "unavailable" : "open") : isText ? null : "pending"}
+          nativeError={viewerError}
+          onOpenNative={() => setViewerError(null)}
+        />
+      )}
+      {uri && !viewerError ? (
+        <FilePreviewModal
+          source={{
+            kind: kind === "image" ? "image" : kind === "pdf" ? "pdf" : "document",
+            name: entry.name,
+            mimeType,
+            uri,
+          }}
+          onOpenError={(error) => {
+            pendingViewerError.current = nativeViewerErrorMessage(error);
+          }}
+          onRequestClose={() => {
+            const message = pendingViewerError.current;
+            pendingViewerError.current = null;
+            if (message) setViewerError(message);
+            else props.onBack();
+          }}
+        />
+      ) : null}
+    </View>
   );
 }

@@ -1,5 +1,3 @@
-/// <reference path="./pako.d.ts" />
-
 import {
   FILE_TEXT_PREVIEW_MAX_BYTES,
   hostPreviewMimeTypeFromExtension,
@@ -9,7 +7,6 @@ import {
   readImageDimensions,
 } from "@t3tools/shared/imageDimensions";
 import JSZip from "jszip";
-import crc32 from "pako/lib/zlib/crc32.js";
 
 const MAX_ARCHIVE_BYTES = 32 * 1024 * 1024;
 const MAX_FILES = 2000;
@@ -21,8 +18,30 @@ const MAX_IMAGE_PIXELS = 16_000_000;
 const MAX_IMAGE_EDGE = 8192;
 const ARCHIVE_LIMIT_ERROR = "ZIP preview supports archives up to 32 MiB.";
 const ENTRY_LIMIT_ERROR = "ZIP preview supports up to 2,000 files and 2,000 folders.";
+const MAX_PATH_BYTES = 1024;
 const INVALID_ARCHIVE_ERROR =
   "Could not read this ZIP. The archive is corrupt or is not a valid ZIP file.";
+
+const CRC_TABLE = Int32Array.from({ length: 256 }, (_, index) => {
+  let value = index;
+  for (let bit = 0; bit < 8; bit++) value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+  return value;
+});
+
+function crc32(crc: number, bytes: Uint8Array) {
+  let value = ~crc;
+  for (const byte of bytes) value = (value >>> 8) ^ CRC_TABLE[(value ^ byte) & 0xff]!;
+  return ~value;
+}
+
+export function isZipFile(file: { readonly name: string; readonly mimeType: string }) {
+  const mime = file.mimeType.split(";", 1)[0]?.trim().toLowerCase();
+  return (
+    mime === "application/zip" ||
+    mime === "application/x-zip-compressed" ||
+    file.name.toLowerCase().endsWith(".zip")
+  );
+}
 
 export class ZipPreviewError extends Error {
   readonly reason:
@@ -126,6 +145,8 @@ function checkArchiveDirectory(bytes: Uint8Array) {
       throw new ZipPreviewError(INVALID_ARCHIVE_ERROR, "invalid");
     }
     const nameLength = view.getUint16(offset + 28, true);
+    if (nameLength > MAX_PATH_BYTES)
+      throw new ZipPreviewError("A ZIP path is too long to preview.", "unsupported");
     const nextOffset =
       offset +
       46 +
@@ -262,7 +283,7 @@ function readFile(
         const part = chunk.subarray(0, remaining);
         chunks.push(part);
         size += part.byteLength;
-        checksum = crc32(checksum, part, part.byteLength, 0);
+        checksum = crc32(checksum, part);
         if (chunk.byteLength > remaining) finish(true);
         return;
       }
@@ -278,7 +299,7 @@ function readFile(
         );
         return;
       }
-      checksum = crc32(checksum, chunk, chunk.byteLength, 0);
+      checksum = crc32(checksum, chunk);
       chunks.push(chunk);
     });
     stream.on("error", () =>
@@ -403,6 +424,7 @@ export async function loadZipArchive(bytes: Uint8Array, signal: AbortSignal) {
         `${file.name.replaceAll("\\", "/").split("/").filter(Boolean).join("/")}${file.dir ? "/" : ""}`,
     ),
   );
+  const nextSuffix = new Map<string, number>();
   let folderCount = 0;
   let hiddenCount = 0;
   const addEntry = (path: string, isDirectory: boolean, sizeBytes = 0) => {
@@ -437,15 +459,18 @@ export async function loadZipArchive(bytes: Uint8Array, signal: AbortSignal) {
     }
     let path = `${parts.join("/")}${file.dir ? "/" : ""}`;
     if (!file.dir && entries.has(path)) {
+      const duplicate = path;
       const name = parts.at(-1)!;
       const dot = name.lastIndexOf(".");
       const stem = dot > 0 ? name.slice(0, dot) : name;
       const extension = dot > 0 ? name.slice(dot) : "";
-      let suffix = 2;
+      // Resume from the last suffix so repeated duplicates of one path stay linear.
+      let suffix = nextSuffix.get(duplicate) ?? 2;
       do {
         parts[parts.length - 1] = `${stem} (${suffix++})${extension}`;
         path = parts.join("/");
       } while (occupied.has(path) || occupied.has(`${path}/`));
+      nextSuffix.set(duplicate, suffix);
       occupied.add(path);
     }
     for (let index = parts.length - 1; index > 0; index--) {

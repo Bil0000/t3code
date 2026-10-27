@@ -8,7 +8,6 @@ import { useRightPanelStore } from "~/rightPanelStore";
 import { importPastedComposerText, readPastedComposerContext } from "../composerInlineTokenPaste";
 import {
   questionAttachmentDraftId,
-  isQuestionAttachmentRemovalBlocked,
   trackOpenQuestionAttachmentDraft,
   useQuestionAttachmentPreparation,
 } from "../../questionAttachments";
@@ -91,13 +90,11 @@ import {
 import {
   type ComposerFileAttachment,
   type ComposerImageAttachment,
-  type ComposerThreadTarget,
-  DraftId,
+  type DraftId,
   type PersistedComposerImageAttachment,
   composerFileNeedsReattach,
   composerDraftHasUserContent,
   composerTargetKey,
-  resolveComposerDraftKey,
   useComposerDraftStore,
   useComposerThreadDraft,
 } from "../../composerDraftStore";
@@ -189,6 +186,7 @@ import {
   ComposerAttachButton,
   ComposerAttachmentFileList,
   ComposerAttachmentMediaRow,
+  ComposerFilePreviewDialog,
   ComposerQueuedAttachmentRow,
   ComposerRestingImagePreviews,
 } from "./ComposerAttachmentStrip";
@@ -301,7 +299,6 @@ export interface ChatComposerHandle {
   addDroppedFiles: (files: File[]) => void;
   addDroppedFolders: (folders: File[]) => void;
   hasPendingAttachments: () => boolean;
-  removeDraftFile: (draftKey: string, fileId: string) => void;
   insertTextAtEnd: (
     text: string,
     options?: { ensureLeadingBoundary?: boolean; clipboardData?: DataTransfer },
@@ -735,18 +732,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const nonPersistedComposerImageIds = attachmentDraft.nonPersistedImageIds;
   const uploadsByImageId = useAttachmentUploadStore((state) => state.uploadsByImageId);
   const openPrLink = useOpenPrLink(routeThreadRef);
-  const openDraftFile = (fileId: string) => {
-    const file = composerFiles.find((candidate) => candidate.id === fileId);
-    const draftKey = resolveComposerDraftKey(
-      useComposerDraftStore.getState(),
-      attachmentDraftTarget,
-    );
-    if (!file || !draftKey || composerFileNeedsReattach(file)) return;
-    const { id, name, mimeType, sizeBytes } = file;
-    useRightPanelStore
-      .getState()
-      .openAttachment(routeThreadRef, { type: "file", id, name, mimeType, sizeBytes }, draftKey);
-  };
+  const [previewFileId, setPreviewFileId] = useState<string | null>(null);
+  const previewFile = composerFiles.find((file) => file.id === previewFileId);
   const composerContextActions = {
     environmentId,
     cwd: gitCwd ?? undefined,
@@ -754,7 +741,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       const preview = buildExpandedImagePreview(composerImages, imageId);
       if (preview) onExpandImage(preview);
     },
-    openFile: openDraftFile,
+    openFile: setPreviewFileId,
     openMention: (path: string) => useRightPanelStore.getState().openFile(routeThreadRef, path),
     expandVideo: (fileId: string) => {
       const file = composerFiles.find((candidate) => candidate.id === fileId);
@@ -1331,32 +1318,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     removeComposerDraftImage(attachmentDraftTarget, imageId);
   };
 
-  const removeComposerFileFromDraft = (
-    fileId: string,
-    target: ComposerThreadTarget = attachmentDraftTarget,
-  ) => {
-    if (
-      isQuestionAttachmentRemovalBlocked({
-        target,
-        environmentId,
-        threadId: activeThreadId,
-        responding: incomingPendingIsResponding,
-      })
-    )
-      return;
+  const removeComposerFileFromDraft = (fileId: string) => {
+    if (questionAttachmentTarget && activePendingIsResponding) return;
     // Hydrated uploads use persisted attachment ids, not queue keys.
-    const file = useComposerDraftStore
-      .getState()
-      .getComposerDraft(target)
-      ?.files.find((candidate) => candidate.id === fileId);
+    const file = composerFilesRef.current.find((candidate) => candidate.id === fileId);
     if (file) {
       releaseDraftAttachment(file);
     } else {
       releaseAttachmentUpload(fileId);
     }
-    removeComposerDraftFile(target, fileId);
+    removeComposerDraftFile(attachmentDraftTarget, fileId);
   };
-  const removeComposerFileFromDraftStable = useStableCallback(removeComposerFileFromDraft);
 
   const addComposerDraftReviewComment = useComposerDraftStore((store) => store.addReviewComment);
   const addComposerDraftPreviewAnnotation = useComposerDraftStore(
@@ -3033,8 +3005,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         });
       },
       addDroppedFolders: addComposerFoldersStable,
-      removeDraftFile: (draftKey, fileId) =>
-        removeComposerFileFromDraftStable(fileId, DraftId.make(draftKey)),
       hasPendingAttachments: () =>
         countPreparingComposerImages(attachmentTargetKey) > 0 ||
         pendingDraftWork.has(attachmentTargetKey),
@@ -3235,7 +3205,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       addComposerAttachments,
       addComposerFoldersStable,
       foldPastedText,
-      removeComposerFileFromDraftStable,
       composerDraftTarget,
       composerModelOptions,
       isEditingQueuedMessage,
@@ -3330,7 +3299,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         environmentId={environmentId}
         attachmentDraftTarget={attachmentDraftTarget}
         canOperateThread={canOperateThread}
-        onPreviewFile={openDraftFile}
+        onPreviewFile={setPreviewFileId}
         onRemoveFile={removeComposerFileFromDraft}
       />
     ) : null;
@@ -3654,6 +3623,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     : undefined
                 }
               >
+                {previewFile ? (
+                  <ComposerFilePreviewDialog
+                    file={previewFile}
+                    onRemove={removeComposerFileFromDraft}
+                    onPreviewFileIdChange={setPreviewFileId}
+                  />
+                ) : null}
                 <ComposerContextActionsContext value={composerContextActions}>
                   <ComposerPromptEditor
                     draftKey={composerDraftTargetKey}

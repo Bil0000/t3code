@@ -10,7 +10,8 @@ import {
   officePreviewKind,
   FILE_TEXT_PREVIEW_MAX_BYTES,
 } from "@t3tools/shared/filePreview";
-import { ChevronRightIcon, DownloadIcon, Trash2Icon, WrapTextIcon } from "lucide-react";
+import { isZipFile } from "@t3tools/client-runtime/zip-preview";
+import { ChevronRightIcon, DownloadIcon, Trash2Icon, WrapTextIcon, XIcon } from "lucide-react";
 import { Check, Code2, Copy, Eye, Table2 } from "lucide";
 import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 
@@ -35,7 +36,6 @@ import {
   FileSurfaceLoading,
   FileSurfaceNotice,
 } from "./fileSurfaceChrome";
-import { isZipPreviewFile } from "./filePreviewMode";
 
 const LargeTextViewer = lazy(() => import("./LargeTextViewer"));
 
@@ -90,11 +90,12 @@ export function AttachmentFilePreview(props: {
   origin?: string;
   header?: ReactNode;
   onRemove?: () => void;
+  onClose?: () => void;
 }) {
-  const isZip = isZipPreviewFile(props);
-  const kind = isZip ? "unsupported" : filePreviewKind(props);
-  const delimiter = isZip ? null : filePreviewDelimiter(props);
+  const kind = filePreviewKind(props);
+  const zip = kind === "archive" && isZipFile(props);
   const officeKind = officePreviewKind(props);
+  const delimiter = filePreviewDelimiter(props);
   const renderedMode =
     kind === "mermaid"
       ? "mermaid"
@@ -289,6 +290,21 @@ export function AttachmentFilePreview(props: {
     ) : (
       <ReadOnlySourcePreview name={props.name} text={content.text} />
     )
+  ) : zip ? (
+    <Suspense fallback={<FileSurfaceLoading />}>
+      <ZipArchivePreview
+        key={`${url}:${revision}`}
+        name={props.name}
+        file={props.file ?? null}
+        url={url}
+        sizeBytes={props.sizeBytes}
+        origin={props.origin ?? (props.asset ? "Sent" : "Attachment")}
+        onRetry={() => setRevision((value) => value + 1)}
+        onSaveZip={save}
+        {...(props.onRemove ? { onRemove: props.onRemove } : {})}
+        {...(props.onClose ? { onClose: props.onClose } : {})}
+      />
+    </Suspense>
   ) : kind === "archive" || kind === "sqlite" ? (
     <BinaryFilePreview
       key={revision}
@@ -339,23 +355,6 @@ export function AttachmentFilePreview(props: {
       mimeType={props.mimeType}
       onError={() => setError("Unable to load image.")}
     />
-  ) : isZip ? (
-    <Suspense fallback={<FileSurfaceLoading />}>
-      <ZipArchivePreview
-        key={`${url}:${revision}`}
-        name={props.name}
-        file={props.file ?? null}
-        url={url}
-        sizeBytes={props.sizeBytes}
-        origin={props.origin ?? (props.asset ? "Sent" : "Attachment")}
-        countKey={
-          props.asset && attachmentId ? `${props.asset.environmentId}:${attachmentId}` : null
-        }
-        onRetry={() => setRevision((value) => value + 1)}
-        onSaveZip={save}
-        {...(props.onRemove ? { onRemove: props.onRemove } : {})}
-      />
-    </Suspense>
   ) : (
     <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 px-6 text-center">
       <p className="text-sm font-medium">No preview for this file</p>
@@ -366,17 +365,9 @@ export function AttachmentFilePreview(props: {
     </div>
   );
 
-  if (isZip && !failure && url)
-    return (
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
-        {props.header ? (
-          <div className={FILE_SURFACE_SUBHEADER_CLASS} data-surface-subheader>
-            {props.header}
-          </div>
-        ) : null}
-        {body}
-      </div>
-    );
+  // A loaded ZIP draws its own header with archive actions.
+  if (zip && !failure && url)
+    return <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">{body}</div>;
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
       <div className={cn(FILE_SURFACE_SUBHEADER_CLASS)} data-surface-subheader>
@@ -463,6 +454,11 @@ export function AttachmentFilePreview(props: {
         {props.onRemove ? (
           <FileSurfaceAction label="Remove from draft" onPress={props.onRemove}>
             <Trash2Icon className="size-3.5" />
+          </FileSurfaceAction>
+        ) : null}
+        {props.onClose ? (
+          <FileSurfaceAction label="Close" onPress={props.onClose}>
+            <XIcon className="size-3.5" />
           </FileSurfaceAction>
         ) : null}
       </div>

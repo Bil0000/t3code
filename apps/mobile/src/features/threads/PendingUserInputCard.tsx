@@ -272,6 +272,7 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
                   key={`${props.pendingUserInput.requestId}:${question.id}`}
                   requestId={props.pendingUserInput.requestId}
                   question={question}
+                  questions={props.pendingUserInput.questions}
                   disabled={responseDisabled}
                   value={draft?.customAnswer ?? ""}
                   onChangeText={(value) =>

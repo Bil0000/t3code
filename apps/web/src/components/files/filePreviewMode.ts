@@ -1,7 +1,6 @@
 import type { AssetResource, ProjectReadFileError, ScopedThreadRef } from "@t3tools/contracts";
 import { mediaFileReference } from "@t3tools/client-runtime/media-reference";
 import { isHostPath, workspaceRelativeFilePath } from "@t3tools/shared/path";
-import { create } from "zustand";
 
 export function resolveFilePreviewPath(path: string | null, cwd: string): string | null {
   if (path === null) return null;
@@ -10,17 +9,6 @@ export function resolveFilePreviewPath(path: string | null, cwd: string): string
 
 export const isMarkdownPreviewFile = (path: string): boolean =>
   /\.(?:md|mdx|markdown|mdown|mkd)$/i.test(path);
-
-export function isZipPreviewFile(file: { readonly name: string; readonly mimeType: string }) {
-  const mime = file.mimeType.split(";", 1)[0]?.trim().toLowerCase();
-  return (
-    mime === "application/zip" ||
-    mime === "application/x-zip-compressed" ||
-    file.name.toLowerCase().endsWith(".zip")
-  );
-}
-
-export const useZipFileCounts = create<Record<string, number>>(() => ({}));
 
 export function filePreviewReadErrorMessage(error: ProjectReadFileError): string {
   switch (error.failure) {

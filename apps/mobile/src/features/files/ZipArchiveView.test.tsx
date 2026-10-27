@@ -107,17 +107,8 @@ vi.mock("@react-navigation/native", () => ({
 vi.mock("react-native-safe-area-context", () => ({
   useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 0, left: 0 }),
 }));
-vi.mock("../../native/native-layout-metrics", () => ({
-  useNativeColumnLayoutMetrics: () => null,
-  useNativeLayoutMetrics: () => null,
-  useDeviceType: () => "phone",
-}));
 vi.mock("../../native/NativeScrollViewMarker", () => ({ NativeScrollView: () => null }));
 vi.mock("../../native/StackHeader", () => ({ NativeStackScreenOptions: () => null }));
-vi.mock("expo-glass-effect", () => ({ isGlassEffectAPIAvailable: () => false }));
-vi.mock("../layout/AdaptiveWorkspaceLayout", () => ({
-  useAdaptiveWorkspaceLayout: () => ({ layout: { usesSplitView: false }, panes: {} }),
-}));
 vi.mock("../../components/ui/Toolbar", () => {
   const Slot = (props: { readonly children?: ReactNode }) => <div>{props.children}</div>;
   return {
@@ -137,32 +128,12 @@ vi.mock("../../components/ui/Toolbar", () => {
   };
 });
 vi.mock("../../components/ui/AndroidScreenHeader", () => ({ AndroidScreenHeader: () => null }));
+vi.mock("../../components/ui/Menu", () => ({ Menu: () => null }));
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
 vi.mock("../../components/ui/Progress", () => ({ Progress: () => null }));
-vi.mock("../../components/ui/Dialog", () => ({ alert: vi.fn() }));
 vi.mock("../../components/PierreEntryIcon", () => ({ PierreEntryIcon: () => null }));
-vi.mock("../../components/FilePreviewModal", () => ({
-  FilePreviewModal: (
-    props: ComponentProps<typeof import("../../components/FilePreviewModal").FilePreviewModal>,
-  ) => (
-    <div role="dialog" aria-label="Native file viewer">
-      <button onClick={() => props.onOpenError?.(new Error("Connection lost"))}>Fail</button>
-      <button onClick={props.onRequestClose}>Close</button>
-    </div>
-  ),
-}));
-vi.mock("../../lib/attachmentDownload", async (importOriginal) => {
-  const { nativeViewerErrorMessage } =
-    await importOriginal<typeof import("../../lib/attachmentDownload")>();
-  return {
-    nativeViewerErrorMessage,
-    writeGeneratedAttachmentFile: vi.fn(),
-    downloadAttachmentForPreview: vi.fn(async () => {
-      throw new Error("Download started");
-    }),
-  };
-});
-vi.mock("../../lib/copyTextWithHaptic", () => ({ copyTextWithHaptic: vi.fn() }));
+vi.mock("../../components/FilePreviewModal", () => ({ FilePreviewModal: () => null }));
+vi.mock("../../lib/copyTextWithHaptic", () => ({}));
 vi.mock("./SourceFileSurface", () => ({
   SourceFileSurface: (props: { readonly contents: string }) => <pre>{props.contents}</pre>,
 }));
@@ -180,8 +151,6 @@ vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
 
 import { ZipArchiveView } from "./ZipArchiveView";
 import { AttachmentFileScreen } from "./AttachmentFileScreen";
-import { downloadAttachmentForPreview } from "../../lib/attachmentDownload";
-import { alert } from "../../components/ui/Dialog";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { composerDraftsAtom } from "../../state/use-composer-drafts";
 
@@ -192,8 +161,6 @@ function setup() {
   navigation.remove = null;
   server.capabilities = { repositoryIdentity: false };
   server.refresh.mockClear();
-  vi.mocked(downloadAttachmentForPreview).mockClear();
-  vi.mocked(alert).mockClear();
   appAtomRegistry.set(composerDraftsAtom, {});
   files.set(
     "file:///first.zip",
@@ -204,15 +171,7 @@ function setup() {
       (character) => character.charCodeAt(0),
     ),
   );
-  files.set(
-    "file:///second.zip",
-    Uint8Array.from(
-      atob(
-        "UEsDBBQAAAAAAAAAIVx7lgwlFwAAABcAAAAKAAAAc2Vjb25kLnR4dFNlY29uZCBhcmNoaXZlIGNvbnRlbnRzUEsBAhQDFAAAAAAAAAAhXHuWDCUXAAAAFwAAAAoAAAAAAAAAAAAAAIABAAAAAHNlY29uZC50eHRQSwUGAAAAAAEAAQA4AAAAPwAAAAAA",
-      ),
-      (character) => character.charCodeAt(0),
-    ),
-  );
+
   const container = document.createElement("div");
   const root = createRoot(container);
   onTestFinished(() => {
@@ -231,7 +190,6 @@ function setup() {
     refresh: async () => null,
     environmentId: null,
     draftKey: null,
-    questionPrefix: null,
     maxAttachmentBytes: undefined,
     onSave: () => {},
     onRemove: null,

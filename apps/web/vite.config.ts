@@ -132,7 +132,6 @@ const browserTestProject = {
     browser: {
       enabled: true,
       headless: true,
-      connectTimeout: 180_000,
       provider: playwright(),
       instances: [{ browser: "chromium" }],
       screenshotFailures: false,
