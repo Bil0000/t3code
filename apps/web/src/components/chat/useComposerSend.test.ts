@@ -166,6 +166,7 @@ it.each(["project", "No project"])(
       beginLocalDispatch: vi.fn(),
       resetLocalDispatch: vi.fn(),
       beginWorktreeSetup: vi.fn(),
+      optimisticBlobPreviews: { track: vi.fn(), release: vi.fn() },
       setOptimisticUserMessages: (update: (previous: typeof optimistic) => typeof optimistic) => {
         optimistic = update(optimistic);
       },
