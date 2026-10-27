@@ -1747,29 +1747,6 @@ export async function mergeComposerDraftContent(
   return { skippedAttachmentCount };
 }
 
-export async function restoreComposerDraftSnapshot(
-  draftKey: string,
-  snapshot: ComposerDraft,
-): Promise<void> {
-  ensureComposerDraftsLoaded();
-  if (loadPromise !== null) {
-    await loadPromise;
-  }
-  if (persistTimer !== null) {
-    clearTimeout(persistTimer);
-    persistTimer = null;
-  }
-  const next = restoreComposerDraftSnapshotState(
-    appAtomRegistry.get(composerDraftsAtom),
-    draftKey,
-    snapshot,
-  );
-  appAtomRegistry.set(composerDraftsAtom, next);
-  await persistenceQueue.run(() =>
-    writePersistedComposerState(next, appAtomRegistry.get(stickyComposerModelSelectionAtom)),
-  );
-}
-
 export function sameComposerDraftState(a: ComposerDraft, b: ComposerDraft): boolean {
   return (
     a.temporary === b.temporary &&
@@ -1793,7 +1770,10 @@ export function undoComposerDraftMergeState(
 ): Record<string, ComposerDraft> {
   const existing = normalizeDraft(current[draftKey]);
   if (sameComposerDraftState(existing, merged)) {
-    return restoreComposerDraftSnapshotState(current, draftKey, snapshot);
+    return restoreComposerDraftSnapshotState(current, draftKey, {
+      ...snapshot,
+      temporary: existing.temporary,
+    });
   }
   const insertedText = merged.text.startsWith(snapshot.text)
     ? merged.text.slice(snapshot.text.length)

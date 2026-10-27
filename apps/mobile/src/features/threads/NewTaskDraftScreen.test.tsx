@@ -26,6 +26,7 @@ vi.mock("@react-navigation/native", () => ({
   StackActions: { replace: vi.fn() },
   useNavigation: () => ({ goBack: state.goBack, dispatch: vi.fn() }),
   useIsFocused: () => true,
+  useRoute: () => ({ key: "route", params: { draft: { incomingShareId: "share" } } }),
   usePreventRemove: (prevent: boolean) => {
     state.preventRemove = prevent;
   },
@@ -109,6 +110,11 @@ vi.mock("../keyboard/hardwareKeyboardCommands", () => ({
   nextEnvironmentId: () => null,
 }));
 vi.mock("../sharing/IncomingShareProvider", () => ({
+  incomingShareImports: {
+    importedAtom: vi.fn(() => ({})),
+    phaseAtom: vi.fn(() => ({})),
+    inFlightAtom: vi.fn(() => ({})),
+  },
   useIncomingShare: () => ({
     getShare: () => state.share,
     reserveShare: state.reserve,
