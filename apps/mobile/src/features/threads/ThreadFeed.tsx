@@ -142,7 +142,7 @@ import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { IOS_NAV_BAR_HEIGHT } from "../../lib/layoutMetrics";
 import { FONT_FAMILIES } from "../../lib/fontFamilies";
 import { scopedThreadKey } from "../../lib/scopedEntities";
-import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
+import { copyTextWithHaptic, tryCopyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { downloadAndShareAttachment } from "../../lib/attachmentDownload";
 import { hasWideMarkdownBlock } from "../../lib/wideMarkdownBlocks";
 import {
@@ -1740,12 +1740,28 @@ function renderFeedEntry(
                   text={presentation.text}
                   onCopy={
                     message.context && presentation.attribution !== "guest"
-                      ? () =>
-                          writeComposerContextClipboard(message.text, {
+                      ? async () => {
+                          if (
+                            props.temporary ||
+                            isTemporaryThread(props.environmentId, props.threadId)
+                          ) {
+                            if (
+                              !(await tryCopyTextWithHaptic(
+                                replaceComposerContextReferences(
+                                  presentation.text,
+                                  (reference) => reference.label,
+                                ),
+                              ))
+                            )
+                              throw new Error("Could not copy message.");
+                            return;
+                          }
+                          await writeComposerContextClipboard(message.text, {
                             version: 1,
                             source: { environmentId: props.environmentId, messageId: message.id },
                             records: message.context!.records,
-                          })
+                          });
+                        }
                       : undefined
                   }
                   tintColor={iconSubtleColor}

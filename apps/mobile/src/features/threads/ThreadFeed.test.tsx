@@ -22,6 +22,8 @@ const state = await vi.hoisted(async () => {
     detailReads: vi.fn(),
     alert: vi.fn(),
     openPullRequest: vi.fn(),
+    copyContext: vi.fn(async () => {}),
+    copyText: vi.fn(async (_text: string) => true),
     projections: new Map<string, OrchestrationV2ThreadProjection>(),
   };
 });
@@ -89,6 +91,7 @@ vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
 }));
 vi.mock("../../native/SelectableMarkdownText", () => ({
   SelectableMarkdownText: (props: {
+    markdown: string;
     renderImage: (image: { href: string; alt: string }) => ReactNode;
     onLinkPress: (href: string) => void;
   }) => (
@@ -96,7 +99,9 @@ vi.mock("../../native/SelectableMarkdownText", () => ({
       <button aria-label="Open link" onClick={() => props.onLinkPress("https://example.test/link")}>
         Open link
       </button>
-      {props.renderImage({ href: "https://example.test/markdown.png", alt: "Markdown image" })}
+      {props.markdown === "Image"
+        ? props.renderImage({ href: "https://example.test/markdown.png", alt: "Markdown image" })
+        : null}
     </>
   ),
 }));
@@ -223,8 +228,26 @@ vi.mock("../../components/VideoPreviewModal", () => ({ VideoPreviewModal: () => 
 vi.mock("../../components/VideoAttachmentTile", () => ({ VideoAttachmentTile: () => null }));
 vi.mock("../../components/MediaVideoPlayer", () => ({ MediaVideoPlayer: () => null }));
 vi.mock("./ThreadInlineFilePreview", () => ({ ThreadInlineFilePreview: () => null }));
-vi.mock("./CopyTextButton", () => ({ CopyTextButton: () => null }));
-vi.mock("../../components/ui/Menu", () => ({ Menu: () => null }));
+vi.mock("./CopyTextButton", () => ({
+  CopyTextButton: (props: {
+    accessibilityLabel: string;
+    text: string;
+    onCopy?: () => Promise<void>;
+  }) => (
+    <button
+      aria-label={props.accessibilityLabel}
+      onClick={async () => {
+        if (props.onCopy) await props.onCopy();
+        else await state.copyText(props.text);
+      }}
+    >
+      Copy
+    </button>
+  ),
+}));
+vi.mock("../../components/ui/Menu", () => ({
+  Menu: ({ children }: { children?: ReactNode }) => children,
+}));
 vi.mock("../../components/PierreEntryIcon", () => ({ PierreEntryIcon: () => null }));
 vi.mock("./thread-context-divider", () => ({ ThreadContextDivider: () => null }));
 vi.mock("./thread-handoff-row", () => ({
@@ -240,9 +263,12 @@ vi.mock("../../state/projects", () => ({ projectEnvironment: () => null }));
 vi.mock("../../state/server", () => ({ serverEnvironment: () => null }));
 vi.mock("../../native/NativeScrollViewMarker", () => ({ NativeScrollViewMarker: () => null }));
 vi.mock("../../lib/composerContextClipboard", () => ({
-  writeComposerContextClipboard: () => null,
+  writeComposerContextClipboard: state.copyContext,
 }));
-vi.mock("../../lib/copyTextWithHaptic", () => ({ copyTextWithHaptic: () => null }));
+vi.mock("../../lib/copyTextWithHaptic", () => ({
+  copyTextWithHaptic: () => null,
+  tryCopyTextWithHaptic: state.copyText,
+}));
 vi.mock("../../lib/openExternalUrl", () => ({ tryOpenExternalUrl: () => null }));
 vi.mock("../../lib/attachmentDownload", () => ({ downloadAndShareAttachment: () => null }));
 vi.mock("../review/reviewState", () => ({ setReviewSelectedSectionId: () => null }));
@@ -286,6 +312,8 @@ it.each([true, false])(
     state.detailReads.mockClear();
     state.alert.mockClear();
     state.openPullRequest.mockClear();
+    state.copyContext.mockClear();
+    state.copyText.mockClear();
     state.projections.clear();
     const registry = AtomRegistry.make();
     registry.set(state.shellAtom, state.shell);
@@ -311,6 +339,33 @@ it.each([true, false])(
         },
       },
       { id: "viewed", type: "activity-group", activities: [], continuesWorkLog: false },
+      {
+        id: "context-message",
+        type: "message",
+        message: {
+          id: "context-message",
+          role: "user",
+          text: "Copy context",
+          context: {
+            version: 1,
+            records: [
+              {
+                version: 1,
+                kind: "terminal",
+                contextId: "private-context",
+                label: "Terminal",
+                terminalId: "terminal",
+                terminalLabel: "Terminal",
+                lineStart: 1,
+                lineEnd: 1,
+                text: "private clipboard sentinel",
+              },
+            ],
+          },
+          createdAt: "2026-10-24T00:00:00Z",
+          updatedAt: "2026-10-24T00:00:00Z",
+        },
+      },
     ] as unknown as ComponentProps<typeof ThreadFeed>["feed"];
     const feedView = (
       <ThreadFeed
@@ -335,6 +390,11 @@ it.each([true, false])(
         keyboardOffset={0}
       />
     );
+    const copyMessage = async () => {
+      await act(async () => {
+        container.querySelector<HTMLButtonElement>('[aria-label="Copy message"]')!.click();
+      });
+    };
     try {
       await act(async () =>
         root.render(
@@ -360,10 +420,20 @@ it.each([true, false])(
       expect(state.detailReads.mock.calls).toEqual([[threadId]]);
       expect(container.textContent?.match(/Keep thread to open media/g)).toHaveLength(4);
       expect(container.querySelectorAll("img")).toHaveLength(0);
+      await copyMessage();
+      expect.soft(state.copyContext).not.toHaveBeenCalled();
+      expect.soft(state.copyText).toHaveBeenCalledWith("Copy context");
+      state.copyContext.mockClear();
+      state.copyText.mockClear();
       await act(async () => {
         setTemporaryThread(environmentId, threadId, false);
       });
       if (temporary) {
+        await copyMessage();
+        expect.soft(state.copyContext).not.toHaveBeenCalled();
+        expect.soft(state.copyText).toHaveBeenCalledWith("Copy context");
+        state.copyContext.mockClear();
+        state.copyText.mockClear();
         await act(async () => {
           container.querySelector<HTMLButtonElement>('[aria-label="Open link"]')!.click();
           container.querySelector<HTMLButtonElement>('[aria-label="Open media"]')!.click();
@@ -392,11 +462,23 @@ it.each([true, false])(
       expect(state.openPullRequest.mock.calls).toEqual([["https://example.test/link"]]);
       expect(container.textContent).toContain("Close media preview");
       expect(state.alert).not.toHaveBeenCalled();
+      await copyMessage();
+      expect(state.copyContext).toHaveBeenCalledWith(
+        "Copy context",
+        expect.objectContaining({
+          records: [expect.objectContaining({ text: "private clipboard sentinel" })],
+        }),
+      );
+      expect(state.copyText).not.toHaveBeenCalled();
+      state.copyContext.mockClear();
       await act(async () => {
         container.querySelector<HTMLButtonElement>('[aria-label="Close media preview"]')!.click();
       });
       state.openPullRequest.mockClear();
       setTemporaryThread(environmentId, threadId, true);
+      await copyMessage();
+      expect.soft(state.copyContext).not.toHaveBeenCalled();
+      expect.soft(state.copyText).toHaveBeenCalledWith("Copy context");
       await act(async () => {
         container.querySelector<HTMLButtonElement>('[aria-label="Open link"]')!.click();
         container.querySelector<HTMLButtonElement>('[aria-label="Open media"]')!.click();
