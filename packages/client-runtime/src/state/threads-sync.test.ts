@@ -2285,19 +2285,26 @@ describe("temporary thread persistence", () => {
             yield* awaitThreadState(harness.observed, (value) => value.status === "deleted");
             if (failDuringSync) return yield* Effect.fail("sync failure");
           }),
+        ).pipe(
+          Effect.ensuring(
+            Effect.gen(function* () {
+              setTemporaryThread(TARGET.environmentId, THREAD_ID, false);
+              const encoded = yield* makeStoredShellSnapshotEncoder({ yieldToHost: Effect.void })({
+                schemaVersion: ORCHESTRATION_CACHE_SCHEMA_VERSION,
+                environmentId: TARGET.environmentId,
+                snapshot: capturedShell,
+              });
+              expect(encoded).not.toContain("DELETED_TEMPORARY_SENTINEL");
+              expect(
+                JSON.parse(encoded).snapshot.threads.map(
+                  (thread: { title: string }) => thread.title,
+                ),
+              ).toEqual(["Saved neighbor"]);
+              expect(canPersistThreadSnapshot(stale, TARGET.environmentId)).toBe(false);
+              expect(capturedShell.threads).toHaveLength(2);
+            }).pipe(Effect.orDie),
+          ),
         );
-        setTemporaryThread(TARGET.environmentId, THREAD_ID, false);
-        const encoded = yield* makeStoredShellSnapshotEncoder({ yieldToHost: Effect.void })({
-          schemaVersion: ORCHESTRATION_CACHE_SCHEMA_VERSION,
-          environmentId: TARGET.environmentId,
-          snapshot: capturedShell,
-        });
-        expect(encoded).not.toContain("DELETED_TEMPORARY_SENTINEL");
-        expect(
-          JSON.parse(encoded).snapshot.threads.map((thread: { title: string }) => thread.title),
-        ).toEqual(["Saved neighbor"]);
-        expect(canPersistThreadSnapshot(stale, TARGET.environmentId)).toBe(false);
-        expect(capturedShell.threads).toHaveLength(2);
       }).pipe(
         Effect.scoped,
         Effect.result,
