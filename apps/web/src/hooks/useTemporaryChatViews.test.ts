@@ -302,7 +302,7 @@ it("keeps the latest leave pending when an older attach is acknowledged", async 
 });
 
 it.each(["project", "No project"])(
-  "reserves each toggled %s draft before first launch",
+  "reserves each toggled %s draft through finalization and launch acknowledgment",
   async (project) => {
     using app = setup();
     const store = useComposerDraftStore.getState();
@@ -329,6 +329,16 @@ it.each(["project", "No project"])(
         expect([...leases.values()].flat()).toEqual([temporary]);
         store.markDraftThreadPromoting(draftId);
         expect(await app.select(null, draftId)).toBe(true);
+        const viewId = state.update.mock.lastCall![0].input.viewId;
+        store.finalizePromotedDraftThread(draftId);
+        expect(useComposerDraftStore.getState().getDraftSession(draftId)).toBeNull();
+        expect(useComposerDraftStore.getState().getPromotedDraftRedirect(draftId)).toEqual({
+          environmentId: a.environmentId,
+          threadId: temporary,
+        });
+        state.update.mockClear();
+        expect(await app.select(null, draftId)).toBe(true);
+        expect([...leases.values()].flat()).toEqual([temporary]);
         expect(
           await captureTemporaryChatLaunch()?.({
             environmentId: a.environmentId,
@@ -336,6 +346,17 @@ it.each(["project", "No project"])(
           }),
         ).toBe(true);
         expect([...leases.values()].flat()).toEqual([temporary]);
+        expect(await app.select({ environmentId: a.environmentId, threadId: temporary })).toBe(
+          true,
+        );
+        expect(
+          state.update.mock.calls.every(
+            ([payload]) =>
+              payload.input.viewId === viewId &&
+              payload.input.threadIds.length === 1 &&
+              payload.input.threadIds[0] === temporary,
+          ),
+        ).toBe(true);
         expect(await app.select(null)).toBe(true);
         expect([...leases.values()].flat()).toEqual([]);
         store.clearDraftThread(draftId);

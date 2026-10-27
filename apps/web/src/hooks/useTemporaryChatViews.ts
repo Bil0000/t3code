@@ -40,12 +40,15 @@ export function useTemporaryChatViews() {
   const draft = useComposerDraftStore((state) =>
     target?.kind === "draft" ? state.getDraftSession(target.draftId) : null,
   );
+  const draftRedirect = useComposerDraftStore((state) =>
+    target?.kind === "draft" ? state.getPromotedDraftRedirect(target.draftId) : null,
+  );
   const ref =
     target?.kind === "server"
       ? target.threadRef
       : draft
         ? scopeThreadRef(draft.environmentId, draft.threadId)
-        : null;
+        : draftRedirect;
   const shell = useQuietThreadShell(ref);
   const status = useEnvironmentShellStatus(ref?.environmentId ?? null);
   const connectedEnvironmentIds = useConnectedEnvironmentIds();
