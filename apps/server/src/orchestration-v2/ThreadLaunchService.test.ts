@@ -2257,6 +2257,7 @@ it.effect("passes temporary mode to creation without title metadata generation",
       ...launchInput({ command: "temporary-launch", thread: "temporary-launch" }),
       temporary: true,
     };
+    owned.add(input.threadId);
     const result = yield* launches.launch(input);
     assert.isTrue(result.projection.thread.temporary);
     assert.isTrue(owned.has(result.threadId));
@@ -2285,7 +2286,7 @@ it.effect.each([false, true])(
             return yield* Effect.never;
           }),
       });
-      const owned = new Set<ThreadId>();
+      const owned = new Set([ThreadId.make("temporary-checkout")]);
       const layerStorage = Layer.mock(TemporaryThreadStorage.TemporaryThreadStorage)({
         register: ({ threadId }) =>
           Effect.sync(() => {
@@ -2333,7 +2334,7 @@ it.effect("keeps a temporary worktree when cancelled after workspace metadata co
     const committed = yield* Deferred.make<Fiber.Fiber<unknown, unknown>>();
     const acknowledge = yield* Deferred.make<void>();
     const harness = makeHarness();
-    const owned = new Set<ThreadId>();
+    const owned = new Set([ThreadId.make("temporary-recording")]);
     const layerStorage = Layer.mock(TemporaryThreadStorage.TemporaryThreadStorage)({
       register: ({ threadId }) =>
         Effect.sync(() => {
@@ -2399,7 +2400,7 @@ it.effect("cancels temporary setup and keeps the created user worktree", () =>
     const harness = makeHarness({
       runSetup: () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
     });
-    const owned = new Set<ThreadId>();
+    const owned = new Set([ThreadId.make("temporary-setup")]);
     const layerStorage = Layer.mock(TemporaryThreadStorage.TemporaryThreadStorage)({
       register: ({ threadId }) =>
         Effect.sync(() => {
