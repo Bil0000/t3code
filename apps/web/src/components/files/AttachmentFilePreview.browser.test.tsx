@@ -2279,12 +2279,14 @@ it.each(["archive", "sqlite"] as const)(
     refresh.mockReset().mockResolvedValueOnce(bad).mockResolvedValue(good);
     try {
       await using screen = await render(
-        <AttachmentFilePreview
-          name={kind === "archive" ? "retry.zip" : "retry.sqlite"}
-          mimeType="application/octet-stream"
-          sizeBytes={bytes.length}
-          asset={{ environmentId: EnvironmentId.make("test"), attachmentId: "retry" }}
-        />,
+        <div style={{ display: "flex", height: 400, width: 600 }}>
+          <AttachmentFilePreview
+            name={kind === "archive" ? "retry.zip" : "retry.sqlite"}
+            mimeType="application/octet-stream"
+            sizeBytes={bytes.length}
+            asset={{ environmentId: EnvironmentId.make("test"), attachmentId: "retry" }}
+          />
+        </div>,
       );
       await vi.waitFor(
         () => expect(screen.container.querySelector('[role="alert"] button')).not.toBeNull(),
@@ -2293,13 +2295,24 @@ it.each(["archive", "sqlite"] as const)(
       await act(() =>
         screen.container.querySelector<HTMLButtonElement>('[role="alert"] button')!.click(),
       );
-      await vi.waitFor(
-        () =>
-          expect(screen.container.textContent).toContain(
-            kind === "archive" ? "recovered.txt" : "retry succeeded",
-          ),
-        10_000,
-      );
+      if (kind === "archive") {
+        const file = await vi.waitFor(() => {
+          const row = screen.container
+            .querySelector("file-tree-container")
+            ?.shadowRoot?.querySelector<HTMLElement>('[data-item-path="recovered.txt"]');
+          expect(row?.checkVisibility()).toBe(true);
+          return row!;
+        }, 10_000);
+        await userEvent.click(file);
+        await vi.waitFor(() =>
+          expect(screen.container.querySelector("pre")?.textContent).toBe("ok"),
+        );
+      } else {
+        await vi.waitFor(
+          () => expect(screen.container.textContent).toContain("retry succeeded"),
+          10_000,
+        );
+      }
       expect(refresh).toHaveBeenCalledTimes(2);
     } finally {
       URL.revokeObjectURL(bad);
