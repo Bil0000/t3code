@@ -1,11 +1,13 @@
 import "~/index.css";
 import { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
+import { Cause } from "effect";
 import { expect, it, vi } from "vite-plus/test";
 import { page } from "vite-plus/test/browser";
 
 const mocks = vi.hoisted(() => ({
-  update: vi.fn<(input: unknown) => Promise<{ _tag: "Success" | "Failure" }>>(),
+  update:
+    vi.fn<(input: unknown) => Promise<{ _tag: "Success" } | { _tag: "Failure"; cause: unknown }>>(),
   notify: vi.fn(),
 }));
 vi.mock(
@@ -114,9 +116,9 @@ function setup() {
 
 it("saves maintainer edits, and restores the previous value with an error when saving fails", async () => {
   const control = setup();
-  let settle!: (value: { _tag: "Failure" }) => void;
+  let settle!: (value: { _tag: "Failure"; cause: unknown }) => void;
   mocks.update.mockReturnValueOnce(
-    new Promise<{ _tag: "Failure" }>((resolve) => {
+    new Promise((resolve) => {
       settle = resolve;
     }),
   );
@@ -131,10 +133,17 @@ it("saves maintainer edits, and restores the previous value with an error when s
     environmentId,
     input: { ...reference, maintainerCanModify: false },
   });
-  settle({ _tag: "Failure" });
+  settle({
+    _tag: "Failure",
+    cause: Cause.fail(new Error("Resource not accessible by integration")),
+  });
   await expect.element(checkbox).toBeChecked();
   expect(mocks.notify).toHaveBeenCalledWith(
-    expect.objectContaining({ type: "error", title: "Could not save maintainer access" }),
+    expect.objectContaining({
+      type: "error",
+      title: "Could not save maintainer access",
+      description: "Resource not accessible by integration",
+    }),
   );
 });
 
@@ -145,7 +154,7 @@ it("keeps the saved value when a follow-up save fails before the host refreshes"
   const checkbox = page.getByRole("menuitemcheckbox", { name: "Allow edits from maintainers" });
   await checkbox.click();
   await expect.element(page.getByRole("status")).not.toBeInTheDocument();
-  mocks.update.mockResolvedValueOnce({ _tag: "Failure" });
+  mocks.update.mockResolvedValueOnce({ _tag: "Failure", cause: Cause.fail("refused") });
   await checkbox.click();
   await expect.element(page.getByRole("status")).not.toBeInTheDocument();
   expect(mocks.notify).toHaveBeenCalledOnce();

@@ -39,6 +39,23 @@ export function canEditPullRequestMaintainerEdits(
   );
 }
 
+export interface MaintainerEditsChoice {
+  readonly key: string;
+  readonly observed: boolean | undefined;
+  readonly value: boolean;
+}
+
+/** A choice ends at the first host value that differs from the one it was made against. */
+export function maintainerEditsChoiceInForce(
+  choice: MaintainerEditsChoice | null,
+  key: string,
+  observed: boolean | undefined,
+  saving: boolean,
+): MaintainerEditsChoice | null {
+  if (choice === null || choice.key !== key) return null;
+  return saving || choice.observed === observed ? choice : null;
+}
+
 /** Hosts do not support rewriting review summaries through comment mutations. */
 export function canEditPullRequestComment(
   detail: EditingSubject,

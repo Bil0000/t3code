@@ -417,7 +417,11 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
   const terminology = sourceControlClients.get(identity?.provider).changeRequest;
   const permissions = usePullRequestPermissions(params, pr);
   const action = usePullRequestAction(params, pr);
-  const maintainerEdits = usePullRequestMaintainerEdits(params, pr);
+  const maintainerEdits = usePullRequestMaintainerEdits(
+    params,
+    pr,
+    permissions.canEditMaintainerEdits,
+  );
   const showsDeleteBranch = pr !== null && canPerformPullRequestAction(pr, "delete-branch");
   const confirmDeleteBranch = () =>
     pr &&

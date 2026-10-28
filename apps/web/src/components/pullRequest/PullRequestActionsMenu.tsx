@@ -1,6 +1,11 @@
 import { useAtomValue } from "@effect/atom-react";
-import { canEditPullRequestMaintainerEdits } from "@t3tools/client-runtime/pull-request-editing";
+import {
+  canEditPullRequestMaintainerEdits,
+  maintainerEditsChoiceInForce,
+  type MaintainerEditsChoice,
+} from "@t3tools/client-runtime/pull-request-editing";
 import type { ChangeRequestTerminology } from "@t3tools/client-runtime/source-control-clients";
+import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type {
   EnvironmentId,
   PullRequestAction,
@@ -47,6 +52,7 @@ import { ActOnEnvironmentPicker, type PerformPullRequestAction } from "./PullReq
 import {
   PULL_REQUEST_MERGE_METHOD_LABELS,
   pullRequestActionMenuHasGroup,
+  readableFailure,
 } from "./pullRequestDetail.logic";
 import { PullRequestGlyph } from "./pullRequestIcons";
 import type { PickableEnvironment } from "./pullRequestProjectAssignment.logic";
@@ -155,32 +161,26 @@ export function PullRequestActionsMenu({
   const updatePullRequest = useAtomCommand(pullRequestEnvironment.update, {
     reportFailure: false,
   });
-  const [maintainerEditsChoice, setMaintainerEditsChoice] = useState<{
-    readonly pullRequestKey: string;
-    readonly observed: boolean | undefined;
-    readonly value: boolean;
-  } | null>(null);
+  const [maintainerEditsChoice, setMaintainerEditsChoice] = useState<MaintainerEditsChoice | null>(
+    null,
+  );
   const [maintainerEditsSaving, setMaintainerEditsSaving] = useState(false);
-  // A choice ends at the first host value that differs from the one it was made against, so a
-  // later change made elsewhere is never masked by it.
-  if (
-    maintainerEditsChoice !== null &&
-    !maintainerEditsSaving &&
-    (maintainerEditsChoice.pullRequestKey !== pullRequestKey ||
-      maintainerEditsChoice.observed !== detail.maintainerCanModify)
-  ) {
-    setMaintainerEditsChoice(null);
+  const maintainerEditsChoiceKept = maintainerEditsChoiceInForce(
+    maintainerEditsChoice,
+    pullRequestKey,
+    detail.maintainerCanModify,
+    maintainerEditsSaving,
+  );
+  if (maintainerEditsChoiceKept !== maintainerEditsChoice) {
+    setMaintainerEditsChoice(maintainerEditsChoiceKept);
   }
-  const maintainerCanModify =
-    maintainerEditsChoice?.pullRequestKey === pullRequestKey
-      ? maintainerEditsChoice.value
-      : detail.maintainerCanModify;
+  const maintainerCanModify = maintainerEditsChoiceKept?.value ?? detail.maintainerCanModify;
   const canSaveMaintainerEdits =
     canWriteSourceControl && environmentConnected && !maintainerEditsSaving;
   const saveMaintainerEdits = async (value: boolean) => {
     if (!canSaveMaintainerEdits) return;
     const previousChoice = maintainerEditsChoice;
-    setMaintainerEditsChoice({ pullRequestKey, observed: detail.maintainerCanModify, value });
+    setMaintainerEditsChoice({ key: pullRequestKey, observed: detail.maintainerCanModify, value });
     setMaintainerEditsSaving(true);
     const result = await updatePullRequest({
       environmentId,
@@ -192,7 +192,7 @@ export function PullRequestActionsMenu({
       toastManager.add({
         type: "error",
         title: "Could not save maintainer access",
-        description: "Try again.",
+        description: readableFailure(squashAtomCommandFailure(result), "Try again."),
       });
       return;
     }

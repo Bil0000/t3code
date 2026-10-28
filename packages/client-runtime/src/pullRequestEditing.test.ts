@@ -11,6 +11,7 @@ import {
   canEditPullRequestChangeRequest,
   canEditPullRequestComment,
   canResolvePullRequestThread,
+  maintainerEditsChoiceInForce,
 } from "./pullRequestEditing.ts";
 
 type Subject = Pick<PullRequestDetail, "author" | "capabilities" | "viewer" | "viewerPermissions">;
@@ -200,5 +201,19 @@ describe("canResolvePullRequestThread", () => {
         canResolve: true,
       }),
     ).toBe(false);
+  });
+});
+
+describe("maintainerEditsChoiceInForce", () => {
+  const choice = { key: "pr-7", observed: true, value: false };
+
+  it.each([
+    ["keeps it through a refresh that still shows the old host value", "pr-7", true, false, choice],
+    ["drops it once the host shows a different value", "pr-7", false, false, null],
+    ["drops it on another pull request", "pr-8", true, false, null],
+    ["drops it on another pull request while saving", "pr-8", true, true, null],
+    ["keeps it while a save is in flight whatever the host shows", "pr-7", false, true, choice],
+  ] as const)("%s", (_, key, observed, saving, expected) => {
+    expect(maintainerEditsChoiceInForce(choice, key, observed, saving)).toBe(expected);
   });
 });

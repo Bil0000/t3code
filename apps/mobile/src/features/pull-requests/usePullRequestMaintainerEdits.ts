@@ -1,4 +1,8 @@
 import { useAtomRefresh } from "@effect/atom-react";
+import {
+  maintainerEditsChoiceInForce,
+  type MaintainerEditsChoice,
+} from "@t3tools/client-runtime/pull-request-editing";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { PullRequestDetail } from "@t3tools/contracts";
 import { AsyncResult } from "effect/reactivity";
@@ -7,36 +11,30 @@ import * as Dialog from "../../components/ui/Dialog";
 import { composerPullRequests } from "../../state/pull-requests";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { pullRequestTarget, type PullRequestParams } from "./usePullRequestDiff";
-import { usePullRequestPermissions } from "./usePullRequestPermissions";
 
 export function usePullRequestMaintainerEdits(
   params: PullRequestParams,
   pr: PullRequestDetail | null,
+  canEdit: boolean,
 ) {
   const target = pullRequestTarget(params);
-  const permissions = usePullRequestPermissions(params, pr);
   const update = useAtomCommand(composerPullRequests.update, { reportFailure: false });
   const refreshDetail = useAtomRefresh(composerPullRequests.detail(target));
   const pending = useRef(false);
   const [saving, setSaving] = useState(false);
-  const [choice, setChoice] = useState<{
-    readonly url: string;
-    readonly observed: boolean | undefined;
-    readonly value: boolean;
-  } | null>(null);
+  const [choice, setChoice] = useState<MaintainerEditsChoice | null>(null);
   const observed = pr?.maintainerCanModify;
-  // A choice ends at the first host value that differs from the one it was made against, so a
-  // later change made elsewhere is never masked by it.
-  if (choice !== null && !saving && (choice.url !== pr?.url || choice.observed !== observed)) {
-    setChoice(null);
+  const kept = maintainerEditsChoiceInForce(choice, pr?.url ?? "", observed, saving);
+  if (kept !== choice) {
+    setChoice(kept);
   }
-  const value = choice !== null && choice.url === pr?.url ? choice.value : observed === true;
+  const value = kept?.value ?? observed === true;
   const save = async (next: boolean) => {
-    if (pending.current || pr === null || !permissions.canEditMaintainerEdits) return;
+    if (pending.current || pr === null || !canEdit) return;
     pending.current = true;
     const previousChoice = choice;
     setSaving(true);
-    setChoice({ url: pr.url, observed, value: next });
+    setChoice({ key: pr.url, observed, value: next });
     const response = await update({
       ...target,
       input: { ...target.input, maintainerCanModify: next },
@@ -55,12 +53,12 @@ export function usePullRequestMaintainerEdits(
     refreshDetail();
   };
   return {
-    visible: permissions.canEditMaintainerEdits,
+    visible: canEdit,
     value,
     saving,
     subtitle: saving
       ? "Saving…"
-      : "Maintainers can push to this branch and may get access to fork workflow secrets.",
+      : "Maintainers can push to this branch. If your fork has workflows, this can also give access to its secrets.",
     toggle: () => void save(!value),
   };
 }
