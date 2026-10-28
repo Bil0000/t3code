@@ -84,7 +84,7 @@ export function useTemporaryChatViews() {
   });
   const previousDraftId = useRef(target?.kind === "draft" ? target.draftId : null);
   const currentDraftId = target?.kind === "draft" ? target.draftId : null;
-  // oxlint-disable-next-line t3code/react-effect-budget -- Release abandoned drafts only after the route change settles.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Release abandoned drafts only after the route change settles.
   useEffect(() => {
     const previous = previousDraftId.current;
     previousDraftId.current = currentDraftId;
@@ -120,12 +120,12 @@ export function useTemporaryChatViews() {
     },
   );
   const reconcileCurrent = useStableCallback(() => reconcile(environmentId, threadId, temporary));
-  // oxlint-disable-next-line t3code/react-effect-budget -- Synchronize the current route with temporary server view ownership.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Synchronize the current route with temporary server view ownership.
   useEffect(() => {
     if (status !== null || environmentId === null)
       void reconcile(environmentId, threadId, temporary);
   }, [environmentId, threadId, temporary, status, reconcile]);
-  // oxlint-disable-next-line t3code/react-effect-budget -- Retry pending server view updates when environment connections change.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Retry pending server view updates when environment connections change.
   useEffect(() => {
     if (connectedEnvironmentIds.length > 0 && pendingViewUpdates.size > 0) void send([]);
   }, [connectedEnvironmentIds, send]);
@@ -139,7 +139,7 @@ export function useTemporaryChatViews() {
       send,
     }),
   );
-  // oxlint-disable-next-line t3code/react-effect-budget -- Synchronize server ownership with page lifecycle and DOM events.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Synchronize server ownership with page lifecycle and DOM events.
   useEffect(() => {
     mounted.current = true;
     completeOpenViewLaunch = completeLaunch;

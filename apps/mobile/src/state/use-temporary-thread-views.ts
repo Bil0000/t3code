@@ -250,7 +250,7 @@ export function useTemporaryThreadViews(
     .join("|");
   const draftOpen = hasOpenThreadDraft(state, Platform.OS);
   const previousDraftKey = useRef<string | null>(null);
-  // oxlint-disable-next-line t3code/react-effect-budget -- Release abandoned temporary drafts after native navigation settles.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Release abandoned temporary drafts after native navigation settles.
   useEffect(() => {
     const old = previousDraftKey.current;
     if (old !== null && (!draftOpen || old !== draftKey) && isTemporaryComposerDraft(old))
@@ -258,7 +258,7 @@ export function useTemporaryThreadViews(
     previousDraftKey.current = draftOpen ? draftKey : null;
   }, [draftKey, draftOpen]);
 
-  // oxlint-disable-next-line t3code/react-effect-budget -- Track native navigation events before publishing server view leases.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Track native navigation events before publishing server view leases.
   useLayoutEffect(() => {
     getNavigationState = () => navigation.getState();
     void syncTemporaryThreadViews();
@@ -267,7 +267,7 @@ export function useTemporaryThreadViews(
     });
   }, [navigation]);
 
-  // oxlint-disable-next-line t3code/react-effect-budget -- Synchronize the server view lease with app background changes.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Synchronize the server view lease with app background changes.
   useEffect(() => {
     const subscription = AppState.addEventListener("change", () => {
       void syncTemporaryThreadViews();
@@ -275,14 +275,14 @@ export function useTemporaryThreadViews(
     return () => subscription.remove();
   }, []);
 
-  // oxlint-disable-next-line t3code/react-effect-budget -- Synchronize temporary ownership when the selected native thread changes.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Synchronize temporary ownership when the selected native thread changes.
   useEffect(() => {
     if (temporary && environmentId !== null && threadId !== null)
       setTemporaryThread(environmentId, threadId, true);
     void syncTemporaryThreadViews();
   }, [environmentId, threadId, temporary]);
 
-  // oxlint-disable-next-line t3code/react-effect-budget -- Replay view ownership after environment connections recover.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Replay view ownership after environment connections recover.
   useEffect(() => {
     if (connected.length > 0) void reconcileTemporaryThreadViews();
   }, [connected]);
