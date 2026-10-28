@@ -1,6 +1,29 @@
-import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, ThreadId, type ScopedThreadRef } from "@t3tools/contracts";
+import { Atom } from "effect/reactivity";
 
 const temporaryThreads = new Map<string, Map<string, "temporary" | "deleted">>();
+const listeners = new Map<string, Set<() => void>>();
+const threadKey = (environmentId: string, threadId: string) =>
+  JSON.stringify([environmentId, threadId]);
+
+const notifyThread = (environmentId: string, threadId: string) => {
+  for (const notify of listeners.get(threadKey(environmentId, threadId)) ?? []) notify();
+};
+
+export const temporaryThreadAtom = Atom.family((ref: ScopedThreadRef) =>
+  Atom.make((get) => {
+    const key = threadKey(ref.environmentId, ref.threadId);
+    const notify = () => get.setSelf(isTemporaryThread(ref.environmentId, ref.threadId));
+    const subscribers = listeners.get(key) ?? new Set<() => void>();
+    listeners.set(key, subscribers);
+    subscribers.add(notify);
+    get.addFinalizer(() => {
+      subscribers.delete(notify);
+      if (subscribers.size === 0) listeners.delete(key);
+    });
+    return isTemporaryThread(ref.environmentId, ref.threadId);
+  }),
+);
 
 export function setTemporaryThread(
   environmentId: string,
@@ -18,7 +41,10 @@ export function setTemporaryThread(
     threads = new Map();
     temporaryThreads.set(environmentId, threads);
   }
-  if (!threads.has(threadId)) threads.set(threadId, "temporary");
+  if (!threads.has(threadId)) {
+    threads.set(threadId, "temporary");
+    notifyThread(environmentId, threadId);
+  }
 }
 
 export function markTemporaryThreadDeleted(environmentId: string, threadId: string): void {
@@ -32,8 +58,10 @@ export function isTemporaryThread(environmentId: string, threadId: string): bool
 
 export function forgetTemporaryThread(environmentId: string, threadId: string): void {
   const threads = temporaryThreads.get(environmentId);
-  threads?.delete(threadId);
-  if (threads?.size === 0) temporaryThreads.delete(environmentId);
+  if (threads?.delete(threadId)) {
+    if (threads.size === 0) temporaryThreads.delete(environmentId);
+    notifyThread(environmentId, threadId);
+  }
 }
 
 export function createTemporaryThreadView(

@@ -1,4 +1,5 @@
-import { isTemporaryThread } from "@t3tools/client-runtime/temporary-threads";
+import { isTemporaryThread, temporaryThreadAtom } from "@t3tools/client-runtime/temporary-threads";
+import { useAtomValue } from "@effect/atom-react";
 import { Button } from "../../components/ui/Button";
 import * as Dialog from "../../components/ui/Dialog";
 import { useOpenPullRequest } from "../../native/useOpenPullRequest";
@@ -491,15 +492,25 @@ function AssistantForkButton(props: {
   );
 }
 
-function MessageAttachmentImage(props: {
+type MessageAttachmentImageProps = {
+  readonly temporary: boolean;
   readonly environmentId: EnvironmentId;
   readonly attachmentId: string;
   readonly name: string;
   readonly mimeType: string;
   readonly className: string;
   readonly onPressPreview: (source: FilePreviewSource) => void;
-}) {
-  const { selectedThread } = useThreadSelection();
+};
+
+function MessageAttachmentImage(props: MessageAttachmentImageProps) {
+  return props.temporary ? (
+    <Text className="text-xs text-foreground-muted">Keep thread to open media.</Text>
+  ) : (
+    <SavedMessageAttachmentImage {...props} />
+  );
+}
+
+function SavedMessageAttachmentImage(props: MessageAttachmentImageProps) {
   const withGallery = useFilePreviewGallery();
   const sourceIdentifier = useId();
   const resource = {
@@ -513,8 +524,6 @@ function MessageAttachmentImage(props: {
   const retriedImage = useRef(false);
   const imageStyle = useResolveClassNames(props.className);
 
-  if (selectedThread?.temporary)
-    return <Text className="text-xs text-foreground-muted">Keep thread to open media.</Text>;
   if (uri === null) {
     return (
       <View className={`${props.className} items-center justify-center`}>
@@ -574,6 +583,7 @@ function isFileAttachment(attachment: ChatAttachment): attachment is ChatFileAtt
 }
 
 function MessageAttachmentFile(props: {
+  readonly temporary: boolean;
   readonly environmentId: EnvironmentId;
   readonly attachment: ChatFileAttachment;
   readonly onPressPreview: (source: FilePreviewSource) => void;
@@ -660,7 +670,7 @@ function MessageAttachmentFile(props: {
     })();
   };
 
-  if (selectedThread?.temporary)
+  if (props.temporary)
     return <Text className="text-xs text-foreground-muted">Keep thread to open media.</Text>;
   const openAttachment = () =>
     isPdf
@@ -769,6 +779,7 @@ function MessageAttachmentFile(props: {
 
 /** A message's files as its bubble shows them; a guest's waiting message uses it too. */
 function MessageAttachmentList(props: {
+  readonly temporary: boolean;
   readonly attachments: ReadonlyArray<ChatAttachment>;
   readonly environmentId: EnvironmentId;
   readonly onPressPreview: (source: FilePreviewSource) => void;
@@ -777,6 +788,7 @@ function MessageAttachmentList(props: {
   return props.attachments.map((attachment) =>
     isImageAttachment(attachment) ? (
       <MessageAttachmentImage
+        temporary={props.temporary}
         key={attachment.id}
         environmentId={props.environmentId}
         attachmentId={attachment.id}
@@ -787,6 +799,7 @@ function MessageAttachmentList(props: {
       />
     ) : isFileAttachment(attachment) ? (
       <MessageAttachmentFile
+        temporary={props.temporary}
         key={attachment.id}
         environmentId={props.environmentId}
         attachment={attachment}
@@ -1282,6 +1295,7 @@ function renderFeedEntry(
         bubbleMaxWidth={props.duoColumns ? "85%" : props.userBubbleMaxWidth}
         renderAttachments={(attachments) => (
           <MessageAttachmentList
+            temporary={props.temporary}
             attachments={attachments}
             environmentId={props.environmentId}
             onPressPreview={props.onPressPreview}
@@ -1593,6 +1607,7 @@ function renderFeedEntry(
                 {entry.pendingMessage?.attachments.map((attachment) =>
                   attachment.type === "image" && attachment.uploadedAttachmentId ? (
                     <MessageAttachmentImage
+                      temporary={props.temporary}
                       key={attachment.id}
                       environmentId={props.environmentId}
                       attachmentId={attachment.uploadedAttachmentId}
@@ -1630,6 +1645,7 @@ function renderFeedEntry(
                     {visibleAttachments.map((attachment) => {
                       return isImageAttachment(attachment) ? (
                         <MessageAttachmentImage
+                          temporary={props.temporary}
                           key={attachment.id}
                           environmentId={props.environmentId}
                           attachmentId={attachment.id}
@@ -1644,6 +1660,7 @@ function renderFeedEntry(
                         />
                       ) : isFileAttachment(attachment) ? (
                         <MessageAttachmentFile
+                          temporary={props.temporary}
                           key={attachment.id}
                           environmentId={props.environmentId}
                           attachment={attachment}
@@ -1796,6 +1813,7 @@ function renderFeedEntry(
           </MarkdownImageAvailableWidthContext>
         ) : null}
         <MessageAttachmentList
+          temporary={props.temporary}
           attachments={attachments}
           environmentId={props.environmentId}
           onPressPreview={props.onPressPreview}
@@ -2132,9 +2150,12 @@ export const ThreadFeed = memo(function ThreadFeed({
   ...props
 }: ThreadFeedProps & { readonly ref?: Ref<ThreadFeedHandle> }) {
   const { listRef, onEndFollowEnabledChange, onHeaderMaterialVisibilityChange } = props;
+  const registryTemporary = useAtomValue(
+    temporaryThreadAtom(scopeThreadRef(props.environmentId, props.threadId)),
+  );
   const temporary =
     useQuietThreadShell(scopeThreadRef(props.environmentId, props.threadId))?.temporary === true ||
-    isTemporaryThread(props.environmentId, props.threadId);
+    registryTemporary;
   const workflowOpening = useWorkflowOpening(props.detailRef);
   const guestShare = useThreadGuestShare(props.detailRef);
   const deviceType = useDeviceType();

@@ -5,6 +5,7 @@ import { expect, it, vi } from "vite-plus/test";
 import { EnvironmentId, MessageId, ThreadId, type ScopedThreadRef } from "@t3tools/contracts";
 import { RegistryContext } from "@effect/atom-react";
 import { AtomRegistry } from "effect/reactivity";
+import * as Option from "effect/Option";
 import type { LegendListRef } from "@legendapp/list/react-native";
 import type { OrchestrationV2ThreadProjection } from "@t3tools/contracts";
 import { setTemporaryThread } from "@t3tools/client-runtime/temporary-threads";
@@ -21,6 +22,7 @@ const state = await vi.hoisted(async () => {
     shellAtom: Atom.make({ temporary: true }),
     listeners: new Set<() => void>(),
     detailReads: vi.fn(),
+    assetUrl: vi.fn(() => null),
     alert: vi.fn(),
     openPullRequest: vi.fn(),
     copyContext: vi.fn(async () => {}),
@@ -208,13 +210,13 @@ vi.mock("../review/ReviewCommentCard", () => ({
 }));
 vi.mock("../../state/assets", () => ({
   assetEnvironment: {},
-  useAssetUrl: () => null,
+  useAssetUrl: () => state.assetUrl(),
   useAssetUrlState: () => ({}),
   useRefreshAssetUrl: () => () => {},
 }));
 vi.mock("../../state/session", () => ({
   readEnvironmentScope: () => true,
-  usePreparedConnection: () => null,
+  usePreparedConnection: () => Option.none(),
 }));
 vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
 vi.mock("../../state/threads", async () => {
@@ -338,6 +340,7 @@ it.each([true, false])(
     state.shell = { temporary };
     state.listeners.clear();
     state.detailReads.mockClear();
+    state.assetUrl.mockClear();
     state.alert.mockClear();
     state.openPullRequest.mockClear();
     state.copyContext.mockClear();
@@ -375,6 +378,16 @@ it.each([true, false])(
           id: "context-message",
           role: "user",
           text: "Copy context",
+          attachments: [
+            { id: "private-image", type: "image", name: "private.png", mimeType: "image/png" },
+            {
+              id: "private-file",
+              type: "file",
+              name: "private.bin",
+              mimeType: "application/octet-stream",
+              sizeBytes: 1,
+            },
+          ],
           context: {
             version: 1,
             records: [
@@ -473,7 +486,8 @@ it.each([true, false])(
         ),
       );
       expect(state.detailReads.mock.calls).toEqual([[threadId]]);
-      expect(container.textContent?.match(/Keep thread to open media/g)).toHaveLength(4);
+      expect(state.assetUrl).not.toHaveBeenCalled();
+      expect(container.textContent?.match(/Keep thread to open media/g)).toHaveLength(6);
       expect(container.querySelectorAll("img")).toHaveLength(0);
       expect.soft(container.querySelector<HTMLElement>('[data-row="html"]')?.style.height).toBe("");
       expect
@@ -519,6 +533,8 @@ it.each([true, false])(
         registry.set(state.shellAtom, state.shell);
         for (const listener of state.listeners) listener();
       });
+      expect(state.assetUrl).toHaveBeenCalled();
+      expect(container.textContent).toContain("private.bin");
       expect(container.textContent).not.toContain("Keep thread to open media");
       expect(container.textContent).toContain("HTML media");
       expect(container.textContent).toContain("MCP media");

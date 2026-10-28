@@ -63,7 +63,7 @@ import {
   markdownImageSourceFragment,
 } from "@t3tools/client-runtime/markdown-images";
 import { mediaUrlReference } from "@t3tools/client-runtime/media-reference";
-import { isTemporaryThread } from "@t3tools/client-runtime/temporary-threads";
+import { temporaryThreadAtom } from "@t3tools/client-runtime/temporary-threads";
 import { mediaKindFromPath, mediaMimeTypeFromExtension } from "@t3tools/shared/mediaPreview";
 import { InlineAudioPreview } from "./files/InlineAudioPreview";
 import * as Cause from "effect/Cause";
@@ -438,7 +438,9 @@ const markdownServerConfigFieldsAtom = Atom.family((environmentId: EnvironmentId
 const markdownTemporaryThreadAtom = Atom.family((ref: ScopedThreadRef | null) =>
   Atom.make(
     (get) =>
-      ref !== null && get(environmentThreadShells.quietThreadShellAtom(ref))?.temporary === true,
+      ref !== null &&
+      (get(temporaryThreadAtom(ref)) ||
+        get(environmentThreadShells.quietThreadShellAtom(ref))?.temporary === true),
   ),
 );
 
@@ -461,10 +463,7 @@ function useChatMarkdownState({
   headingLevelOffset = 0,
   sourceControlMedia = false,
 }: ChatMarkdownProps) {
-  const shellTemporary = useAtomValue(markdownTemporaryThreadAtom(threadRef ?? null));
-  const temporary =
-    shellTemporary ||
-    (threadRef !== undefined && isTemporaryThread(threadRef.environmentId, threadRef.threadId));
+  const temporary = useAtomValue(markdownTemporaryThreadAtom(threadRef ?? null));
   const resolvedTheme = useRenderedAppearance();
   const markdownRef = useRef<HTMLElement>(null);
   const mediaRequestId = useRef(0);
