@@ -114,51 +114,41 @@ function setup() {
   );
 }
 
-it("saves maintainer edits, and restores the previous value with an error when saving fails", async () => {
+it("saves maintainer edits, locks while saving, and restores the saved value when a save fails", async () => {
   const control = setup();
+  await using screen = await render(control());
+  await screen.getByRole("button", { name: "More pull request actions" }).click();
+  const checkbox = page.getByRole("menuitemcheckbox", { name: "Allow edits from maintainers" });
+  await expect.element(checkbox).toBeChecked();
+  await checkbox.click();
+  await expect.element(page.getByRole("status")).not.toBeInTheDocument();
+  expect(mocks.update).toHaveBeenCalledExactlyOnceWith({
+    environmentId,
+    input: { ...reference, maintainerCanModify: false },
+  });
+
   let settle!: (value: { _tag: "Failure"; cause: unknown }) => void;
   mocks.update.mockReturnValueOnce(
     new Promise((resolve) => {
       settle = resolve;
     }),
   );
-  await using screen = await render(control());
-  await screen.getByRole("button", { name: "More pull request actions" }).click();
-  const checkbox = page.getByRole("menuitemcheckbox", { name: "Allow edits from maintainers" });
-  await expect.element(checkbox).toBeChecked();
   await checkbox.click();
-  await expect.element(checkbox).not.toBeChecked();
+  await expect.element(checkbox).toBeChecked();
+  await expect.element(checkbox).toBeDisabled();
   await expect.element(page.getByRole("status")).toHaveTextContent("Saving…");
-  expect(mocks.update).toHaveBeenCalledExactlyOnceWith({
-    environmentId,
-    input: { ...reference, maintainerCanModify: false },
-  });
   settle({
     _tag: "Failure",
     cause: Cause.fail(new Error("Resource not accessible by integration")),
   });
-  await expect.element(checkbox).toBeChecked();
-  expect(mocks.notify).toHaveBeenCalledWith(
+  await expect.element(checkbox).not.toBeChecked();
+  expect(mocks.notify).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({
       type: "error",
       title: "Could not save maintainer access",
       description: "Resource not accessible by integration",
     }),
   );
-});
-
-it("keeps the saved value when a follow-up save fails before the host refreshes", async () => {
-  const control = setup();
-  await using screen = await render(control());
-  await screen.getByRole("button", { name: "More pull request actions" }).click();
-  const checkbox = page.getByRole("menuitemcheckbox", { name: "Allow edits from maintainers" });
-  await checkbox.click();
-  await expect.element(page.getByRole("status")).not.toBeInTheDocument();
-  mocks.update.mockResolvedValueOnce({ _tag: "Failure", cause: Cause.fail("refused") });
-  await checkbox.click();
-  await expect.element(page.getByRole("status")).not.toBeInTheDocument();
-  expect(mocks.notify).toHaveBeenCalledOnce();
-  await expect.element(checkbox).not.toBeChecked();
 });
 
 it("keeps a saved choice through a stale refresh, then follows the host", async () => {
