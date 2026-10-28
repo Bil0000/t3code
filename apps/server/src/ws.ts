@@ -1008,11 +1008,10 @@ const subscribeOrchestrationV2ThreadGeneration = Effect.fn(
             projection: dedupeBodies ? dedupeSnapshotBodies(projection) : projection,
           };
         })();
-    return withLiveDedupe(
-      Stream.concat(
-        Stream.concat(rpcInitialItems([snapshotItem]), completionMarker),
-        eventStreamFrom(snapshotSequence),
-      ),
+    return rpcInitialItems([snapshotItem]).pipe(
+      Stream.concat(completionMarker),
+      Stream.concat(eventStreamFrom(snapshotSequence)),
+      withLiveDedupe,
     );
   });
 
@@ -1081,11 +1080,10 @@ const subscribeOrchestrationV2ThreadGeneration = Effect.fn(
     if (plan.mode === "snapshot") {
       return yield* snapshotThenLive();
     }
-    return withLiveDedupe(
-      Stream.concat(
-        Stream.concat(rpcInitialItems(replay), completionMarker),
-        eventStreamFrom(highWater),
-      ),
+    return rpcInitialItems(replay).pipe(
+      Stream.concat(completionMarker),
+      Stream.concat(eventStreamFrom(highWater)),
+      withLiveDedupe,
     );
   }
 
