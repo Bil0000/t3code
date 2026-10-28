@@ -468,9 +468,9 @@ it.effect("requeues terminal temporary release after a worker process is lost", 
         request: { type: "provider-session.release-temporary" },
       },
     ]);
-    yield* outbox.claimNext({ workerId: "lost-worker", leaseDurationMs: 30_000 });
+    yield* outbox.claimNext({ workerId: "lost-worker" });
     assert.deepEqual(yield* outbox.reconcileAfterProcessLoss, { cancelled: 0, requeued: 1 });
-    const reclaimed = yield* outbox.claimNext({ workerId: "new-worker", leaseDurationMs: 30_000 });
+    const reclaimed = yield* outbox.claimNext({ workerId: "new-worker" });
     assert.isTrue(Option.isSome(reclaimed));
     if (Option.isSome(reclaimed)) {
       assert.equal(reclaimed.value.request.type, "provider-session.release-temporary");

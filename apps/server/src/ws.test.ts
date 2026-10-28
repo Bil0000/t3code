@@ -52,7 +52,6 @@ import { Headers } from "effect/http";
 import { Rpc, RpcGroup, RpcMessage, RpcServer } from "effect/rpc";
 import * as SqlClient from "effect/sql/SqlClient";
 
-import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as ServerBrowser from "./preview/ServerBrowser.ts";
 import * as AcpRegistryRuntimeCoordinator from "@t3tools/provider-acp-registry/server/AcpRegistryRuntimeCoordinator";
 import * as AcpRegistrySupport from "@t3tools/provider-acp-registry/server/AcpRegistrySupport";
@@ -633,7 +632,6 @@ it.effect.each(["family", "worktree"] as const)(
       const services = yield* Layer.build(
         Layer.mergeAll(
           layerUnusedConfigRpcServices,
-          Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({}),
           Layer.mock(ServerBrowser.ServerBrowser)({}),
         ).pipe(Layer.provideMerge(layerConfigSources)),
       );
@@ -725,8 +723,6 @@ it.effect.each(["family", "worktree"] as const)(
               scopes: [],
             },
             {},
-            {},
-            Context.get(services, PreviewAutomationBroker.PreviewAutomationBroker),
             Context.get(services, ServerBrowser.ServerBrowser),
             yield* Effect.scope,
           ).pipe(
@@ -904,7 +900,6 @@ it.effect.each(
       const services = yield* Layer.build(
         Layer.mergeAll(
           layerUnusedConfigRpcServices,
-          Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({}),
           Layer.mock(ServerBrowser.ServerBrowser)({}),
         ).pipe(Layer.provideMerge(layerConfigSources)),
       );
@@ -999,8 +994,6 @@ it.effect.each(
               scopes: [],
             },
             {},
-            {},
-            Context.get(services, PreviewAutomationBroker.PreviewAutomationBroker),
             Context.get(services, ServerBrowser.ServerBrowser),
             yield* Effect.scope,
           ).pipe(
@@ -1082,7 +1075,6 @@ it.effect.each(
     const services = yield* Layer.build(
       Layer.mergeAll(
         layerUnusedConfigRpcServices,
-        Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({}),
         Layer.mock(ServerBrowser.ServerBrowser)({}),
       ).pipe(Layer.provideMerge(layerConfigSources)),
     );
@@ -1127,8 +1119,6 @@ it.effect.each(
             scopes: [],
           },
           {},
-          {},
-          Context.get(services, PreviewAutomationBroker.PreviewAutomationBroker),
           Context.get(services, ServerBrowser.ServerBrowser),
           yield* Effect.scope,
         ).pipe(
@@ -1194,7 +1184,6 @@ it.effect.each([false, true])(
       const services = yield* Layer.build(
         Layer.mergeAll(
           layerUnusedConfigRpcServices,
-          Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({}),
           Layer.mock(ServerBrowser.ServerBrowser)({}),
         ).pipe(Layer.provideMerge(layerConfigSources)),
       );
@@ -1241,8 +1230,6 @@ it.effect.each([false, true])(
               scopes: [],
             },
             {},
-            {},
-            Context.get(services, PreviewAutomationBroker.PreviewAutomationBroker),
             Context.get(services, ServerBrowser.ServerBrowser),
             socketScope,
           ).pipe(
@@ -1394,8 +1381,6 @@ it.effect(
               scopes: [],
             },
             {},
-            {},
-            yield* PreviewAutomationBroker.PreviewAutomationBroker,
             yield* ServerBrowser.ServerBrowser,
             yield* Effect.scope,
           ).pipe(Layer.provide(configRpcServices)),
@@ -1458,7 +1443,6 @@ it.effect(
       Effect.provide(
         Layer.mergeAll(
           Layer.fresh(layerConfigSources),
-          Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({}),
           Layer.mock(ServerBrowser.ServerBrowser)({}),
         ),
       ),
@@ -1563,8 +1547,6 @@ it.effect("on-demand clients get provider config without workspace snapshots", (
             scopes: [],
           },
           {},
-          {},
-          yield* PreviewAutomationBroker.PreviewAutomationBroker,
           yield* ServerBrowser.ServerBrowser,
           yield* Effect.scope,
         ).pipe(Layer.provide(configRpcServices)),
@@ -1614,11 +1596,7 @@ it.effect("on-demand clients get provider config without workspace snapshots", (
     yield* server.write(0, { _tag: "Interrupt", requestId: configRequest, interruptors: [] });
   }).pipe(
     Effect.provide(
-      Layer.mergeAll(
-        Layer.fresh(layerConfigSources),
-        Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({}),
-        Layer.mock(ServerBrowser.ServerBrowser)({}),
-      ),
+      Layer.mergeAll(Layer.fresh(layerConfigSources), Layer.mock(ServerBrowser.ServerBrowser)({})),
     ),
     Effect.scoped,
   ),

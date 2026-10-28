@@ -655,7 +655,11 @@ it.effect("production runtime stops temporary launch preparation on the last vie
     const production = RuntimeLayer.layerProduction.pipe(
       Layer.provide(
         Layer.mergeAll(
-          AnalyticsService.AnalyticsService.layerTest,
+          Layer.succeed(AnalyticsService.AnalyticsService, {
+            record: () => Effect.void,
+            flush: Effect.void,
+            recordOwners: () => Effect.void,
+          }),
           WorktreeSetupTracker.layer,
           ProviderRegistryMock.layer(),
           Layer.mock(CloudManagedEndpointRuntime)({}),

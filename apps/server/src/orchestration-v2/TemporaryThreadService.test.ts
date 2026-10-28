@@ -9,6 +9,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -22,6 +23,7 @@ import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EffectWorker from "./EffectWorker.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as TemporaryThreadStorage from "./TemporaryThreadStorage.ts";
 import * as TemporaryThreadService from "./TemporaryThreadService.ts";
@@ -224,8 +226,11 @@ it.effect.each([
       const now = yield* DateTime.now;
       const providerInstanceId = ProviderInstanceId.make("codex");
       const providerSessionId = ProviderSessionId.make("temporary-session");
-      const projections = yield* ProjectionStore.ProjectionStoreV2.pipe(
-        Effect.provide(ProjectionStore.layerMemory),
+      const projections = Context.get(
+        yield* Layer.build(
+          ProjectionStore.layer.pipe(Layer.provide(SqlitePersistence.layerMemory)),
+        ),
+        ProjectionStore.ProjectionStoreV2,
       );
       yield* projections.apply({
         id: EventId.make("temporary-created"),

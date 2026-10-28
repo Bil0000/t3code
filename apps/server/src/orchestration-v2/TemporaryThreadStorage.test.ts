@@ -173,7 +173,7 @@ it.effect(
       yield* create;
       yield* createThread(child, CommandId.make("child-create"));
       yield* positions.allocate({ threadId, turnItemId: TurnItemId.make("item"), runId: null });
-      const claim = yield* outbox.claimNext({ workerId: "worker", leaseDurationMs: 60000 });
+      const claim = yield* outbox.claimNext({ workerId: "worker" });
       assert.isTrue(Option.isSome(claim));
       const before = yield* storage.generation(threadId);
       yield* storage.keep({ threadId, commandId: CommandId.make("keep") });
@@ -543,15 +543,11 @@ it.effect.each([false, true])(
           },
         },
       ]);
-      const initial = Option.getOrThrow(
-        yield* outbox.claimNext({ workerId: "worker", leaseDurationMs: 60000 }),
-      );
+      const initial = Option.getOrThrow(yield* outbox.claimNext({ workerId: "worker" }));
       assert.equal(initial.id, "effect-create-sentinel");
       yield* outbox.succeed({ effectId: initial.id, workerId: "worker" });
       if (retryBeforeKeep) {
-        const claimed = Option.getOrThrow(
-          yield* outbox.claimNext({ workerId: "worker", leaseDurationMs: 60000 }),
-        );
+        const claimed = Option.getOrThrow(yield* outbox.claimNext({ workerId: "worker" }));
         assert.equal(claimed.id, "first-rollback");
         yield* outbox.retry({
           effectId: claimed.id,
@@ -562,14 +558,10 @@ it.effect.each([false, true])(
       }
       yield* storage.keep({ threadId, commandId: CommandId.make("keep-order") });
       if (retryBeforeKeep) {
-        assert.isTrue(
-          Option.isNone(yield* outbox.claimNext({ workerId: "worker", leaseDurationMs: 60000 })),
-        );
+        assert.isTrue(Option.isNone(yield* outbox.claimNext({ workerId: "worker" })));
         yield* TestClock.adjust("1 second");
       }
-      const first = Option.getOrThrow(
-        yield* outbox.claimNext({ workerId: "worker", leaseDurationMs: 60000 }),
-      );
+      const first = Option.getOrThrow(yield* outbox.claimNext({ workerId: "worker" }));
       assert.equal(first.id, "first-rollback");
       yield* outbox.retry({
         effectId: first.id,
@@ -577,19 +569,15 @@ it.effect.each([false, true])(
         error: "retry",
         delayMs: 1000,
       });
-      assert.isTrue(
-        Option.isNone(yield* outbox.claimNext({ workerId: "worker", leaseDurationMs: 60000 })),
-      );
+      assert.isTrue(Option.isNone(yield* outbox.claimNext({ workerId: "worker" })));
       yield* TestClock.adjust("1 second");
       assert.equal(
-        Option.getOrThrow(yield* outbox.claimNext({ workerId: "worker", leaseDurationMs: 60000 }))
-          .id,
+        Option.getOrThrow(yield* outbox.claimNext({ workerId: "worker" })).id,
         "first-rollback",
       );
       yield* outbox.succeed({ effectId: first.id, workerId: "worker" });
       assert.equal(
-        Option.getOrThrow(yield* outbox.claimNext({ workerId: "worker", leaseDurationMs: 60000 }))
-          .id,
+        Option.getOrThrow(yield* outbox.claimNext({ workerId: "worker" })).id,
         "second-capture",
       );
     }).pipe(Effect.provide(layerTest)),
@@ -733,9 +721,7 @@ it.effect(
       yield* outbox.enqueue([
         { id: "after-running", threadId, commandId, request: { type: "terminal.cleanup" } },
       ]);
-      const running = Option.getOrThrow(
-        yield* outbox.claimNext({ workerId: "worker", leaseDurationMs: 60000 }),
-      );
+      const running = Option.getOrThrow(yield* outbox.claimNext({ workerId: "worker" }));
       const before = yield* stores.volatile
         .sql`SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`;
       const counts: Array<readonly [string, number]> = [];
@@ -766,14 +752,10 @@ it.effect(
           .length,
         1,
       );
-      const next = Option.getOrThrow(
-        yield* outbox.claimNext({ workerId: "worker", leaseDurationMs: 60000 }),
-      );
+      const next = Option.getOrThrow(yield* outbox.claimNext({ workerId: "worker" }));
       assert.equal(next.id, "after-running");
       yield* outbox.succeed({ effectId: next.id, workerId: "worker" });
-      assert.isTrue(
-        Option.isNone(yield* outbox.claimNext({ workerId: "worker", leaseDurationMs: 60000 })),
-      );
+      assert.isTrue(Option.isNone(yield* outbox.claimNext({ workerId: "worker" })));
       assert.isTrue(Option.isNone(yield* outbox.nextClaimableAt));
       for (const [name, count] of counts)
         assert.equal(
