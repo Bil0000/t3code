@@ -6,6 +6,7 @@ import {
   RunId,
   CommandId,
   MessageId,
+  NodeId,
   EventId,
   GuestShareId,
   ProjectId,
@@ -810,46 +811,78 @@ it.effect("rejecting registration of a saved thread preserves diagnostics", () =
   }).pipe(Effect.provide(layerTest)),
 );
 
-it.effect("run update notifications remain live after Keep wakes a reader", () =>
-  Effect.gen(function* () {
-    const storage = yield* TemporaryThreadStorage.TemporaryThreadStorage;
-    const sink = yield* EventSink.EventSinkV2;
-    yield* storage.register({ threadId });
-    yield* create;
-    const updates = yield* storage.subscribeThreadRunUpdates(threadId);
-    const pull = yield* Stream.toPull(updates);
-    yield* storage.keep({ threadId, commandId: CommandId.make("keep-run-updates") });
-    assert.deepEqual(yield* pull, [undefined]);
-    const now = yield* DateTime.now;
-    yield* sink.write({
-      events: [
-        {
-          id: EventId.make("completed-after-keep"),
-          threadId,
-          type: "run.updated",
-          occurredAt: now,
-          payload: {
-            id: RunId.make("live-run"),
-            threadId,
-            ordinal: 1,
-            providerInstanceId: ProviderInstanceId.make("codex"),
-            modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "test" },
-            providerThreadId: null,
-            userMessageId: MessageId.make("live-message"),
-            rootNodeId: null,
-            activeAttemptId: null,
-            status: "completed",
-            requestedAt: now,
-            startedAt: now,
-            completedAt: now,
-            checkpointId: null,
-            contextHandoffId: null,
-          },
-        },
-      ],
-    });
-    assert.deepEqual(yield* pull, [undefined]);
-  }).pipe(Effect.provide(layerTest)),
+it.effect.each([false, true])(
+  "work notifications remain live after Keep (delegated %s)",
+  (delegated) =>
+    Effect.gen(function* () {
+      const storage = yield* TemporaryThreadStorage.TemporaryThreadStorage;
+      const sink = yield* EventSink.EventSinkV2;
+      yield* storage.register({ threadId });
+      yield* create;
+      const updates = yield* storage.subscribeThreadRunUpdates(threadId, delegated);
+      const pull = yield* Stream.toPull(updates);
+      yield* storage.keep({ threadId, commandId: CommandId.make("keep-run-updates") });
+      assert.deepEqual(yield* pull, [undefined]);
+      const now = yield* DateTime.now;
+      yield* sink.write({
+        events: delegated
+          ? [
+              {
+                id: EventId.make("work-after-keep"),
+                threadId,
+                type: "subagent.updated" as const,
+                occurredAt: now,
+                payload: {
+                  id: NodeId.make("child-work"),
+                  threadId,
+                  runId: null,
+                  parentNodeId: NodeId.make("parent-work"),
+                  origin: "app_owned" as const,
+                  createdBy: "agent" as const,
+                  driver: ProviderDriverKind.make("codex"),
+                  providerInstanceId: ProviderInstanceId.make("codex"),
+                  providerThreadId: null,
+                  childThreadId: null,
+                  nativeTaskRef: null,
+                  prompt: "private task",
+                  title: null,
+                  model: null,
+                  status: "completed" as const,
+                  result: null,
+                  startedAt: now,
+                  completedAt: now,
+                  updatedAt: now,
+                },
+              },
+            ]
+          : [
+              {
+                id: EventId.make("completed-after-keep"),
+                threadId,
+                type: "run.updated",
+                occurredAt: now,
+                payload: {
+                  id: RunId.make("live-run"),
+                  threadId,
+                  ordinal: 1,
+                  providerInstanceId: ProviderInstanceId.make("codex"),
+                  modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "test" },
+                  providerThreadId: null,
+                  userMessageId: MessageId.make("live-message"),
+                  rootNodeId: null,
+                  activeAttemptId: null,
+                  status: "completed",
+                  requestedAt: now,
+                  startedAt: now,
+                  completedAt: now,
+                  checkpointId: null,
+                  contextHandoffId: null,
+                },
+              },
+            ],
+      });
+      assert.deepEqual(yield* pull, [undefined]);
+    }).pipe(Effect.provide(layerTest)),
 );
 
 it.effect.each([2, 3])("retries failed RAM deletion on leave generation %s", (generation) =>

@@ -377,6 +377,7 @@ export function NewTaskDraftScreen(props: {
     (hasImportedIncomingShare && !incomingShare) ||
     isIncomingShareUnavailable;
   const appliedInitialProjectKeyRef = useRef<string | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- ends the picker return once the project arrives, else replaces the route with the picker next frame
   useEffect(() => {
     if (isReturningToProjectPicker && requestedInitialProjectAvailable) {
       // oxlint-disable-next-line react/set-state-in-effect -- Ends the return-to-picker flow once the requested project arrives from the catalog.
@@ -403,6 +404,7 @@ export function NewTaskDraftScreen(props: {
   const lastInitialProjectRefRef = useRef(props.initialProjectRef);
   const initialPickerRef = useRef<"open" | "dismissed" | null>(null);
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- applies the route or catalog project to the draft once projects load, or opens the picker in the navigator
   useEffect(() => {
     if (flow.temporary && props.incomingShareId) {
       if (initialPickerRef.current !== "dismissed") {
@@ -514,6 +516,7 @@ export function NewTaskDraftScreen(props: {
   ]);
 
   const { loadBranches } = flow;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- requests the selected project's branch list from the server once per project
   useEffect(() => {
     if (!selectedProject) {
       loadedBranchesProjectKeyRef.current = null;

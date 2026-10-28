@@ -81,6 +81,7 @@ export class TemporaryThreadStorage extends Context.Service<
     readonly discard: (threadId: ThreadId) => Effect.Effect<void, TemporaryThreadStorageError>;
     readonly subscribeThreadRunUpdates: (
       threadId: ThreadId,
+      includeDelegatedWork?: boolean,
     ) => Effect.Effect<
       Stream.Stream<void, EventSink.EventSinkV2Error>,
       EventSink.EventSinkV2Error,
@@ -481,12 +482,20 @@ const make = Effect.gen(function* () {
     ),
     family: Effect.fn("TemporaryThreadStorage.family")((id) => Effect.sync(() => family(id))),
     subscribeThreadRunUpdates: Effect.fn("TemporaryThreadStorage.subscribeThreadRunUpdates")(
-      function* (threadId) {
+      function* (threadId, includeDelegatedWork = false) {
         const subscription = yield* PubSub.subscribe(changeBus);
-        const runs = yield* subscribeEvents({ threadId, eventType: "run.updated" });
-        const deletions = yield* subscribeEvents({ threadId, eventType: "thread.deleted" });
+        const events = yield* Effect.forEach(
+          [
+            "run.updated",
+            "thread.deleted",
+            ...(includeDelegatedWork
+              ? (["subagent.updated", "provider-thread.updated"] as const)
+              : []),
+          ] as const,
+          (eventType) => subscribeEvents({ threadId, eventType }),
+        );
         return Stream.merge(
-          Stream.merge(runs, deletions).pipe(Stream.as(undefined)),
+          Stream.mergeAll(events, { concurrency: "unbounded" }).pipe(Stream.as(undefined)),
           Stream.fromSubscription(subscription).pipe(
             Stream.filter(
               (change) =>

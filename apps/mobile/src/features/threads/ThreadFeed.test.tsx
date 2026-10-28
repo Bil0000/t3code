@@ -167,6 +167,7 @@ vi.mock("./HtmlRenderWebView", () => ({
   htmlRenderRowHeight: () => 100,
 }));
 vi.mock("./McpAppWebView", () => ({ ThreadMcpApp: () => <div>MCP media</div> }));
+vi.mock("./LinkRequestCard", () => ({ LinkRequestCard: () => null }));
 vi.mock("../../lib/threadActivity", () => ({
   createThreadFeedCache: () => ({}),
   deriveThreadFeedPresentation: (feed: unknown) => feed,
@@ -176,6 +177,7 @@ vi.mock("../../lib/threadActivity", () => ({
   isContextCompactionActivityGroup: () => false,
   isContextHandoffActivityGroup: () => false,
   isSecretRequestActivityGroup: () => false,
+  isLinkRequestActivityGroup: () => false,
 }));
 vi.mock("./pending-thread-feed", () => ({
   appendGuestPendingMessages: (feed: unknown) => feed,

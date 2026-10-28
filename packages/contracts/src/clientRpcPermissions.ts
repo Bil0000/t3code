@@ -7,6 +7,7 @@ import {
   AuthPreviewOperateScope,
   AuthSettingsWriteScope,
   AuthSourceControlWriteScope,
+  AuthTerminalOperateScope,
   type AuthEnvironmentScope,
 } from "./auth.ts";
 import { ORCHESTRATION_V2_WS_METHODS } from "./orchestrationV2.ts";
@@ -17,6 +18,8 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [ORCHESTRATION_V2_WS_METHODS.keepThread]: AuthOrchestrationOperateScope,
   [ORCHESTRATION_V2_WS_METHODS.updateTemporaryThreadViews]: AuthOrchestrationReadScope,
   [WS_METHODS.previewClose]: AuthPreviewOperateScope,
+  // Stopping a server signals its processes, as closing a terminal does.
+  [WS_METHODS.previewStopLocalServer]: AuthTerminalOperateScope,
   [WS_METHODS.serverRunStorageCleanup]: AuthSettingsWriteScope,
   [WS_METHODS.serverCheckOtlpEndpoint]: AuthSettingsWriteScope,
   [WS_METHODS.pullRequestsRunAction]: AuthSourceControlWriteScope,
@@ -54,6 +57,10 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [ORCHESTRATION_V2_WS_METHODS.stopWorkflow]: AuthOrchestrationOperateScope,
   // A guest link hands thread access to someone outside, like a pairing link.
   [WS_METHODS.guestShareCreate]: AuthAccessWriteScope,
+  [WS_METHODS.peerLinksLink]: AuthAccessWriteScope,
+  [WS_METHODS.peerLinksUnlink]: AuthAccessWriteScope,
+  // A link lets every agent here reach the other environment: Settings' bar.
+  [WS_METHODS.peerLinksAnswerRequest]: AuthAccessWriteScope,
 } as const;
 export type ClientGuardedRpcTag = keyof typeof CLIENT_GUARDED_RPC_SCOPES;
 

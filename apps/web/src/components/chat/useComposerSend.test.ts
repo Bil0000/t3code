@@ -148,6 +148,7 @@ it.each(["project", "No project"])(
             previewAnnotations: [],
             reviewComments: [],
             threadContexts: [],
+            environmentContexts: [],
             selectedProvider: "codex",
             selectedModel: "gpt-5",
             selectedProviderModels: [],
