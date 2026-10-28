@@ -375,13 +375,13 @@ describe("reserved temporary draft navigation", () => {
     },
   );
 
-  it("preserves queued work when Keep completes in the selected chat", async () => {
+  it.each([true, false])("preserves saved work after Keep with view sync=%s", async (sync) => {
     const test = setup("keep");
     await enqueueTemporaryDraftThread(test.message, test.getState, test.submit);
     setTemporaryThread("env", "keep", false);
-    await reconcileTemporaryThreadViews();
-    expect(test.queued()).toEqual([test.message]);
+    if (sync) await reconcileTemporaryThreadViews();
     await test.leave();
+    expect(test.queued()).toEqual([test.message]);
   });
 
   it("accepts the launch reply when Keep completes while the launch is in flight", async () => {

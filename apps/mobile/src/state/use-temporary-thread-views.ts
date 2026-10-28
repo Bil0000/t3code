@@ -114,6 +114,7 @@ function syncTemporaryThreadViews(): Promise<boolean> {
     reservation = null;
   if (
     old !== null &&
+    isTemporaryThread(old.environmentId, old.threadId) &&
     !sameView(old, next) &&
     !sameView(old, openThreadView(getNavigationState?.(), Platform.OS))
   ) {
