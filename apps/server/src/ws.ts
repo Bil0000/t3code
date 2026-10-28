@@ -671,6 +671,7 @@ function hasCompatibleOrchestrationProtocol(url: URL): boolean {
 
 function shouldUseBoundedThreadSnapshot(input: {
   readonly acceptBoundedSnapshot?: boolean;
+  readonly acceptDeferredWork?: boolean;
 }): boolean {
   return input.acceptBoundedSnapshot === true;
 }
@@ -887,6 +888,7 @@ const subscribeOrchestrationV2ThreadGeneration = Effect.fn(
   readonly afterSequence?: number;
   readonly requestCompletionMarker?: boolean;
   readonly acceptBoundedSnapshot?: boolean;
+  readonly acceptDeferredWork?: boolean;
   readonly acceptCompactTurnItems?: boolean;
   readonly acceptDedupedBodies?: boolean;
   readonly acceptCompactIds?: boolean;
@@ -974,6 +976,7 @@ const subscribeOrchestrationV2ThreadGeneration = Effect.fn(
       useBoundedSnapshot
         ? threadManagement.getThreadSnapshotWindow(input.threadId, {
             rowLimit: THREAD_HISTORY_SNAPSHOT_ROW_LIMIT,
+            deferWork: input.acceptDeferredWork === true,
             userTurnLimit: THREAD_HISTORY_PAGE_POLICY.maxUserTurns,
           })
         : threadManagement.getThreadSnapshot(input.threadId)
