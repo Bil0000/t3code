@@ -47,6 +47,7 @@ import * as ProviderRegistry from "../../provider/ProviderRegistry.ts";
 import * as SecretRequests from "../../secrets/SecretRequests.ts";
 import * as RemoteDelegation from "../../peer/RemoteDelegation.ts";
 import * as ScheduledTaskService from "../../scheduledTasks/ScheduledTaskService.ts";
+import * as ThreadFolderService from "../../threadFolders/ThreadFolderService.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as McpHttpServer from "../McpHttpServer.ts";
 import * as McpInvocationContext from "../McpInvocationContext.ts";
@@ -76,6 +77,7 @@ const decodeThreadReadResult = Schema.decodeUnknownEffect(OrchestratorMcpThreadR
 const layerThreadToolkit = McpHttpServer.layerThreadToolkit.pipe(
   Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),
   Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
+  Layer.provide(Layer.mock(ThreadFolderService.ThreadFolderService)({})),
   Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
   Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
   Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),
@@ -133,6 +135,71 @@ it.effect("checks capability through the production registration", () =>
     ),
   ),
 );
+
+it.effect("files this thread into a folder, needs a target, and refuses read-only clients", () => {
+  const mutations: Array<unknown> = [];
+  return Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const call = (args: Record<string, unknown>, invocation = scope) =>
+      server
+        .callTool({ name: "t3_thread_folder", arguments: args })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+
+    const moved = yield* call({ action: "move", folderId: "folder:reviews" });
+    expect(moved.isError).toBe(false);
+    const created = yield* call({ action: "create", name: "Reviews" });
+    expect(created.structuredContent).toMatchObject({
+      folderId: expect.stringMatching(/^folder:/),
+    });
+    expect(declaredFailure(yield* call({ action: "move" }))).toMatchObject({
+      code: "invalid_request",
+    });
+    expect(
+      declaredFailure(yield* call({ action: "update", folderId: "folder:reviews" })),
+    ).toMatchObject({
+      code: "invalid_request",
+    });
+    expect(mutations).toEqual([
+      { type: "folder.move", threadIds: [threadId], folderId: "folder:reviews" },
+      { type: "folder.create", folderId: expect.stringMatching(/^folder:/), name: "Reviews" },
+    ]);
+
+    const refused = yield* call(
+      { action: "delete", folderId: "folder:reviews" },
+      clientScope("read-only"),
+    );
+    expect(declaredFailure(refused)).toMatchObject({ code: "capability_denied" });
+    const listed = yield* call({ action: "list" }, clientScope("read-only"));
+    expect(listed.isError).toBe(false);
+    expect(mutations).toHaveLength(2);
+  }).pipe(
+    Effect.provide(
+      McpHttpServer.layerThreadToolkit.pipe(
+        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provide(NodeCrypto.layer),
+        Layer.provide(McpToolAccessTestkit.liveThreadsLayer),
+        Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),
+        Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
+        Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
+        Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
+        Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),
+        Layer.provide(
+          Layer.mock(ThreadFolderService.ThreadFolderService)({
+            list: () => Effect.succeed({ folders: [] }),
+            mutate: (mutation) =>
+              Effect.sync(() => {
+                mutations.push(mutation);
+                return { folders: [] };
+              }),
+          }),
+        ),
+      ),
+    ),
+  );
+});
 
 it.effect("an answered question reports already answered instead of not found", () => {
   const shell = McpToolAccessTestkit.liveThreadShell(threadId);

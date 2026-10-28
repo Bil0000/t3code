@@ -1,12 +1,16 @@
 import {
   type CommandId,
+  type ProjectIconOverride,
   type RuntimeRequestId,
+  ThreadFolderId,
+  type ThreadFolderMutation,
   ThreadId,
   type OrchestrationV2ThreadProjection,
   type RunId,
   OrchestratorMcpFailure,
   type OrchestrationV2Command,
 } from "@t3tools/contracts";
+import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import { modelSelectionCommandType } from "@t3tools/shared/model";
 import { formatThreadLink } from "@t3tools/shared/threadLinks";
@@ -22,6 +26,7 @@ import {
 } from "../../threadAccess.ts";
 import * as ThreadSearch from "../../../orchestration-v2/ThreadSearch.ts";
 import * as ScheduledTasks from "../../../scheduledTasks/ScheduledTaskService.ts";
+import * as ThreadFolders from "../../../threadFolders/ThreadFolderService.ts";
 import { queuedRunsInDeliveryOrder } from "../../../orchestration-v2/QueuedRunOrder.ts";
 import { ThreadToolkit } from "./tools.ts";
 
@@ -87,6 +92,78 @@ const required = <A>(value: A | undefined, name: string) =>
         }),
       )
     : Effect.succeed(value);
+const folderFailure = (error: { readonly message: string }) =>
+  new OrchestratorMcpFailure({ code: "invalid_request", message: error.message });
+
+const listFolders = Effect.fn("mcp.listThreadFolders")(function* () {
+  yield* readCaller();
+  const folders = yield* ThreadFolders.ThreadFolderService;
+  return yield* folders.list().pipe(Effect.mapError(unavailable));
+});
+
+const writeFolders = Effect.fn("mcp.writeThreadFolders")(function* (input: {
+  readonly action: "create" | "update" | "delete" | "move";
+  readonly folderId?: ThreadFolderId | null | undefined;
+  readonly name?: string | undefined;
+  readonly icon?: ProjectIconOverride | null | undefined;
+  readonly threadIds?: ReadonlyArray<ThreadId> | undefined;
+}) {
+  const { caller } = yield* readCaller();
+  const folders = yield* ThreadFolders.ThreadFolderService;
+  const folderId = () => required(input.folderId ?? undefined, "folderId");
+  let mutation: ThreadFolderMutation;
+  switch (input.action) {
+    case "create": {
+      const crypto = yield* Crypto.Crypto;
+      mutation = {
+        type: "folder.create",
+        folderId: ThreadFolderId.make(`folder:${yield* crypto.randomUUIDv4().pipe(Effect.orDie)}`),
+        name: yield* required(input.name, "name"),
+        ...(input.icon === undefined ? {} : { icon: input.icon }),
+        ...(input.threadIds === undefined || input.threadIds.length === 0
+          ? {}
+          : { threadIds: input.threadIds }),
+      };
+      break;
+    }
+    case "update":
+      if (input.name === undefined && input.icon === undefined) {
+        return yield* new OrchestratorMcpFailure({
+          code: "invalid_request",
+          message: "update needs `name` or `icon`.",
+        });
+      }
+      mutation = {
+        type: "folder.update",
+        folderId: yield* folderId(),
+        ...(input.name === undefined ? {} : { name: input.name }),
+        ...(input.icon === undefined ? {} : { icon: input.icon }),
+      };
+      break;
+    case "delete":
+      mutation = { type: "folder.delete", folderId: yield* folderId() };
+      break;
+    case "move": {
+      const threadIds =
+        input.threadIds === undefined || input.threadIds.length === 0
+          ? caller === undefined
+            ? undefined
+            : [caller.id]
+          : input.threadIds;
+      mutation = {
+        type: "folder.move",
+        threadIds: yield* required(threadIds, "threadIds"),
+        folderId: yield* required(input.folderId, "folderId"),
+      };
+      break;
+    }
+  }
+  const result = yield* folders.mutate(mutation).pipe(Effect.mapError(folderFailure));
+  return mutation.type === "folder.create"
+    ? { folderId: mutation.folderId, folders: result.folders }
+    : { folders: result.folders };
+});
+
 const writesThread = <P extends { readonly threadId?: ThreadId | undefined }, A, E, R>(
   handle: (params: P) => Effect.Effect<A, E, R>,
 ) => McpToolAccess.writesThreads((params: P) => [params.threadId], handle);
@@ -322,6 +399,22 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
             }));
         }
       }),
+    ),
+  ),
+  t3_thread_folder: McpToolAccess.either(
+    (input) => input.action === "list",
+    McpToolAccess.reads(() => listFolders()),
+    McpToolAccess.either(
+      (input) => input.action === "create" || input.action === "move",
+      McpToolAccess.writesThreads(
+        (input) => input.threadIds ?? [undefined],
+        (input) => writeFolders({ ...input, action: input.action === "move" ? "move" : "create" }),
+      ),
+      McpToolAccess.writes(
+        (input) =>
+          writeFolders({ ...input, action: input.action === "delete" ? "delete" : "update" }),
+        { refusal: "change this environment's sidebar folders" },
+      ),
     ),
   ),
   t3_thread_organize: writesThread((input) =>

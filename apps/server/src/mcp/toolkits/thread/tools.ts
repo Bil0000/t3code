@@ -19,6 +19,11 @@ import {
   RunId,
   NonNegativeInt,
   ProjectId,
+  ProjectIconOverride,
+  MAX_THREAD_FOLDER_MOVE_THREADS,
+  ThreadFolder,
+  ThreadFolderId,
+  ThreadFolderName,
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Schema from "effect/Schema";
@@ -26,6 +31,7 @@ import { Tool, Toolkit } from "effect/ai";
 
 import * as ThreadSearch from "../../../orchestration-v2/ThreadSearch.ts";
 import * as ScheduledTaskService from "../../../scheduledTasks/ScheduledTaskService.ts";
+import * as ThreadFolderService from "../../../threadFolders/ThreadFolderService.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
@@ -236,12 +242,37 @@ const ScheduledTaskRunTool = Tool.make("run_scheduled_task_now", {
   .annotate(Tool.Destructive, true)
   .annotate(Tool.OpenWorld, true);
 
+const ThreadFolderTool = Tool.make("t3_thread_folder", {
+  description:
+    "Sidebar folders grouping threads across this environment's projects. list. create: `name`, optional `icon`, `threadIds`. update: `folderId` with `name` or `icon` (null clears). delete: threads stay. move: `threadIds` (default this thread) into `folderId`, or out with null.",
+  parameters: Schema.Struct({
+    environmentId: OrchestratorMcpEnvironmentTarget,
+    action: Schema.Literals(["list", "create", "update", "delete", "move"]),
+    folderId: Schema.optional(Schema.NullOr(ThreadFolderId)),
+    name: Schema.optional(ThreadFolderName),
+    icon: Schema.optional(Schema.NullOr(ProjectIconOverride)),
+    threadIds: Schema.optional(
+      Schema.Array(ThreadId).check(Schema.isMaxLength(MAX_THREAD_FOLDER_MOVE_THREADS)),
+    ),
+  }),
+  success: Schema.Struct({
+    folderId: Schema.optional(ThreadFolderId),
+    folders: Schema.Array(ThreadFolder),
+  }),
+  failure: OrchestratorMcpFailure,
+  failureMode: "return" as const,
+  dependencies: [...commandTool.dependencies, ThreadFolderService.ThreadFolderService],
+})
+  .annotate(Tool.Title, "Organize sidebar folders")
+  .annotate(Tool.Destructive, true);
+
 export const ThreadToolkit = Toolkit.make(
   ScheduledTaskRunTool,
   ThreadSearchTool,
   ThreadConfigureTool,
   ThreadTransferTool,
   ThreadOrganizeTool,
+  ThreadFolderTool,
   PendingRequestTool,
   QueueTool,
 );

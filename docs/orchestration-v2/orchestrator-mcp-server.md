@@ -420,6 +420,16 @@ resultant title, title-regeneration marker, and linked pull request. Reusing a
 receipt. Thread list and read results expose the linked pull request, and thread
 detail also exposes an in-flight title regeneration.
 
+### `t3_thread_folder`
+
+Lists, creates, updates, deletes, and fills the sidebar's thread folders. Folders
+belong to the environment, not a project, and a thread is in at most one.
+They are presentation state in `thread_folders`, not orchestration events, so
+moving a thread never changes its `updatedAt` or sidebar order. `list` is a read;
+`create` and `move` check each named thread like other thread writes; `update`
+and `delete` are refused to fenced linked callers. The web and mobile sidebars use
+the same `ThreadFolderService` through `threadFolders.mutate`.
+
 ### `t3_thread_send`
 
 Sends a message to any ordinary or delegated thread in the environment:
