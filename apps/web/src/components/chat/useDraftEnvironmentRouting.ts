@@ -15,7 +15,7 @@ import { toastManager } from "../ui/toast";
 import {
   deriveLogicalProjectKeyFromSettings,
   selectProjectGroupingSettings,
-} from "../../logicalProject";
+} from "@t3tools/client-runtime/state/project-grouping";
 import { useComposerDraftStore, DraftId } from "../../composerDraftStore";
 import {
   createKeyedRequestGate,
@@ -120,6 +120,7 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
   // settled (even failed) key stays active so it is not retried until the target
   // changes or the user re-arms Auto; any other target cancels it.
   const [autoScratchRequest] = useState(createKeyedRequestGate);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- cancels an automatic scratch open still in flight on unmount
   useLayoutEffect(() => () => autoScratchRequest.cancel(), [autoScratchRequest]);
   const autoScratchTarget = logicalProjectEnvironments.find(
     (environment) => environment.environmentId === loadBalancing.environmentId,
@@ -136,10 +137,12 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
       ? `${draftId}:${autoScratchPlan.environmentId}`
       : null;
   // Invalidate before passive effects, without mutating request state during render.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- cancels a scratch open whose target the routing moved away from
   useLayoutEffect(
     () => autoScratchRequest.sync(autoScratchRequestKey),
     [autoScratchRequest, autoScratchRequestKey],
   );
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- writes the resolved load-balanced environment into the draft store once the async pick settles
   useEffect(() => {
     const plan = sendInFlightRef.current ? null : autoScratchPlan;
     if (!plan || !draftId) return;
@@ -249,10 +252,12 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
     readonly scope: string;
   } | null>(null);
   const environmentChangeScopeRef = useRef("");
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- mirrors the current change scope into a ref that async environment switches compare against
   useLayoutEffect(() => {
     environmentChangeScopeRef.current = environmentChangeScope;
   });
   // Leaving the scope, or unmounting, abandons a change still in flight.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- abandons an in-flight environment change when the draft or project scope changes or unmounts
   useLayoutEffect(
     () => () => {
       if (environmentChangeRef.current?.scope === environmentChangeScope) {
