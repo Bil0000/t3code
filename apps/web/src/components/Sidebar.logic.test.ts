@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 import {
+  foldSidebarThreadFolders,
   archiveSelectedThreadEntries,
   deleteSelectedThreadEntries,
   getFallbackThreadIdAfterDelete,
@@ -38,7 +39,14 @@ import {
 } from "./Sidebar.logic";
 import { resolveProjectExpanded } from "../uiStateStore";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
-import { EnvironmentId, ProjectId, ProviderInstanceId, RunId, ThreadId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  ProjectId,
+  ProviderInstanceId,
+  RunId,
+  ThreadId,
+  ThreadFolderId,
+} from "@t3tools/contracts";
 
 import {
   DEFAULT_INTERACTION_MODE,
@@ -1445,5 +1453,45 @@ describe("resolveSidebarFolderDot", () => {
     expect(resolveSidebarFolderDot([idle, working])).toBe("working");
     expect(resolveSidebarFolderDot([working, unread])).toBe("unread");
     expect(resolveSidebarFolderDot([unread, limited])).toBe("attention");
+  });
+});
+
+describe("foldSidebarThreadFolders", () => {
+  it("keeps shelves separate, sorts members together, and keeps empty folders", () => {
+    const active = makeThread({ id: ThreadId.make("active"), activeOrderKey: "b" });
+    const working = makeThread({ id: ThreadId.make("working"), activeOrderKey: "a" });
+    const unfiled = makeThread({ id: ThreadId.make("unfiled") });
+    const pinned = makeThread({ id: ThreadId.make("pinned"), pinnedAt: "2026-03-09T10:00:00Z" });
+    const folder = {
+      environmentId: localEnvironmentId,
+      id: ThreadFolderId.make("folder"),
+      name: "Work",
+      icon: null,
+      threadIds: [active.id, working.id, pinned.id],
+      createdAt: "2026-03-09T10:00:00Z",
+      updatedAt: "2026-03-09T10:00:00Z",
+    };
+    const input = {
+      activeThreads: [active, unfiled],
+      workingThreads: [working],
+      folders: [folder, { ...folder, id: ThreadFolderId.make("empty"), threadIds: [] }],
+      collapsedKeys: new Set<string>(),
+      routeThreadKey: null,
+    };
+    const result = foldSidebarThreadFolders(input);
+    expect(result.blocks[0]?.threads).toEqual([working, active]);
+    expect(result.blocks[0]?.visibleThreads).toEqual([working, active]);
+    expect(result.blocks[0]?.hiddenThreads).toEqual([]);
+    expect(result.blocks[1]?.threads).toEqual([]);
+    expect(result.activeThreads).toEqual([unfiled]);
+    expect(result.workingThreads).toEqual([]);
+    expect(result.blocks.flatMap((block) => block.threads)).not.toContain(pinned);
+    const collapsed = foldSidebarThreadFolders({
+      ...input,
+      collapsedKeys: new Set([`${localEnvironmentId}:${folder.id}`]),
+      routeThreadKey: `${localEnvironmentId}:${active.id}`,
+    });
+    expect(collapsed.blocks[0]?.visibleThreads).toEqual([active]);
+    expect(collapsed.blocks[0]?.hiddenThreads).toEqual([working]);
   });
 });

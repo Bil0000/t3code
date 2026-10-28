@@ -149,6 +149,23 @@ right-click it, to start a thread in that project. Pinned threads stay above the
 Snoozed and Settled stay below them. In this mode you cannot drag threads, and the Working section
 is off. Each device keeps its own choice.
 
+## Thread folders
+
+Folders group threads from one environment. They show above **Pinned** and work the same on
+every device connected to that environment.
+
+To make a folder, open a thread's menu and choose **Move to folder → New folder…**, or press
+`mod+g` on the open thread. To start one from several threads, select them and right-click →
+**New folder from N threads**. Type the name right away, or double-click a folder later to rename
+it. Press `mod+g` again, or choose **Remove from folder**, to take a thread out.
+
+A folder can have its own icon and color. Click it to collapse it. Its menu can settle every
+thread in it, or delete the folder; deleting a folder never deletes its threads.
+
+Agents connected through T3 Code can create folders and file threads for you. For example, ask
+for "put the review threads in a Reviews folder". Pinned, snoozed, and settled threads stay in
+their own sections.
+
 ## Settle finished work
 
 Choose **Settle thread** from its menu to move finished work out of the active list

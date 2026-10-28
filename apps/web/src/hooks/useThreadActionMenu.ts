@@ -43,6 +43,11 @@ import {
 import { buildPhysicalToLogicalProjectKeyMap } from "../sidebarProjectGrouping";
 import { threadRuntimeCanArchive } from "@t3tools/client-runtime/state/models";
 import { useCopyToClipboard } from "./useCopyToClipboard";
+import {
+  buildMoveToFolderMenuItem,
+  isThreadFolderMenuId,
+  runThreadFolderMenuAction,
+} from "./threadFolderMenu";
 import { useNewThreadHandler } from "./useHandleNewThread";
 import { useClientSettings } from "./useSettings";
 import { useThreadActions } from "./useThreadActions";
@@ -130,8 +135,12 @@ export function useThreadActionMenu(input: {
       };
       const isRegeneratingTitle = thread.titleRegeneration != null;
       const snoozePresets = resolveSnoozePresets(now, timestampFormat, threadRef.environmentId);
+      const canOperate = readEnvironmentScope(
+        threadRef.environmentId,
+        AuthOrchestrationOperateScope,
+      );
       const items = buildThreadActionMenuItems({
-        canOperate: readEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope),
+        canOperate,
         branch: thread.branch ?? null,
         projectFilter: null,
         isPinned: thread.pinnedAt != null,
@@ -144,6 +153,11 @@ export function useThreadActionMenu(input: {
         supports,
         snoozePresets,
         canShareWithGuest,
+        folderMenu: buildMoveToFolderMenuItem({
+          environmentId: threadRef.environmentId,
+          threadIds: [threadRef.threadId],
+          canOperate,
+        }),
       });
       const clicked = await settlePromise(() => api.contextMenu.show(items, position));
       if (clicked._tag === "Failure" || clicked.value === null) return;
@@ -156,6 +170,13 @@ export function useThreadActionMenu(input: {
           "Thread action unavailable",
           new Error("This connection cannot change threads."),
         );
+        return;
+      }
+      if (isThreadFolderMenuId(action)) {
+        runThreadFolderMenuAction(action, {
+          environmentId: threadRef.environmentId,
+          threadIds: [threadRef.threadId],
+        });
         return;
       }
       if (action.startsWith("snooze:")) {

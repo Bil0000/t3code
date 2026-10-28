@@ -1,6 +1,8 @@
 import type { ContextMenuItem } from "@t3tools/contracts";
 import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled";
 
+import type { ThreadFolderMenuId } from "../hooks/threadFolderMenu";
+
 export type ThreadActionMenuId =
   | "new-thread-on-branch"
   | "filter-by-project"
@@ -25,7 +27,8 @@ export type ThreadActionMenuId =
   | "copy-thread"
   | "copy-thread-id"
   | "archive"
-  | "delete";
+  | "delete"
+  | ThreadFolderMenuId;
 
 export type DraftActionMenuId =
   | "copy"
@@ -90,6 +93,7 @@ export interface ThreadActionMenuState {
   readonly snoozePresets: ReadonlyArray<SnoozePreset>;
   /** Guest links need their own grant, so the caller checks it instead of `canOperate`. */
   readonly canShareWithGuest?: boolean;
+  readonly folderMenu?: ContextMenuItem<ThreadFolderMenuId> | null;
 }
 
 /** Local navigation, read markers, and copying remain available to read-only clients. */
@@ -157,6 +161,7 @@ export function buildThreadActionMenuItems(
               },
         ]
       : []),
+    ...(state.folderMenu ? [state.folderMenu] : []),
     { id: "rename", label: "Rename thread", icon: "pencil", separatorBefore: true },
     ...(state.supports.titleRegeneration
       ? [

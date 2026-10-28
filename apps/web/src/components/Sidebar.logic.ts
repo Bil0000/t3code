@@ -1,3 +1,9 @@
+import {
+  layoutThreadFolders,
+  type EnvironmentThreadFolder,
+} from "@t3tools/client-runtime/state/thread-folders";
+import { sortActiveThreadsByOrderKey } from "@t3tools/client-runtime/state/thread-sort";
+import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import { resolveThreadWorkingStartedAt } from "@t3tools/client-runtime/state/models";
 import { isShownUnderParent } from "@t3tools/client-runtime/state/threads";
 import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
@@ -35,6 +41,35 @@ import { observeIntersection } from "../lib/observeIntersection";
 import { deadlineAfter, deadlineStore } from "@t3tools/client-runtime/clock";
 import { useDeadlinePassed } from "../hooks/useDeadline";
 import { legacyProjectCwdPreferenceKey } from "../uiStateStore";
+
+export function foldSidebarThreadFolders<T extends EnvironmentThreadShell>(input: {
+  readonly activeThreads: readonly T[];
+  readonly workingThreads: readonly T[];
+  readonly folders: readonly EnvironmentThreadFolder[];
+  readonly collapsedKeys: ReadonlySet<string>;
+  readonly routeThreadKey: string | null;
+}) {
+  const layout = layoutThreadFolders({
+    threads: sortActiveThreadsByOrderKey([...input.activeThreads, ...input.workingThreads]),
+    folders: input.folders,
+  });
+  const unfiled = new Set(layout.unfiled);
+  return {
+    activeThreads: input.activeThreads.filter((thread) => unfiled.has(thread)),
+    workingThreads: input.workingThreads.filter((thread) => unfiled.has(thread)),
+    blocks: layout.blocks.map((block) => {
+      const collapsed = input.collapsedKeys.has(block.key);
+      const isRoute = (thread: T) =>
+        `${thread.environmentId}:${thread.id}` === input.routeThreadKey;
+      return {
+        ...block,
+        collapsed,
+        visibleThreads: collapsed ? block.threads.filter(isRoute) : block.threads,
+        hiddenThreads: collapsed ? block.threads.filter((thread) => !isRoute(thread)) : [],
+      };
+    }),
+  };
+}
 
 export function shouldNavigateAfterThreadPark(input: {
   readonly threadKey: string;
@@ -180,6 +215,7 @@ export function resolveSidebarThreadSection(input: {
 const SIDEBAR_MARKER_PREFIX = "sidebar-marker-";
 
 export type SidebarListMarker =
+  | "thread-folder"
   | "pinned-header"
   | "active-placeholder"
   | "settled-placeholder"
@@ -194,10 +230,10 @@ export function sidebarMarkerId(marker: SidebarListMarker): string {
 
 export type SidebarListItem =
   | { readonly kind: "thread"; readonly key: string; readonly section: SidebarSection }
-  | { readonly kind: "marker"; readonly marker: SidebarListMarker };
+  | { readonly kind: "marker"; readonly marker: SidebarListMarker; readonly folderKey?: string };
 
 export function sidebarListItemId(item: SidebarListItem): string {
-  return item.kind === "thread" ? item.key : sidebarMarkerId(item.marker);
+  return item.kind === "thread" ? item.key : (item.folderKey ?? sidebarMarkerId(item.marker));
 }
 
 function sectionAtSidebarSlot(items: readonly SidebarListItem[], index: number): SidebarSection {
