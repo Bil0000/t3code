@@ -90,6 +90,9 @@ export const layer: Layer.Layer<
             _tag: "present",
             snapshot: {
               snapshotSequence: bounded.snapshotSequence,
+              ...(bounded.storageGeneration === undefined
+                ? {}
+                : { storageGeneration: bounded.storageGeneration }),
               projection: bounded.projection,
               latestLocalTurnOrdinal: bounded.latestLocalTurnOrdinal,
             },
