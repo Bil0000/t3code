@@ -407,7 +407,6 @@ it.each([true, false])(
         dispatchingMessageId={null}
         onEditPendingMessage={() => {}}
         contentPresentation={{ kind: "ready" }}
-        agentLabel="Codex"
         latestRun={null}
         activeWorkStartedAt={null}
         listRef={
