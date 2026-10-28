@@ -524,7 +524,7 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
                       accessibilityLabel: "Allow edits from maintainers",
                       icon: "pencil" as const,
                       selected: maintainerEdits.value,
-                      disabled: maintainerEdits.disabled,
+                      disabled: maintainerEdits.saving,
                       subtitle: maintainerEdits.subtitle,
                       overflowOnly: true,
                       onPress: maintainerEdits.toggle,
@@ -615,7 +615,7 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
               <Toolbar.MenuAction
                 icon="pencil"
                 isOn={maintainerEdits.value}
-                disabled={maintainerEdits.disabled}
+                disabled={maintainerEdits.saving}
                 subtitle={maintainerEdits.subtitle}
                 onPress={maintainerEdits.toggle}
               >

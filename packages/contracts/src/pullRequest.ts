@@ -242,9 +242,9 @@ export const PullRequestReviewCapabilities = Schema.Struct({
 export type PullRequestReviewCapabilities = typeof PullRequestReviewCapabilities.Type;
 
 export const PullRequestEditCapabilities = Schema.Struct({
-  maintainerEdits: Schema.optional(Schema.Boolean),
   changeRequest: Schema.Boolean,
   comment: Schema.Boolean,
+  maintainerEdits: Schema.optional(Schema.Boolean),
 });
 export type PullRequestEditCapabilities = typeof PullRequestEditCapabilities.Type;
 
@@ -746,10 +746,10 @@ export const PullRequestCommentInput = Schema.Struct({
 export type PullRequestCommentInput = typeof PullRequestCommentInput.Type;
 
 export const PullRequestUpdateInput = Schema.Struct({
-  maintainerCanModify: Schema.optional(Schema.Boolean),
   ...PullRequestRef.fields,
   title: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(1024))),
   body: Schema.optional(Schema.String.check(Schema.isMaxLength(65_536))),
+  maintainerCanModify: Schema.optional(Schema.Boolean),
 });
 export type PullRequestUpdateInput = typeof PullRequestUpdateInput.Type;
 
