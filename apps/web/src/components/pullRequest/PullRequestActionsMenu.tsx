@@ -155,16 +155,24 @@ export function PullRequestActionsMenu({
   const updatePullRequest = useAtomCommand(pullRequestEnvironment.update, {
     reportFailure: false,
   });
-  // The choice holds only while the host still reports the value it was made against.
   const [maintainerEditsChoice, setMaintainerEditsChoice] = useState<{
     readonly pullRequestKey: string;
     readonly observed: boolean | undefined;
     readonly value: boolean;
   } | null>(null);
   const [maintainerEditsSaving, setMaintainerEditsSaving] = useState(false);
+  // A choice ends at the first host value that differs from the one it was made against, so a
+  // later change made elsewhere is never masked by it.
+  if (
+    maintainerEditsChoice !== null &&
+    !maintainerEditsSaving &&
+    (maintainerEditsChoice.pullRequestKey !== pullRequestKey ||
+      maintainerEditsChoice.observed !== detail.maintainerCanModify)
+  ) {
+    setMaintainerEditsChoice(null);
+  }
   const maintainerCanModify =
-    maintainerEditsChoice?.pullRequestKey === pullRequestKey &&
-    maintainerEditsChoice.observed === detail.maintainerCanModify
+    maintainerEditsChoice?.pullRequestKey === pullRequestKey
       ? maintainerEditsChoice.value
       : detail.maintainerCanModify;
   const canSaveMaintainerEdits =

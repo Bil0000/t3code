@@ -19,17 +19,18 @@ export function usePullRequestMaintainerEdits(
   const refreshDetail = useAtomRefresh(composerPullRequests.detail(target));
   const pending = useRef(false);
   const [saving, setSaving] = useState(false);
-  // The choice holds only while the host still reports the value it was made against.
   const [choice, setChoice] = useState<{
     readonly url: string;
     readonly observed: boolean | undefined;
     readonly value: boolean;
   } | null>(null);
   const observed = pr?.maintainerCanModify;
-  const value =
-    choice !== null && choice.url === pr?.url && choice.observed === observed
-      ? choice.value
-      : observed === true;
+  // A choice ends at the first host value that differs from the one it was made against, so a
+  // later change made elsewhere is never masked by it.
+  if (choice !== null && !saving && (choice.url !== pr?.url || choice.observed !== observed)) {
+    setChoice(null);
+  }
+  const value = choice !== null && choice.url === pr?.url ? choice.value : observed === true;
   const save = async (next: boolean) => {
     if (pending.current || pr === null || !permissions.canEditMaintainerEdits) return;
     pending.current = true;

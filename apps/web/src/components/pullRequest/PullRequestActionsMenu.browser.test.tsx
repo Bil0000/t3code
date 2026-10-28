@@ -138,6 +138,21 @@ it("saves maintainer edits, and restores the previous value with an error when s
   );
 });
 
+it("keeps a saved choice through a stale refresh, then follows the host", async () => {
+  const control = setup();
+  await using screen = await render(control());
+  await screen.getByRole("button", { name: "More pull request actions" }).click();
+  const checkbox = page.getByRole("menuitemcheckbox", { name: "Allow edits from maintainers" });
+  await checkbox.click();
+  await expect.element(page.getByRole("status")).not.toBeInTheDocument();
+  await screen.rerender(control({ ...openDetail }));
+  await expect.element(checkbox).not.toBeChecked();
+  await screen.rerender(control({ ...openDetail, maintainerCanModify: false }));
+  await expect.element(checkbox).not.toBeChecked();
+  await screen.rerender(control({ ...openDetail, maintainerCanModify: true }));
+  await expect.element(checkbox).toBeChecked();
+});
+
 it.each<[string, Detail]>([
   ["closed", { ...openDetail, state: "closed" }],
   [
