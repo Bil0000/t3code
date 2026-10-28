@@ -44,6 +44,7 @@ const openDetail: Detail = {
   isDraft: false,
   headBranch: "feature",
   maintainerCanModify: true,
+  observedAt: 1,
   capabilities: {
     diff: true,
     comment: true,
@@ -156,13 +157,33 @@ it("keeps a saved choice through a stale refresh, then follows the host", async 
   await using screen = await render(control());
   await screen.getByRole("button", { name: "More pull request actions" }).click();
   const checkbox = page.getByRole("menuitemcheckbox", { name: "Allow edits from maintainers" });
+  let settle!: (value: { _tag: "Success" }) => void;
+  mocks.update.mockReturnValueOnce(
+    new Promise((resolve) => {
+      settle = resolve;
+    }),
+  );
+  await checkbox.click();
+  await screen.rerender(control({ ...openDetail, observedAt: 2 }));
+  settle({ _tag: "Success" });
+  await expect.element(page.getByRole("status")).not.toBeInTheDocument();
+  await screen.rerender(control({ ...openDetail, observedAt: 2 }));
+  await expect.element(checkbox).not.toBeChecked();
+  await screen.rerender(control({ ...openDetail, maintainerCanModify: false, observedAt: 3 }));
+  await expect.element(checkbox).not.toBeChecked();
+  await screen.rerender(control({ ...openDetail, maintainerCanModify: true, observedAt: 4 }));
+  await expect.element(checkbox).toBeChecked();
+});
+
+it("follows the host's first reading after a save, even when it matches the old value", async () => {
+  const control = setup();
+  await using screen = await render(control());
+  await screen.getByRole("button", { name: "More pull request actions" }).click();
+  const checkbox = page.getByRole("menuitemcheckbox", { name: "Allow edits from maintainers" });
   await checkbox.click();
   await expect.element(page.getByRole("status")).not.toBeInTheDocument();
-  await screen.rerender(control({ ...openDetail }));
   await expect.element(checkbox).not.toBeChecked();
-  await screen.rerender(control({ ...openDetail, maintainerCanModify: false }));
-  await expect.element(checkbox).not.toBeChecked();
-  await screen.rerender(control({ ...openDetail, maintainerCanModify: true }));
+  await screen.rerender(control({ ...openDetail, observedAt: 2 }));
   await expect.element(checkbox).toBeChecked();
 });
 

@@ -41,19 +41,23 @@ export function canEditPullRequestMaintainerEdits(
 
 export interface MaintainerEditsChoice {
   readonly key: string;
-  readonly observed: boolean | undefined;
+  readonly observedAt: number | undefined;
   readonly value: boolean;
 }
 
-/** A choice ends at the first host value that differs from the one it was made against. */
+/**
+ * A saved choice ends at the first host reading delivered after the save. Readers refresh once it
+ * succeeds, which drops reads still in flight, so that reading started after the write.
+ */
 export function maintainerEditsChoiceInForce(
   choice: MaintainerEditsChoice | null,
   key: string,
-  observed: boolean | undefined,
+  observedAt: number | undefined,
   saving: boolean,
 ): MaintainerEditsChoice | null {
   if (choice === null || choice.key !== key) return null;
-  return saving || choice.observed === observed ? choice : null;
+  if (saving) return choice.observedAt === observedAt ? choice : { ...choice, observedAt };
+  return observedAt !== undefined && choice.observedAt === observedAt ? choice : null;
 }
 
 /** Hosts do not support rewriting review summaries through comment mutations. */

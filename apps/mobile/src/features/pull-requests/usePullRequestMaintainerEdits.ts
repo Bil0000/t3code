@@ -23,18 +23,17 @@ export function usePullRequestMaintainerEdits(
   const pending = useRef(false);
   const [saving, setSaving] = useState(false);
   const [choice, setChoice] = useState<MaintainerEditsChoice | null>(null);
-  const observed = pr?.maintainerCanModify;
-  const kept = maintainerEditsChoiceInForce(choice, pr?.url ?? "", observed, saving);
+  const kept = maintainerEditsChoiceInForce(choice, pr?.url ?? "", pr?.observedAt, saving);
   if (kept !== choice) {
     setChoice(kept);
   }
-  const value = kept?.value ?? observed === true;
+  const value = kept?.value ?? pr?.maintainerCanModify === true;
   const save = async (next: boolean) => {
     if (pending.current || pr === null || !canEdit) return;
     pending.current = true;
     const previousChoice = choice;
     setSaving(true);
-    setChoice({ key: pr.url, observed, value: next });
+    setChoice({ key: pr.url, observedAt: pr.observedAt, value: next });
     const response = await update({
       ...target,
       input: { ...target.input, maintainerCanModify: next },

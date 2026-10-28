@@ -115,6 +115,7 @@ export function PullRequestActionsMenu({
     | "capabilities"
     | "viewerPermissions"
     | "maintainerCanModify"
+    | "observedAt"
   >;
   terminology: ChangeRequestTerminology;
   linkThreadRef: ScopedThreadRef | null;
@@ -168,7 +169,7 @@ export function PullRequestActionsMenu({
   const maintainerEditsChoiceKept = maintainerEditsChoiceInForce(
     maintainerEditsChoice,
     pullRequestKey,
-    detail.maintainerCanModify,
+    detail.observedAt,
     maintainerEditsSaving,
   );
   if (maintainerEditsChoiceKept !== maintainerEditsChoice) {
@@ -180,7 +181,7 @@ export function PullRequestActionsMenu({
   const saveMaintainerEdits = async (value: boolean) => {
     if (!canSaveMaintainerEdits) return;
     const previousChoice = maintainerEditsChoice;
-    setMaintainerEditsChoice({ key: pullRequestKey, observed: detail.maintainerCanModify, value });
+    setMaintainerEditsChoice({ key: pullRequestKey, observedAt: detail.observedAt, value });
     setMaintainerEditsSaving(true);
     const result = await updatePullRequest({
       environmentId,
