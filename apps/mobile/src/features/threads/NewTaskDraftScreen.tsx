@@ -918,7 +918,7 @@ export function NewTaskDraftScreen(props: {
       </Text>
       <Text className="text-xs text-foreground-muted">
         {flow.temporary
-          ? "Kept in memory until you leave. Keep the thread to save it."
+          ? "T3 does not save this chat. Deleted when you leave. Providers may keep their own records."
           : "Turn on before typing. Existing text stays in its saved draft."}
       </Text>
     </Pressable>

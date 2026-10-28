@@ -82,7 +82,6 @@ export interface ProviderProbeResult {
 }
 
 export interface ServerProviderPresentation {
-  readonly temporaryThreads?: boolean;
   readonly displayName: string;
   readonly badgeLabel?: string;
   readonly showInteractionModeToggle?: boolean;
@@ -242,7 +241,7 @@ export function buildServerProvider(input: {
     : undefined;
   return {
     displayName: input.presentation.displayName,
-    ...(input.presentation.temporaryThreads === true ? { temporaryThreads: true } : {}),
+    temporaryThreads: true,
     ...(typeof input.presentation.supportsConversationRollback === "boolean"
       ? { supportsConversationRollback: input.presentation.supportsConversationRollback }
       : {}),

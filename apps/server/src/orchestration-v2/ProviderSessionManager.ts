@@ -2108,15 +2108,13 @@ export const layerWithOptions = (
               );
               if (
                 input.runtimePolicy.temporary === true &&
-                (adapter.driver !== "codex" ||
-                  input.initialNativeThreadId !== undefined ||
-                  input.resumeFromSession !== undefined)
+                (input.initialNativeThreadId !== undefined || input.resumeFromSession !== undefined)
               ) {
                 return yield* new ProviderSessionOpenError({
                   instanceId: input.modelSelection.instanceId,
                   providerSessionId: input.providerSessionId,
                   cause:
-                    "Temporary threads require a fresh live Codex session. Keep the thread before changing providers or retrying a lost session.",
+                    "Temporary threads require a fresh live session. Keep the thread before retrying a lost session.",
                 });
               }
               if (input.runtimePolicy.temporary === true) {

@@ -18,6 +18,6 @@ export function temporaryThreadSendBlockReason(
     config.providers.find((provider) => provider.instanceId === model.instanceId)
       ?.temporaryThreads !== true
   )
-    return "This provider cannot run without a saved transcript. Keep the thread or choose a supported provider.";
+    return "This provider does not support temporary chats on this server. Keep the thread or update the server.";
   return null;
 }

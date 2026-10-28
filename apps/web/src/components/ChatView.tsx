@@ -2564,7 +2564,8 @@ export default function ChatView(props: ChatViewProps) {
       group: "environment",
       icon: <MessageCircleDashedIcon />,
       title: "Temporary chat",
-      description: "Deleted when you leave. Save to keep it. File changes stay.",
+      description:
+        "T3 does not save this chat. Deleted when you leave. Save to keep it. Providers may keep their own records. File changes stay.",
     });
   }
 

@@ -4,6 +4,7 @@ import {
   CheckpointScopeId,
   ProviderThreadId,
   RunId,
+  RunAttemptId,
   CommandId,
   MessageId,
   NodeId,
@@ -158,9 +159,9 @@ it.effect("routes the full temporary write away from durable SQL", () =>
   }).pipe(Effect.provide(layerTest)),
 );
 
-it.effect(
-  "keeps the same family IDs, receipts, positions and running effect lease without replay",
-  () =>
+it.effect.each([false, true])(
+  "keeps family IDs, receipts, positions and running leases, native child: %s",
+  (nativeChild) =>
     Effect.gen(function* () {
       const storage = yield* TemporaryThreadStorage.TemporaryThreadStorage;
       const stores = yield* TemporaryThreadStorage.TemporaryThreadStores;
@@ -169,9 +170,60 @@ it.effect(
       const positions = yield* TurnItemPositionStore.TurnItemPositionStoreV2;
       const child = ThreadId.make("child-sentinel");
       yield* storage.register({ threadId });
-      yield* storage.register({ threadId: child, parentThreadId: threadId });
       yield* create;
-      yield* createThread(child, CommandId.make("child-create"));
+      if (nativeChild) {
+        const sink = yield* EventSink.EventSinkV2;
+        const projection = yield* ProjectionStore.ProjectionStoreV2;
+        const now = yield* DateTime.now;
+        const childCommand = CommandId.make("child-create");
+        const write = {
+          events: [
+            {
+              id: EventId.make("native-child"),
+              type: "thread.created",
+              threadId: child,
+              occurredAt: now,
+              payload: {
+                ...(yield* projection.getThread(threadId)),
+                id: child,
+                lineage: {
+                  parentThreadId: threadId,
+                  relationshipToParent: "subagent",
+                  rootThreadId: threadId,
+                },
+              },
+            },
+          ],
+          effects: [
+            {
+              id: "effect-child-create",
+              commandId: childCommand,
+              threadId: child,
+              request: { type: "terminal.cleanup" },
+            },
+          ],
+        } satisfies Parameters<EventSink.EventSinkV2["Service"]["writeWithEffects"]>[0];
+        const skipped = yield* sink.writeIfRunCurrent({
+          ...write,
+          threadId,
+          runId: RunId.make("missing-run"),
+          activeAttemptId: RunAttemptId.make("missing-attempt"),
+          expectedStatus: "running",
+        });
+        assert.isFalse(skipped.committed);
+        assert.isFalse(yield* storage.isTemporary(child));
+        yield* stores.volatile
+          .sql`CREATE TRIGGER reject_child BEFORE INSERT ON orchestration_v2_projection_threads WHEN NEW.thread_id = 'child-sentinel' BEGIN SELECT RAISE(ABORT, 'child failure'); END`;
+        assert.equal((yield* Effect.exit(sink.writeWithEffects(write)))._tag, "Failure");
+        assert.isFalse(yield* storage.isTemporary(child));
+        yield* stores.volatile.sql`DROP TRIGGER reject_child`;
+        yield* sink.writeWithEffects(write);
+        assert.isTrue(yield* storage.isTemporary(child));
+        assert.equal((yield* stores.durable.sql`SELECT * FROM orchestration_events`).length, 0);
+      } else {
+        yield* storage.register({ threadId: child, parentThreadId: threadId });
+        yield* createThread(child, CommandId.make("child-create"));
+      }
       yield* positions.allocate({ threadId, turnItemId: TurnItemId.make("item"), runId: null });
       const claim = yield* outbox.claimNext({ workerId: "worker" });
       assert.isTrue(Option.isSome(claim));

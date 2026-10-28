@@ -346,6 +346,7 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
     readonly beforeOpen?: (input: {
       readonly providerSessionId: ProviderSessionId;
       readonly initialProviderItemIdentityVersion?: 2;
+      readonly runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
     }) => Effect.Effect<void, never, Scope.Scope>;
     readonly hasPendingBackgroundWork?: Effect.Effect<boolean>;
     readonly hasPendingBackgroundWorkForThread?: Effect.Effect<boolean>;
@@ -416,7 +417,7 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
 
         return {
           instanceId: ProviderInstanceId.make("codex"),
-          driver: CODEX_DRIVER,
+          driver: options.driver ?? CODEX_DRIVER,
           providerSessionId: input.providerSessionId,
           providerSession: session,
           events: options.failEventStream
@@ -486,6 +487,7 @@ function layerTest(input: {
   readonly beforeOpen?: (input: {
     readonly providerSessionId: ProviderSessionId;
     readonly initialProviderItemIdentityVersion?: 2;
+    readonly runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
   }) => Effect.Effect<void, never, Scope.Scope>;
   readonly failReleaseEventWrites?: boolean;
   readonly flakyReleaseWrites?: FlakyReleaseWrites;
@@ -847,56 +849,74 @@ function makePendingRuntimeRequestEvents(input: {
   });
 }
 
-it.effect(
-  "ProviderSessionManagerV2 rejects unproved temporary providers before native startup",
-  () =>
-    Effect.gen(function* () {
-      for (const driver of [
-        "claude",
-        "cursor",
-        "grok",
-        "opencode",
-        "antigravity",
-        "pi",
-        "muse",
-        "acp",
-      ]) {
-        const state = yield* Ref.make(emptyState);
-        yield* Effect.gen(function* () {
-          const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
-          const idAllocator = yield* IdAllocator.IdAllocatorV2;
-          const threadId = ThreadId.make(`temporary-unsupported-${driver}`);
-          const providerSessionId = yield* idAllocator.allocate.providerSession({
+it.effect.each([
+  "codex",
+  "claudeAgent",
+  "cursor",
+  "grok",
+  "fx",
+  "opencode",
+  "antigravity",
+  "pi",
+  "muse",
+  "acpRegistry",
+])("keeps a temporary %s runtime live until its owner releases it", (driver) =>
+  Effect.gen(function* () {
+    const state = yield* Ref.make(emptyState);
+    yield* Effect.gen(function* () {
+      const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+      const idAllocator = yield* IdAllocator.IdAllocatorV2;
+      const threadId = ThreadId.make(`temporary-provider-${driver}`);
+      const providerSessionId = yield* idAllocator.allocate.providerSession({
+        threadId,
+        providerInstanceId: modelSelection.instanceId,
+      });
+      const sink = yield* EventSink.EventSinkV2;
+      yield* sink.write({
+        events: [
+          yield* makeThreadCreatedEvent({
+            idAllocator,
             threadId,
-            providerInstanceId: modelSelection.instanceId,
-          });
-          const error = yield* manager
-            .open({
-              threadId,
-              providerSessionId,
-              modelSelection,
-              runtimePolicy: { ...runtimePolicy, temporary: true },
-            })
-            .pipe(Effect.flip);
-          assert.equal(error._tag, "ProviderSessionOpenError");
-          assert.equal((yield* Ref.get(state)).openCount, 0);
-        }).pipe(
-          Effect.provide(
-            layerTest({ state, idleTimeoutMs: 1000, driver: ProviderDriverKind.make(driver) }),
-          ),
-        );
-      }
-    }),
+            now: yield* DateTime.now,
+          }),
+        ],
+      });
+      const runtime = yield* manager.open({
+        threadId,
+        providerSessionId,
+        modelSelection,
+        runtimePolicy: { ...runtimePolicy, temporary: true },
+      });
+      assert.equal(runtime.driver, driver);
+      assert.equal((yield* Ref.get(state)).openCount, 1);
+      yield* TestClock.adjust("5 hours");
+      assert.isTrue(yield* manager.isLive(providerSessionId));
+      yield* manager.releaseTemporaryOwned({ threadId });
+      assert.isFalse(yield* manager.isLive(providerSessionId));
+      assert.equal((yield* Ref.get(state)).closeCount, 1);
+    }).pipe(
+      Effect.provide(
+        layerTest({
+          state,
+          idleTimeoutMs: 1000,
+          driver: ProviderDriverKind.make(driver),
+          beforeOpen: (input) => Effect.sync(() => assert.isTrue(input.runtimePolicy.temporary)),
+        }),
+      ),
+    );
+  }),
 );
 
 it.effect.each([
-  [true, true],
-  [false, true],
-  [true, false],
-  [false, false],
+  ["codex", true, true],
+  ["codex", false, true],
+  ["codex", true, false],
+  ["codex", false, false],
+  ["claudeAgent", true, true],
+  ["acpRegistry", true, true],
 ] as const)(
-  "opens independent temporary conversations on the same Codex instance: %s then %s",
-  ([firstTemporary, secondTemporary]) =>
+  "opens independent conversations on the same %s instance: temporary %s then %s",
+  ([driver, firstTemporary, secondTemporary]) =>
     Effect.gen(function* () {
       const state = yield* Ref.make(emptyState);
       const owned = new Set<ThreadId>();
@@ -907,7 +927,7 @@ it.effect.each([
         family: (threadId) => Effect.succeed([threadId]),
       });
       const registryLayer = Layer.unwrap(
-        makeProviderAdapter(state).pipe(
+        makeProviderAdapter(state, { driver: ProviderDriverKind.make(driver) }).pipe(
           Effect.map((adapter) => ProviderAdapterRegistry.layerFromAdapters([adapter])),
         ),
       );

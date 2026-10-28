@@ -669,8 +669,44 @@ const make = Effect.gen(function* () {
   const sinkError = (cause: unknown) => new EventSink.EventSinkWriteError({ eventCount: 0, cause });
   const writeSink = <A, E>(
     ids: ReadonlyArray<ThreadId>,
+    events: ReadonlyArray<OrchestrationV2DomainEvent>,
     use: (s: RawStores) => Effect.Effect<A, E>,
-  ) => withWrite(ids, use).pipe(Effect.mapError(sinkError));
+  ) => {
+    const registered: Array<ThreadId> = [];
+    const forget = (id: ThreadId) => {
+      owners.delete(id);
+      if (Option.isSome(diagnostics)) diagnostics.value.leave(id, true);
+    };
+    return locked(
+      Effect.gen(function* () {
+        for (const event of events) {
+          if (event.type !== "thread.created") continue;
+          const parentThreadId = event.payload.lineage.parentThreadId;
+          if (
+            event.payload.temporary === true ||
+            (parentThreadId !== null && owners.has(parentThreadId))
+          ) {
+            if (
+              yield* registerOwner({
+                threadId: event.threadId,
+                ...(parentThreadId === null ? {} : { parentThreadId }),
+              })
+            )
+              registered.push(event.threadId);
+          }
+        }
+        const result = yield* assertWritable(ids).pipe(Effect.flatMap(use));
+        for (const id of registered) {
+          if ((yield* volatile.projectionStore.getThreadShell(id)) === null) forget(id);
+          else yield* emit("registered", [id], owners.get(id)!.generation);
+        }
+        return result;
+      }).pipe(
+        Effect.onError(() => Effect.sync(() => registered.forEach(forget))),
+        Effect.uninterruptible,
+      ),
+    ).pipe(Effect.mapError(sinkError));
+  };
   const assertCommandOwner = Effect.fn("TemporaryThreadStorage.assertCommandOwner")(function* (
     stores: RawStores,
     commandId: CommandId,
@@ -708,7 +744,7 @@ const make = Effect.gen(function* () {
   });
   const eventSink = EventSink.EventSinkV2.of({
     write: Effect.fnUntraced(function* (input) {
-      return yield* writeSink(eventIds(input.events), (s) =>
+      return yield* writeSink(eventIds(input.events), input.events, (s) =>
         nativeOwnedElsewhere(s, input.unlessNativeThreadOwned).pipe(
           Effect.flatMap((owned) =>
             owned
@@ -721,6 +757,7 @@ const make = Effect.gen(function* () {
     writeWithEffects: Effect.fnUntraced(function* (input) {
       return yield* writeSink(
         [...eventIds(input.events), ...input.effects.map((e) => e.threadId)],
+        input.events,
         (s) =>
           nativeOwnedElsewhere(s, input.unlessNativeThreadOwned).pipe(
             Effect.flatMap((owned) =>
@@ -741,32 +778,33 @@ const make = Effect.gen(function* () {
           ...eventIds(input.events),
           ...(input.effects ?? []).map((e) => e.threadId),
         ],
+        input.events,
         (s) => s.eventSink.writeIfRunCurrent({ ...input, events: input.events.map(markTemporary) }),
       );
     }),
-    writeIfProviderThreadOwner: Effect.fnUntraced(
-      function* (input) {
-        const s = yield* providerTarget(input.providerThreadId);
-        const destination = yield* assertWritable(eventIds(input.events));
-        if (input.events.length > 0 && s !== destination)
-          return yield* new TemporaryThreadStorageError({
-            operation: "mixed-provider-store",
-            threadId: input.events[0]!.threadId,
+    writeIfProviderThreadOwner: Effect.fnUntraced(function* (input) {
+      return yield* writeSink(eventIds(input.events), input.events, (s) =>
+        Effect.gen(function* () {
+          const owner = yield* providerTarget(input.providerThreadId);
+          if (input.events.length > 0 && owner !== s)
+            return yield* new TemporaryThreadStorageError({
+              operation: "mixed-provider-store",
+              threadId: input.events[0]!.threadId,
+            });
+          return yield* owner.eventSink.writeIfProviderThreadOwner({
+            ...input,
+            events: input.events.map(markTemporary),
           });
-        return yield* s.eventSink.writeIfProviderThreadOwner({
-          ...input,
-          events: input.events.map(markTemporary),
-        });
-      },
-      locked,
-      Effect.mapError(sinkError),
-    ),
+        }),
+      );
+    }),
     writeIfProviderThreadUnchanged: Effect.fnUntraced(function* (input) {
       return yield* writeSink(
         [
           ...(input.expected.appThreadId === null ? [] : [input.expected.appThreadId]),
           ...eventIds(input.events),
         ],
+        input.events,
         (s) =>
           s.eventSink.writeIfProviderThreadUnchanged({
             ...input,
@@ -775,54 +813,22 @@ const make = Effect.gen(function* () {
       );
     }),
     commitCommand: Effect.fnUntraced(function* (input) {
-      const registered: Array<ThreadId> = [];
-      return yield* locked(
-        Effect.gen(function* () {
-          for (const event of input.events) {
-            if (event.type !== "thread.created") continue;
-            const parentThreadId = event.payload.lineage.parentThreadId;
-            if (
-              (input.commandType === "thread.create" && event.payload.temporary === true) ||
-              (input.commandType === "delegated_task.request" &&
-                parentThreadId !== null &&
-                temporary(parentThreadId))
-            ) {
-              if (
-                yield* registerOwner({
-                  threadId: event.threadId,
-                  ...(parentThreadId === null ? {} : { parentThreadId }),
-                })
-              )
-                registered.push(event.threadId);
-            }
-          }
-          const stores = yield* assertWritable([
-            input.threadId,
-            ...eventIds(input.events),
-            ...input.effects.map((e) => e.threadId),
-          ]);
-          yield* assertCommandOwner(stores, input.commandId, input.threadId);
-          const committed = yield* stores.eventSink.commitCommand({
-            ...input,
-            events: input.events.map(markTemporary),
-          });
-          for (const id of registered) yield* emit("registered", [id], owners.get(id)!.generation);
-          return committed;
-        }).pipe(
-          Effect.onError(() =>
-            Effect.sync(() => {
-              for (const id of registered) {
-                owners.delete(id);
-                if (Option.isSome(diagnostics)) diagnostics.value.leave(id, true);
-              }
-            }),
+      return yield* writeSink(
+        [input.threadId, ...eventIds(input.events), ...input.effects.map((e) => e.threadId)],
+        input.events,
+        (stores) =>
+          assertCommandOwner(stores, input.commandId, input.threadId).pipe(
+            Effect.andThen(
+              stores.eventSink.commitCommand({
+                ...input,
+                events: input.events.map(markTemporary),
+              }),
+            ),
           ),
-          Effect.uninterruptible,
-        ),
-      ).pipe(Effect.mapError(sinkError));
+      );
     }),
     commitRejectedCommand: Effect.fnUntraced(function* (input) {
-      return yield* writeSink([input.threadId], (s) =>
+      return yield* writeSink([input.threadId], [], (s) =>
         assertCommandOwner(s, input.commandId, input.threadId).pipe(
           Effect.andThen(s.eventSink.commitRejectedCommand(input)),
         ),

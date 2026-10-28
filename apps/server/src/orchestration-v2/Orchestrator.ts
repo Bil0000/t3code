@@ -12435,16 +12435,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               cause: "Keep this thread before switching provider instances.",
             });
           }
-          const adapter = yield* mapDispatchError(command)(
-            providerAdapters.get(selection.instanceId),
-          );
-          if (adapter.driver !== "codex") {
-            return yield* new OrchestratorDispatchError({
-              commandId: command.commandId,
-              commandType: command.type,
-              cause: "This provider does not support temporary threads.",
-            });
-          }
+          yield* mapDispatchError(command)(providerAdapters.get(selection.instanceId));
         }
       }
     }

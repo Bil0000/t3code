@@ -35,7 +35,7 @@ const OPENCODE_CUSTOM_MODEL_CAPABILITIES: ModelCapabilities = createModelCapabil
   ],
 });
 
-it("advertises temporary threads only when the provider opts in", () => {
+it("advertises T3 temporary history for every provider", () => {
   const input = {
     enabled: true,
     checkedAt: "2026-10-24T00:00:00.000Z",
@@ -50,12 +50,12 @@ it("advertises temporary threads only when the provider opts in", () => {
   expect(
     buildServerProvider({
       ...input,
-      presentation: { displayName: "Codex", temporaryThreads: true },
+      presentation: { displayName: "Codex" },
     }).temporaryThreads,
   ).toBe(true);
   expect(
     buildServerProvider({ ...input, presentation: { displayName: "Other" } }).temporaryThreads,
-  ).toBeUndefined();
+  ).toBe(true);
 });
 
 describe("providerModelsFromSettings", () => {

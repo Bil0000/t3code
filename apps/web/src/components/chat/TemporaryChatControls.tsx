@@ -111,7 +111,7 @@ export function TemporaryChatControls({
                 ? "Temporary chat is on. Turn off to keep this draft."
                 : hasContext
                   ? "Remove attachments and context to turn on temporary chat."
-                  : "Temporary chat. Deleted when you leave. File changes stay."}
+                  : "Temporary chat. T3 does not save it. Providers may keep their own records. File changes stay."}
           </TooltipPopup>
         </Tooltip>
       ) : temporary ? (
