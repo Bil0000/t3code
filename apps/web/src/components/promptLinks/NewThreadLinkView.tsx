@@ -42,6 +42,7 @@ import { Button } from "../ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../ui/empty";
 import { SidebarInset } from "../ui/sidebar";
 import { stackedThreadToast, toastManager } from "../ui/toast";
+import { suggestAppAccessForRemote } from "../sourceControlAppAccessToast";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { placeLinkedPrompt, warnAboutHiddenCharacters } from "./linkedPrompt";
 
@@ -199,11 +200,7 @@ export function NewThreadLinkView({ link }: { readonly link: NewThreadLink }) {
     const environmentId = lastActiveEnvironmentId();
     const environment = environments.find((entry) => entry.environmentId === environmentId);
     const newProjectsRoot = environment?.serverConfig?.newProjectsRoot ?? null;
-    if (
-      environmentId === null ||
-      newProjectsRoot === null ||
-      environment?.serverConfig?.environment.capabilities.projectCloneTracking !== true
-    ) {
+    if (environmentId === null || newProjectsRoot === null) {
       setState({
         status: "failed",
         message:
@@ -237,6 +234,10 @@ export function NewThreadLinkView({ link }: { readonly link: NewThreadLink }) {
       setState({ status: "missing-repository", repository });
       return;
     }
+    void suggestAppAccessForRemote(
+      environmentId,
+      `https://github.com/${repository.owner}/${repository.name}.git`,
+    );
     const project = await waitForProject(scopeProjectRef(environmentId, projectId), 5_000).catch(
       () => null,
     );
