@@ -46,8 +46,10 @@ it("updates the compiled composer provider gate when a stable draft toggles Temp
     code.indexOf("const composerDraft ="),
     code.indexOf("const composerDraftTargetKeyRef ="),
   );
+  const providerPolicyStart = code.indexOf("const compatibleRuntimeModeOptions =");
+  expect(providerPolicyStart).toBeGreaterThanOrEqual(0);
   const providerPolicy = code.slice(
-    code.indexOf("\n", code.indexOf("const compatibleRuntimeMode =")),
+    code.indexOf("\n", providerPolicyStart),
     code.indexOf("const sendDisabledReason ="),
   );
   const cacheSize = Number(code.match(/_c\((\d+)\)/)?.[1]);
