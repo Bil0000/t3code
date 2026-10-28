@@ -391,6 +391,13 @@ import {
 } from "./sourceControl.ts";
 import { VcsError } from "./vcs.ts";
 import { Project, ProjectMutation, ProjectMutationError } from "./project.ts";
+import {
+  ThreadFolderError,
+  ThreadFolderListInput,
+  ThreadFolderListResult,
+  ThreadFolderMutation,
+  ThreadFolderMutationResult,
+} from "./threadFolder.ts";
 
 export const WS_METHODS = {
   projectsListEntries: "projects.listEntries",
@@ -520,6 +527,9 @@ export const WS_METHODS = {
   serverReportClientActivity: "server.reportClientActivity",
   serverGetUsageSummary: "server.getUsageSummary",
   serverRefreshUsageRates: "server.refreshUsageRates",
+
+  threadFoldersSubscribe: "threadFolders.subscribe",
+  threadFoldersMutate: "threadFolders.mutate",
 
   scheduledTasksSubscribe: "scheduledTasks.subscribe",
   scheduledTasksUpsert: "scheduledTasks.upsert",
@@ -1825,6 +1835,19 @@ const WsSubscribeServerLifecycleRpc = Rpc.make(WS_METHODS.subscribeServerLifecyc
   stream: true,
 });
 
+const WsThreadFoldersSubscribeRpc = Rpc.make(WS_METHODS.threadFoldersSubscribe, {
+  payload: ThreadFolderListInput,
+  success: ThreadFolderListResult,
+  error: Schema.Union([ThreadFolderError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+
+const WsThreadFoldersMutateRpc = Rpc.make(WS_METHODS.threadFoldersMutate, {
+  payload: ThreadFolderMutation,
+  success: ThreadFolderMutationResult,
+  error: Schema.Union([ThreadFolderError, EnvironmentAuthorizationError]),
+});
+
 const WsScheduledTasksSubscribeRpc = Rpc.make(WS_METHODS.scheduledTasksSubscribe, {
   payload: ScheduledTaskListInput,
   success: ScheduledTaskListResult,
@@ -1969,6 +1992,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetUsageSummaryRpc,
   WsServerRefreshUsageRatesRpc,
   WsServerSignalProcessRpc,
+  WsThreadFoldersSubscribeRpc,
+  WsThreadFoldersMutateRpc,
   WsScheduledTasksSubscribeRpc,
   WsScheduledTasksUpsertRpc,
   WsScheduledTasksSetEnabledRpc,
