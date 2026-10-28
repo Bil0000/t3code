@@ -309,10 +309,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
       }
     }
     if (next.snapshot !== initial.snapshot && Option.isSome(next.snapshot)) {
-      yield* Queue.offer(
-        persistence,
-        filterTemporaryShellSnapshot(next.snapshot.value, environmentId),
-      );
+      yield* Queue.offer(persistence, next.snapshot.value);
     }
   }, snapshotWriteLock.withPermit);
 
@@ -375,7 +372,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
       if (Option.isNone(live)) return;
       const latest = Option.isSome(filled) ? filled : live;
       yield* Ref.set(latestLiveSnapshot, latest);
-      yield* Queue.offer(persistence, filterTemporaryShellSnapshot(latest.value, environmentId));
+      yield* Queue.offer(persistence, latest.value);
     },
     (effect) => snapshotWriteLock.withPermit(effect),
   );

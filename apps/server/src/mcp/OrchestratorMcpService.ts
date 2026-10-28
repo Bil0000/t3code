@@ -2803,7 +2803,7 @@ const make = Effect.gen(function* () {
       const statuses = input.statuses === undefined ? null : new Set(input.statuses);
       const titleContains = input.titleContains?.toLocaleLowerCase();
       const visibleThreads = yield* Effect.filter(projectThreads, (thread) =>
-        requireCopyTarget(thread.id, scope.thread?.threadId).pipe(
+        resourcePolicy.assertCopyTarget(thread.id, scope.thread?.threadId).pipe(
           Effect.as(true),
           Effect.orElseSucceed(() => false),
         ),

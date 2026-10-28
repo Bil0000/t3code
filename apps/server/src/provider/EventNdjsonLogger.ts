@@ -703,9 +703,9 @@ export const makeEventNdjsonLogStore = Effect.fnUntraced(function* (
     if (existing) return existing;
 
     const write = Effect.fnUntraced(function* (event: unknown, threadId: ThreadId | null) {
+      if (!shouldPersistProviderEvent(stream, event)) return;
       if (threadId === null ? !policy.canRecordUnattributed() : yield* policy.isVolatile(threadId))
         return;
-      if (!shouldPersistProviderEvent(stream, event)) return;
       let payload = yield* serializeEvent(boundProviderEventForLogging(event));
       if (payload === undefined) return;
       // Escaping can expand strings beyond their input size.
