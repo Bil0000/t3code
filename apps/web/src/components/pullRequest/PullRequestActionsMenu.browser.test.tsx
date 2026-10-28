@@ -138,6 +138,20 @@ it("saves maintainer edits, and restores the previous value with an error when s
   );
 });
 
+it("keeps the saved value when a follow-up save fails before the host refreshes", async () => {
+  const control = setup();
+  await using screen = await render(control());
+  await screen.getByRole("button", { name: "More pull request actions" }).click();
+  const checkbox = page.getByRole("menuitemcheckbox", { name: "Allow edits from maintainers" });
+  await checkbox.click();
+  await expect.element(page.getByRole("status")).not.toBeInTheDocument();
+  mocks.update.mockResolvedValueOnce({ _tag: "Failure" });
+  await checkbox.click();
+  await expect.element(page.getByRole("status")).not.toBeInTheDocument();
+  expect(mocks.notify).toHaveBeenCalledOnce();
+  await expect.element(checkbox).not.toBeChecked();
+});
+
 it("keeps a saved choice through a stale refresh, then follows the host", async () => {
   const control = setup();
   await using screen = await render(control());

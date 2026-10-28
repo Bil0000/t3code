@@ -34,6 +34,7 @@ export function usePullRequestMaintainerEdits(
   const save = async (next: boolean) => {
     if (pending.current || pr === null || !permissions.canEditMaintainerEdits) return;
     pending.current = true;
+    const previousChoice = choice;
     setSaving(true);
     setChoice({ url: pr.url, observed, value: next });
     const response = await update({
@@ -43,7 +44,7 @@ export function usePullRequestMaintainerEdits(
     pending.current = false;
     setSaving(false);
     if (AsyncResult.isFailure(response)) {
-      setChoice(null);
+      setChoice(previousChoice);
       const cause = squashAtomCommandFailure(response);
       Dialog.alert(
         "Could not save maintainer access",

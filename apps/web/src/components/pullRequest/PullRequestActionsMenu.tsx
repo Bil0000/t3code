@@ -179,6 +179,7 @@ export function PullRequestActionsMenu({
     canWriteSourceControl && environmentConnected && !maintainerEditsSaving;
   const saveMaintainerEdits = async (value: boolean) => {
     if (!canSaveMaintainerEdits) return;
+    const previousChoice = maintainerEditsChoice;
     setMaintainerEditsChoice({ pullRequestKey, observed: detail.maintainerCanModify, value });
     setMaintainerEditsSaving(true);
     const result = await updatePullRequest({
@@ -187,7 +188,7 @@ export function PullRequestActionsMenu({
     });
     setMaintainerEditsSaving(false);
     if (result._tag === "Failure") {
-      setMaintainerEditsChoice(null);
+      setMaintainerEditsChoice(previousChoice);
       toastManager.add({
         type: "error",
         title: "Could not save maintainer access",
