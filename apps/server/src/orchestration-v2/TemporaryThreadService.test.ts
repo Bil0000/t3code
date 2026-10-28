@@ -16,6 +16,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
+import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
@@ -218,9 +219,10 @@ it.effect.each([
   { failRelease: false, detached: true },
   { failRelease: true, detached: true },
   { failRelease: false, detached: false, failStop: true },
+  { failRelease: false, detached: false, hangSettle: true },
 ])(
-  "last-view discard uses production cleanup, release failure: $failRelease, detached: $detached, stop failure: $failStop",
-  ({ failRelease, detached, failStop }) =>
+  "last-view discard uses production cleanup, release failure: $failRelease, detached: $detached, stop failure: $failStop, hung effect: $hangSettle",
+  ({ failRelease, detached, failStop, hangSettle }) =>
     Effect.gen(function* () {
       const fixture = yield* setup;
       const now = yield* DateTime.now;
@@ -295,6 +297,11 @@ it.effect.each([
       }
       let rejectRelease = failRelease;
       let rejectStop = failStop === true;
+      const settling = yield* Queue.unbounded<string>();
+      const settled = yield* Deferred.make<void>();
+      const drainStarted = yield* Deferred.make<void>();
+      const drainRelease = yield* Deferred.make<number>();
+      let drains = 0;
       const rejected = new Set<CommandId>();
       const cleanupLayer = TemporaryThreadService.layerCleanup.pipe(
         Layer.provide(
@@ -326,6 +333,27 @@ it.effect.each([
                     });
                   }
                   fixture.operations.push(command.type);
+                  if (hangSettle && command.type === "thread.delete") {
+                    yield* projections.getThreadRecords(command.threadId, []).pipe(
+                      Effect.flatMap(({ thread }) =>
+                        projections.apply({
+                          id: EventId.make("temporary-deleted"),
+                          type: "thread.deleted",
+                          threadId: command.threadId,
+                          occurredAt: now,
+                          payload: { ...thread, deletedAt: now },
+                        }),
+                      ),
+                      Effect.mapError(
+                        (cause) =>
+                          new Orchestrator.OrchestratorDispatchError({
+                            commandId: command.commandId,
+                            commandType: command.type,
+                            cause,
+                          }),
+                      ),
+                    );
+                  }
                   return { sequence: 0, storedEvents: [] };
                 }),
             }),
@@ -351,9 +379,39 @@ it.effect.each([
                 }),
             }),
             Layer.mock(EffectWorker.OrchestrationEffectWorkerV2)({
-              drain: () => Effect.succeed(0),
+              drain: () =>
+                Effect.gen(function* () {
+                  drains += 1;
+                  if (!hangSettle) return 0;
+                  yield* Deferred.succeed(drainStarted, undefined);
+                  return yield* Deferred.await(drainRelease);
+                }),
             }),
-            Layer.mock(EffectOutbox.EffectOutboxV2)({ listByCommandId: () => Effect.succeed([]) }),
+            Layer.mock(EffectOutbox.EffectOutboxV2)({
+              listByCommandId: (commandId) =>
+                Effect.succeed(
+                  hangSettle && commandId.endsWith(":1")
+                    ? [
+                        {
+                          id: commandId,
+                          commandId,
+                          threadId,
+                          request: { type: "provider-session.release-temporary" as const },
+                          status: "pending" as const,
+                          attemptCount: 0,
+                          availableAt: DateTime.formatIso(now),
+                          leaseOwner: null,
+                          createdAt: DateTime.formatIso(now),
+                          updatedAt: DateTime.formatIso(now),
+                          completedAt: null,
+                          lastError: null,
+                        },
+                      ]
+                    : [],
+                ),
+              awaitSettled: (effectId) =>
+                Queue.offer(settling, effectId).pipe(Effect.andThen(Deferred.await(settled))),
+            }),
           ),
         ),
       );
@@ -370,22 +428,56 @@ it.effect.each([
         yield* service.updateViews(second, views([threadId], 1, false, "second-view"));
         yield* service.updateViews(first, views([], 2));
         assert.deepEqual(fixture.operations, []);
-        if (failRelease || failStop) {
-          const error = yield* service
+        if (failRelease || failStop || hangSettle) {
+          const leaving = yield* service
             .updateViews(second, views([], 2, false, "second-view"))
-            .pipe(Effect.flip);
+            .pipe(Effect.flip, Effect.forkChild);
+          if (hangSettle) {
+            yield* Deferred.await(drainStarted);
+            yield* TestClock.adjust("30 seconds");
+            const timedOut = leaving.pollUnsafe();
+            if (timedOut === undefined) {
+              yield* Deferred.succeed(drainRelease, 0);
+              yield* Deferred.succeed(settled, undefined);
+              yield* Fiber.await(leaving);
+            }
+            assert.isDefined(timedOut);
+            assert.equal(yield* Queue.take(settling), `temporary-discard:stop:${threadId}:1`);
+          }
+          const error = yield* Fiber.join(leaving);
           assert.equal(error._tag, "TemporaryThreadServiceError");
           assert.deepEqual(
             fixture.operations,
             failStop
               ? ["mark"]
-              : ["mark", "thread.stop", ...(detached ? [] : ["detach"]), "release"],
+              : [
+                  "mark",
+                  "thread.stop",
+                  ...(detached ? [] : ["detach"]),
+                  "release",
+                  ...(hangSettle ? ["thread.delete"] : []),
+                ],
           );
           assert.isTrue(fixture.temporary.has(threadId));
           assert.isFalse(fixture.discarded.has(threadId));
           rejectRelease = false;
           rejectStop = false;
           fixture.operations.length = 0;
+        }
+        if (hangSettle) {
+          const retry = yield* service
+            .updateViews(second, views([], 2, false, "second-view"))
+            .pipe(Effect.forkChild);
+          assert.equal(yield* Queue.take(settling), `temporary-discard:stop:${threadId}:1`);
+          assert.isUndefined(retry.pollUnsafe());
+          assert.isFalse(fixture.discarded.has(threadId));
+          yield* Deferred.succeed(settled, undefined);
+          yield* Fiber.join(retry);
+          assert.equal(drains, 1);
+          yield* Deferred.succeed(drainRelease, 0);
+          assert.deepEqual(fixture.operations, ["mark", "release", "discard"]);
+          assert.isTrue(fixture.discarded.has(threadId));
+          return;
         }
         yield* service.updateViews(second, views([], 2, false, "second-view"));
         assert.deepEqual(fixture.operations, [

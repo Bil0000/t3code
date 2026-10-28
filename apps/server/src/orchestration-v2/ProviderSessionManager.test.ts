@@ -505,6 +505,7 @@ function layerTest(input: {
   readonly scopeCloseReached?: Deferred.Deferred<void>;
   readonly serverSettingsLayer?: ReturnType<typeof ServerSettings.layerTest>;
   readonly projectServiceLayer?: Layer.Layer<ProjectService.ProjectService>;
+  readonly fileSystem?: FileSystem.FileSystem;
 }) {
   const layerConfiguredEventSink =
     input.flakyReleaseWrites !== undefined
@@ -560,7 +561,7 @@ function layerTest(input: {
       ),
     ),
   );
-  return Layer.mergeAll(
+  const layer = Layer.mergeAll(
     layerTestStores,
     layerConfiguredEventSink,
     IdAllocator.layer,
@@ -586,6 +587,11 @@ function layerTest(input: {
         ),
       ),
     ),
+  );
+  return (
+    input.fileSystem === undefined
+      ? layer
+      : layer.pipe(Layer.provide(Layer.succeed(FileSystem.FileSystem, input.fileSystem)))
   ).pipe(Layer.provide(NodeServices.layer));
 }
 
@@ -1086,9 +1092,9 @@ it.effect.each([
     }),
 );
 
-it.effect.each([false, true])(
-  "production temporary cleanup closes a pinned session and retries private folder deletion: %s",
-  (failRemoval) =>
+it.effect.each([0, 1, 2])(
+  "production temporary cleanup closes a pinned session and retries private folder deletion after %s failures",
+  (failures) =>
     Effect.gen(function* () {
       const state = yield* Ref.make(emptyState);
       const fs = yield* FileSystem.FileSystem;
@@ -1097,7 +1103,7 @@ it.effect.each([false, true])(
       let removals = 0;
       const remove: typeof fs.remove = (path, options) =>
         Effect.suspend(() => {
-          if (path === privateDirectory && ++removals === 1 && failRemoval)
+          if (path === privateDirectory && ++removals <= failures)
             return Effect.fail(
               new PlatformError.PlatformError(
                 new PlatformError.SystemError({
@@ -1251,7 +1257,7 @@ it.effect.each([false, true])(
             ),
           ),
         );
-        if (failRemoval) {
+        if (failures === 2) {
           const result = yield* service.discard(threadId).pipe(Effect.exit);
           assert.isTrue(Exit.isFailure(result));
           assert.isFalse(discarded);
@@ -1275,7 +1281,7 @@ it.effect.each([false, true])(
         assert.isFalse(yield* manager.isLive(providerSessionId));
         assert.equal((yield* Ref.get(state)).closeCount, 1);
         assert.equal((yield* Ref.get(state)).openCount, 1);
-        assert.equal(removals, 1);
+        assert.equal(removals, failures + 1);
       }).pipe(
         Effect.provide(
           Layer.unwrap(
@@ -1284,6 +1290,7 @@ it.effect.each([false, true])(
                 state,
                 idleTimeoutMs: 1000,
                 capabilities: ExclusiveCapabilities,
+                fileSystem,
                 beforeOpen: ({ providerSessionId }) =>
                   factory
                     .open({

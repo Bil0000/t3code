@@ -339,12 +339,14 @@ export const layerCleanup = Layer.effect(
     const projections = yield* ProjectionStore.ProjectionStoreV2;
     const outbox = yield* EffectOutbox.EffectOutboxV2;
     const state = yield* TemporaryThreadLifecycleState;
+    const scope = yield* Effect.scope;
+    const unsettled = new Map<CommandId, ThreadId>();
+    let draining: Fiber.Fiber<void> | undefined;
     let attempts = 0;
     return TemporaryThreadCleanup.of({
       stopAndTeardown: Effect.fn("TemporaryThreadCleanup.stopAndTeardown")(
         function* (threadIds: ReadonlyArray<ThreadId>) {
           const attempt = ++attempts;
-          const commands: Array<CommandId> = [];
           for (const threadId of threadIds.toReversed()) {
             yield* Effect.forEach(state.preparations.get(threadId) ?? [], Fiber.interrupt, {
               discard: true,
@@ -355,7 +357,7 @@ export const layerCleanup = Layer.effect(
             }
             const projection = yield* orchestrator.getThreadRecords(threadId, ["providerSessions"]);
             const stopCommandId = CommandId.make(`temporary-discard:stop:${threadId}:${attempt}`);
-            commands.push(stopCommandId);
+            unsettled.set(stopCommandId, threadId);
             yield* orchestrator.dispatch({
               type: "thread.stop",
               threadId,
@@ -378,19 +380,31 @@ export const layerCleanup = Layer.effect(
             const deleteCommandId = CommandId.make(
               `temporary-discard:delete:${threadId}:${attempt}`,
             );
-            commands.push(deleteCommandId);
+            unsettled.set(deleteCommandId, threadId);
             yield* orchestrator.dispatch({
               type: "thread.delete",
               threadId,
               commandId: deleteCommandId,
             });
           }
-          yield* worker.drain();
-          for (const commandId of commands) {
-            for (const effect of yield* outbox.listByCommandId(commandId)) {
-              yield* outbox.awaitSettled(effect.id);
-            }
+          if (draining === undefined || draining.pollUnsafe() !== undefined) {
+            draining = yield* worker
+              .drain()
+              .pipe(Effect.ignore({ log: true }), Effect.forkIn(scope));
           }
+          yield* Effect.forEach(
+            [...unsettled].filter(([, threadId]) => threadIds.includes(threadId)),
+            ([commandId]) =>
+              outbox.listByCommandId(commandId).pipe(
+                Effect.flatMap((effects) =>
+                  Effect.forEach(effects, (effect) => outbox.awaitSettled(effect.id), {
+                    discard: true,
+                  }),
+                ),
+                Effect.andThen(Effect.sync(() => unsettled.delete(commandId))),
+              ),
+            { discard: true },
+          ).pipe(Effect.timeout("30 seconds"));
           for (const threadId of threadIds) {
             yield* resources.cleanupScheduledTasks(threadId);
             yield* resources.cleanupTerminals(threadId);

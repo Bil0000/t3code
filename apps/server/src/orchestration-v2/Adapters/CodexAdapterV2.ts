@@ -1566,7 +1566,7 @@ export const layerAppServerClientFactory: Layer.Layer<
                         lifecycle.pendingNativeCleanup.set(input.threadId, pending);
                       }),
                     ),
-                    Effect.orDie,
+                    Effect.ignore({ log: true }),
                   ),
               ).pipe(
                 Effect.mapError(
