@@ -1707,9 +1707,20 @@ it.effect.each([
   ["switch", "other-claude", true, true],
   ["switch", "codex", true, false],
   ["switch", "other-codex", false, false],
+  ["runtime-mode", "codex", true, true, false],
+  ["runtime-mode", "codex", true, false, true],
+  ["runtime-mode", "codex", true, false, false, false],
+  ["runtime-mode", "codex", false, false, false],
 ] as const)(
   "%s to %s with temporary=%s rejects=%s before changing a live session",
-  ([operation, target, temporary, rejects]) => {
+  ([
+    operation,
+    target,
+    temporary,
+    rejects,
+    supportsRuntimeModeSwitchInSession = true,
+    hasSession = true,
+  ]) => {
     const threadId = ThreadId.make("thread:temporary-provider-switch");
     const otherSelection = { instanceId: ProviderInstanceId.make(target), model: "test" };
     const owned = new Set<ThreadId>(temporary ? [threadId] : []);
@@ -1760,74 +1771,95 @@ it.effect.each([
       });
       const now = yield* DateTime.now;
       const sessionId = ProviderSessionId.make("temporary-switch-session");
-      yield* eventSink.write({
-        events: [
-          {
-            id: EventId.make("temporary-switch-session-attached"),
-            type: "provider-session.attached",
-            threadId,
-            occurredAt: now,
-            payload: {
-              id: sessionId,
-              driver: adapter.driver,
-              providerInstanceId: instanceId,
-              status: "ready",
-              cwd: "/repo",
-              model: modelSelection.model,
-              capabilities: {
-                ...CodexProviderCapabilitiesV2,
-                sessions: {
-                  ...CodexProviderCapabilitiesV2.sessions,
-                  supportsProviderSwitchingViaHandoff: false,
+      if (hasSession)
+        yield* eventSink.write({
+          events: [
+            {
+              id: EventId.make("temporary-switch-session-attached"),
+              type: "provider-session.attached",
+              threadId,
+              occurredAt: now,
+              payload: {
+                id: sessionId,
+                driver: adapter.driver,
+                providerInstanceId: instanceId,
+                status: "ready",
+                cwd: "/repo",
+                model: modelSelection.model,
+                capabilities: {
+                  ...CodexProviderCapabilitiesV2,
+                  sessions: {
+                    ...CodexProviderCapabilitiesV2.sessions,
+                    supportsProviderSwitchingViaHandoff: false,
+                    supportsRuntimeModeSwitchInSession,
+                  },
                 },
+                createdAt: now,
+                updatedAt: now,
+                lastError: null,
               },
-              createdAt: now,
-              updatedAt: now,
-              lastError: null,
             },
-          },
-        ],
-      });
+          ],
+        });
       const before = yield* projections.getThreadProviderContext(threadId);
       const sequence = yield* orchestrator.getThreadEventSequence(threadId);
       const commandId = CommandId.make("temporary-switch");
       const refused = yield* Effect.result(
         orchestrator.dispatch(
-          operation !== "message"
+          operation === "runtime-mode"
             ? {
-                type: operation === "selection" ? "thread.model-selection.set" : "provider.switch",
+                type: "thread.runtime-mode.set",
                 commandId,
                 threadId,
-                modelSelection: otherSelection,
+                runtimeMode: "approval-required",
               }
-            : {
-                type: "message.dispatch",
-                commandId,
-                threadId,
-                modelSelection: otherSelection,
-                messageId: MessageId.make("temporary-switch-message"),
-                text: "Switch provider",
-                attachments: [],
-                dispatchMode: { type: "start_immediately" },
-                createdBy: "user",
-                creationSource: "web",
-              },
+            : operation !== "message"
+              ? {
+                  type:
+                    operation === "selection" ? "thread.model-selection.set" : "provider.switch",
+                  commandId,
+                  threadId,
+                  modelSelection: otherSelection,
+                }
+              : {
+                  type: "message.dispatch",
+                  commandId,
+                  threadId,
+                  modelSelection: otherSelection,
+                  messageId: MessageId.make("temporary-switch-message"),
+                  text: "Switch provider",
+                  attachments: [],
+                  dispatchMode: { type: "start_immediately" },
+                  createdBy: "user",
+                  creationSource: "web",
+                },
         ),
       );
       assert.equal(Result.isFailure(refused), rejects);
       const projection = yield* orchestrator.getThreadRecords(threadId, ["runs"]);
       assert.isEmpty(projection.runs);
       if (rejects) {
+        if (operation === "runtime-mode" && Result.isFailure(refused)) {
+          assert.instanceOf(refused.failure, Orchestrator.OrchestratorDispatchError);
+          if (refused.failure._tag === "OrchestratorDispatchError") {
+            assert.equal(refused.failure.cause, "Keep this thread before using this operation.");
+          }
+        }
         assert.deepEqual(yield* projections.getThreadProviderContext(threadId), before);
         assert.equal(yield* orchestrator.getThreadEventSequence(threadId), sequence);
         assert.isEmpty(yield* eventSink.readByCommandId({ commandId }).pipe(Stream.runCollect));
         assert.isEmpty(yield* outbox.listByCommandId(commandId));
       } else {
-        assert.deepEqual(projection.thread.modelSelection, otherSelection);
+        if (operation === "runtime-mode") {
+          assert.equal(projection.thread.runtimeMode, "approval-required");
+          assert.deepEqual(projection.thread.modelSelection, modelSelection);
+        } else {
+          assert.deepEqual(projection.thread.modelSelection, otherSelection);
+        }
         if (temporary) {
           assert.equal(
             (yield* projections.getThreadProviderContext(threadId)).providerSessions[0]?.id,
-            sessionId,
+            hasSession ? sessionId : undefined,
           );
           assert.isEmpty(yield* outbox.listByCommandId(commandId));
         }

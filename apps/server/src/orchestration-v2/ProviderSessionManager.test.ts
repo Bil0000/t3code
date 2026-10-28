@@ -6,6 +6,7 @@ import {
   CommandId,
   CodexSettings,
   EnvironmentId,
+  EventId,
   MessageId,
   type ModelSelection,
   type OrchestrationV2AppThread,
@@ -940,9 +941,16 @@ it.effect.each([
         family: (threadId) => Effect.succeed([threadId]),
       });
       const registryLayer = Layer.unwrap(
-        makeProviderAdapter(state, { driver: ProviderDriverKind.make(driver) }).pipe(
-          Effect.map((adapter) => ProviderAdapterRegistry.layerFromAdapters([adapter])),
-        ),
+        makeProviderAdapter(state, {
+          driver: ProviderDriverKind.make(driver),
+          capabilities: {
+            ...CodexCapabilities,
+            sessions: {
+              ...CodexCapabilities.sessions,
+              supportsRuntimeModeSwitchInSession: driver === "codex",
+            },
+          },
+        }).pipe(Effect.map((adapter) => ProviderAdapterRegistry.layerFromAdapters([adapter]))),
       );
       const engineLayer = ProviderReplayHarness.layerWithRegistry(
         { name: "temporary-session-allocation" },
@@ -952,6 +960,7 @@ it.effect.each([
       yield* Effect.gen(function* () {
         const orchestrator = yield* Orchestrator.OrchestratorV2;
         const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const eventSink = yield* EventSink.EventSinkV2;
         const sessions: Array<ProviderAdapter.ProviderAdapterV2SessionRuntime> = [];
         const selection = {
           ...modelSelection,
@@ -1006,6 +1015,48 @@ it.effect.each([
             }),
             sessions[index],
           );
+          if (index === 0 && temporary) {
+            const providerThread = projection.providerThreads[0]!;
+            yield* eventSink.write({
+              events: [
+                {
+                  id: EventId.make("allocation-native-thread"),
+                  type: "provider-thread.updated",
+                  threadId,
+                  occurredAt: yield* DateTime.now,
+                  payload: {
+                    ...providerThread,
+                    nativeThreadRef: {
+                      driver: ProviderDriverKind.make(driver),
+                      nativeId: "native-mode",
+                      strength: "strong",
+                    },
+                  },
+                },
+              ],
+            });
+            yield* orchestrator.dispatch({
+              type: "provider-session.detach",
+              commandId: CommandId.make("allocation-detach-session"),
+              threadId,
+              providerSessionId,
+            });
+            yield* manager.detach({ providerSessionId, threadId });
+            const changed = yield* orchestrator
+              .dispatch({
+                type: "thread.runtime-mode.set",
+                threadId,
+                commandId: CommandId.make("allocation-change-detached-mode"),
+                runtimeMode: "approval-required",
+              })
+              .pipe(Effect.exit);
+            assert.equal(Exit.isFailure(changed), driver !== "codex");
+            assert.equal(
+              (yield* orchestrator.getThreadRecords(threadId, [])).thread.runtimeMode,
+              driver === "codex" ? "approval-required" : "full-access",
+            );
+            assert.isTrue(yield* manager.isLive(providerSessionId));
+          }
         }
         const expectedOpens = firstTemporary || secondTemporary ? 2 : 1;
         assert.equal((yield* Ref.get(state)).openCount, expectedOpens);

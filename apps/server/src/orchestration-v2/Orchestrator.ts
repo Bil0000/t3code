@@ -3110,16 +3110,45 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       (command.type === "thread.metadata.update" &&
         command.worktreePath !== undefined &&
         command.worktreePath !== thread.worktreePath);
+    const temporaryRuntimeModeChange =
+      command.type === "thread.runtime-mode.set" &&
+      Option.isSome(temporaryStorage) &&
+      (yield* temporaryStorage.value.isTemporary(command.threadId));
     const providerContext = needsProviderState
       ? yield* projectionStore
           .getThreadProviderContext(
             command.threadId,
             command.type === "thread.model-selection.set" || command.type === "provider.switch"
               ? command.modelSelection.instanceId
-              : undefined,
+              : temporaryRuntimeModeChange
+                ? thread.modelSelection.instanceId
+                : undefined,
           )
           .pipe(mapDispatchError(command))
       : null;
+    if (temporaryRuntimeModeChange) {
+      const pinnedSessionId = providerContext!.providerThreads.find(
+        (providerThread) => providerThread.id === thread.activeProviderThreadId,
+      )?.providerSessionId;
+      const pinnedRuntime =
+        pinnedSessionId == null
+          ? Option.none()
+          : yield* providerSessions.get(pinnedSessionId).pipe(mapDispatchError(command));
+      if (
+        providerContext!.providerSessions.some(
+          (session) => !session.capabilities.sessions.supportsRuntimeModeSwitchInSession,
+        ) ||
+        (Option.isSome(pinnedRuntime) &&
+          !pinnedRuntime.value.providerSession.capabilities.sessions
+            .supportsRuntimeModeSwitchInSession)
+      ) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "Keep this thread before using this operation.",
+        });
+      }
+    }
     const providerSwitchPlan =
       command.type === "thread.model-selection.set" || command.type === "provider.switch"
         ? yield* Effect.gen(function* () {
