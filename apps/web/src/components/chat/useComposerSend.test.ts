@@ -47,6 +47,7 @@ vi.mock("../../state/use-orchestration-command", () => ({
   useOrchestrationCommand: () => state.start,
 }));
 vi.mock("../../state/server", () => ({ environmentServerConfigsAtom: "configs" }));
+vi.mock("../../state/peerLinks", () => ({ useLinkedEnvironments: () => new Map() }));
 vi.mock("../../state/presentation", () => ({
   environmentPresentations: { presentationsAtom: "presentations" },
 }));

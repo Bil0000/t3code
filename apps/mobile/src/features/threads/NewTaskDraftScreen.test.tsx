@@ -99,6 +99,7 @@ vi.mock("../../state/entities", () => ({
   useThreadShells: () => [],
 }));
 vi.mock("../../state/projectClones", () => ({ useProjectClone: () => null }));
+vi.mock("../../state/peerLinks", () => ({ useLinkedEnvironments: () => new Map() }));
 vi.mock("../../state/projects", () => ({ projectEnvironment: {} }));
 vi.mock("../../state/sourceControl", () => ({ sourceControlEnvironment: {} }));
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
