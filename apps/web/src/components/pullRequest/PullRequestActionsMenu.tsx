@@ -288,6 +288,7 @@ export function PullRequestActionsMenu({
         {canEditPullRequestMaintainerEdits(detail) ? (
           <>
             <MenuCheckboxItem
+              variant="icon"
               checked={maintainerCanModify === true}
               disabled={!canSaveMaintainerEdits}
               closeOnClick={false}
