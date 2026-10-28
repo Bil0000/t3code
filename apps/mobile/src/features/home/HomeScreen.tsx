@@ -1,3 +1,4 @@
+import type { useThreadListActions } from "./useThreadListActions";
 import { useActiveNewTask } from "../../state/active-new-task";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import { useAndroidControlSizing } from "../../components/ui/useAndroidControlSizing";
@@ -63,6 +64,7 @@ import {
   ThreadListV2ShowMoreRow,
   ThreadListV2SnoozedShelfHeader,
   ThreadListV2WorkingShelfHeader,
+  ThreadListV2FolderHeader,
 } from "../threads/thread-list-v2-items";
 import { useThreadRowProviderInstanceResolver } from "../threads/thread-provider-instance";
 import { useOpenThreadPullRequests } from "../threads/use-open-thread-pull-requests";
@@ -122,6 +124,10 @@ interface HomeScreenProps {
     thread: EnvironmentThreadShell,
     enabled: boolean,
   ) => Promise<boolean>;
+  readonly onMoveThreadToFolder: ReturnType<typeof useThreadListActions>["moveThreadToFolder"];
+  readonly onCreateFolder: ReturnType<typeof useThreadListActions>["createFolder"];
+  readonly onRenameFolder: ReturnType<typeof useThreadListActions>["renameFolder"];
+  readonly onDeleteFolder: ReturnType<typeof useThreadListActions>["deleteFolder"];
   readonly onMoveThread: (
     thread: EnvironmentThreadShell,
     direction: ThreadMoveDestination,
@@ -416,6 +422,8 @@ export function HomeScreen(props: HomeScreenProps) {
   const showMoreSettled = () =>
     setSettledVisibleCount((count) => count + THREAD_LIST_V2_SETTLED_PAGE_COUNT);
   const {
+    collapsedFolders,
+    toggleFolder,
     loaded: shelfPreferencesLoaded,
     settledShelfExpanded,
     snoozedShelfExpanded,
@@ -437,16 +445,19 @@ export function HomeScreen(props: HomeScreenProps) {
     autoSettleOptOutEnvironmentIds,
     pinReorderEnvironmentIds,
     activeReorderEnvironmentIds,
+    threadFolderEnvironmentIds,
     titleRegenerationEnvironmentIds,
   } = listEnvironments;
   const resolveProviderInstance = useThreadRowProviderInstanceResolver(providersByEnvironmentId);
   const pendingOrder = usePendingThreadOrder();
   const {
+    folders,
     layout: threadListV2Layout,
     items: threadListV2Items,
     contentOnlyThreadKeys,
     olderSettledShelf,
   } = useThreadListV2({
+    collapsedFolders,
     threads: props.threads,
     pendingTasks: props.pendingTasks,
     environmentId: props.selectedEnvironmentId,
@@ -523,6 +534,21 @@ export function HomeScreen(props: HomeScreenProps) {
           onSwipeableWillOpen={handleSwipeableWillOpen}
           simultaneousSwipeGesture={homeScrollGesture}
           activationKey={item.key}
+        />
+      );
+    }
+    if (item.type === "v2-folder-header") {
+      return (
+        <ThreadListV2FolderHeader
+          item={item}
+          onToggle={toggleFolder}
+          onRename={props.onRenameFolder}
+          onDelete={props.onDeleteFolder}
+          environmentLabel={
+            Object.keys(props.savedConnectionsById).length > 1
+              ? props.savedConnectionsById[item.environmentId]?.environmentLabel
+              : null
+          }
         />
       );
     }
@@ -606,10 +632,15 @@ export function HomeScreen(props: HomeScreenProps) {
         snoozePresets={snoozePresetsByEnvironmentId.get(thread.environmentId)}
         pinningSupported={pinningEnvironmentIds.has(thread.environmentId)}
         autoSettleOptOutSupported={autoSettleOptOutEnvironmentIds.has(thread.environmentId)}
+        folders={folders}
+        foldersSupported={threadFolderEnvironmentIds.has(thread.environmentId)}
+        onMoveThreadToFolder={props.onMoveThreadToFolder}
+        onCreateFolder={props.onCreateFolder}
         reorderSupported={
-          item.item.pinned
+          !item.item.folderKey &&
+          (item.item.pinned
             ? pinReorderEnvironmentIds.has(thread.environmentId)
-            : !workingShelfEnabled && activeReorderEnvironmentIds.has(thread.environmentId)
+            : !workingShelfEnabled && activeReorderEnvironmentIds.has(thread.environmentId))
         }
         canMoveUp={item.canMoveUp}
         canMoveDown={item.canMoveDown}
@@ -631,6 +662,7 @@ export function HomeScreen(props: HomeScreenProps) {
 
   // extraData changes invalidate every visible row; put the minute clock on items to limit updates.
   const v2ExtraData = {
+    folders,
     activeNewTask,
     projectByKey,
     projectTitleByProjectKey: v2ProjectTitleByProjectKey,
@@ -643,6 +675,7 @@ export function HomeScreen(props: HomeScreenProps) {
   };
 
   const hasAnyThreads =
+    threadListV2Layout.folderHeaders.length > 0 ||
     props.threads.some((thread) => thread.archivedAt === null) ||
     props.pendingTasks.length > 0 ||
     threadListV2Layout.settledCount > 0;

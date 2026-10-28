@@ -1,3 +1,7 @@
+import { ThreadFolderId, type ThreadFolderMutation } from "@t3tools/contracts";
+import type { EnvironmentThreadFolder } from "@t3tools/client-runtime/state/thread-folders";
+import { uuidv4 } from "../../lib/uuid";
+import { serverEnvironment, threadFoldersAtom } from "../../state/server";
 import type { ThreadMoveDestination } from "../threads/threadOrder";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import * as ThreadUndo from "@t3tools/client-runtime/state/thread-undo";
@@ -76,7 +80,10 @@ function actionFailureTitle(action: ThreadListAction): string {
   return "Could not delete thread";
 }
 
-function checkThreadOperationPermission(thread: EnvironmentThreadShell, title: string): boolean {
+function checkThreadOperationPermission(
+  thread: Pick<EnvironmentThreadShell, "environmentId">,
+  title: string,
+): boolean {
   if (readEnvironmentScope(thread.environmentId, AuthOrchestrationOperateScope)) return true;
   Dialog.alert(title, "This connection cannot change threads.");
   return false;
@@ -189,6 +196,13 @@ function confirmThreadDeletion(
 }
 
 export function useThreadListActions(): {
+  readonly moveThreadToFolder: (
+    thread: EnvironmentThreadShell,
+    folderId: ThreadFolderId | null,
+  ) => Promise<boolean>;
+  readonly createFolder: (thread: EnvironmentThreadShell) => void;
+  readonly renameFolder: (folder: EnvironmentThreadFolder) => void;
+  readonly deleteFolder: (folder: EnvironmentThreadFolder) => void;
   readonly archiveThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly confirmDeleteThread: (thread: EnvironmentThreadShell) => void;
   readonly settleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
@@ -208,6 +222,78 @@ export function useThreadListActions(): {
   readonly renameThread: (thread: EnvironmentThreadShell) => void;
   readonly regenerateThreadTitle: (thread: EnvironmentThreadShell) => Promise<boolean>;
 } {
+  const folderMutation = useAtomCommand(serverEnvironment.mutateThreadFolders, {
+    reportFailure: false,
+  });
+  const mutateFolder = async (
+    target: Pick<EnvironmentThreadShell, "environmentId">,
+    mutation: ThreadFolderMutation,
+  ) => {
+    if (!checkThreadOperationPermission(target, "Could not change folder")) return false;
+    if (
+      appAtomRegistry.get(environmentServerConfigsAtom).get(target.environmentId)?.environment
+        .capabilities.threadFolders !== true
+    )
+      return false;
+    selectionHaptic();
+    const result = await folderMutation({ environmentId: target.environmentId, input: mutation });
+    if (result._tag === "Success") return true;
+    const error = Cause.squash(result.cause);
+    Dialog.alert("Could not change folder", error instanceof Error ? error.message : "Try again.");
+    return false;
+  };
+  const moveThreadToFolder = (thread: EnvironmentThreadShell, folderId: ThreadFolderId | null) =>
+    mutateFolder(thread, { type: "folder.move", threadIds: [thread.id], folderId });
+  const createFolder = (thread: EnvironmentThreadShell) => {
+    if (!checkThreadOperationPermission(thread, "Could not create folder")) return;
+    Dialog.prompt({
+      title: "New folder",
+      initialValue: "",
+      confirmText: "Create",
+      onConfirm: (value) => {
+        const name = value.trim();
+        if (!name || name.length > 80) {
+          Dialog.alert("Could not create folder", "Use a name with 1 to 80 characters.");
+          return;
+        }
+        void mutateFolder(thread, {
+          type: "folder.create",
+          folderId: ThreadFolderId.make(`folder:${uuidv4()}`),
+          name,
+          threadIds: [thread.id],
+        });
+      },
+    });
+  };
+  const renameFolder = (folder: EnvironmentThreadFolder) => {
+    if (!checkThreadOperationPermission(folder, "Could not rename folder")) return;
+    Dialog.prompt({
+      title: "Rename folder",
+      initialValue: folder.name,
+      confirmText: "Rename",
+      onConfirm: (value) => {
+        const name = value.trim();
+        if (!name || name.length > 80) {
+          Dialog.alert("Could not rename folder", "Use a name with 1 to 80 characters.");
+          return;
+        }
+        if (name === folder.name) return;
+        void mutateFolder(folder, { type: "folder.update", folderId: folder.id, name });
+      },
+    });
+  };
+  const deleteFolder = (folder: EnvironmentThreadFolder) => {
+    if (!checkThreadOperationPermission(folder, "Could not delete folder")) return;
+    Dialog.confirm({
+      title: "Delete folder?",
+      message: "Threads will stay in your thread list.",
+      confirmText: "Delete",
+      destructive: true,
+      onConfirm: () => {
+        void mutateFolder(folder, { type: "folder.delete", folderId: folder.id });
+      },
+    });
+  };
   const executeAction = useThreadActionExecutor();
   const snoozeMutation = useAtomCommand(threadEnvironment.snooze, { reportFailure: false });
   const unsnoozeMutation = useAtomCommand(threadEnvironment.unsnooze, { reportFailure: false });
@@ -600,6 +686,7 @@ export function useThreadListActions(): {
     }
     const ordered = getThreadListV2OrderedSection({
       threads: shells,
+      folders: appAtomRegistry.get(threadFoldersAtom),
       section,
       now: new Date().toISOString(),
       queuedThreadKeys: appAtomRegistry.get(queuedThreadKeysAtom),
@@ -702,6 +789,10 @@ export function useThreadListActions(): {
     confirmThreadDeletion(executeAction, thread);
 
   return {
+    moveThreadToFolder,
+    createFolder,
+    renameFolder,
+    deleteFolder,
     archiveThread,
     confirmDeleteThread,
     settleThread,

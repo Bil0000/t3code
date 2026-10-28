@@ -24,6 +24,7 @@ import {
   ProviderInstanceId,
   RunId,
   ThreadId,
+  ThreadFolderId,
 } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
@@ -1717,5 +1718,89 @@ describe("Working section beta", () => {
       "v2-settled-shelf",
       "settled",
     ]);
+  });
+});
+
+describe("thread folders", () => {
+  it("keeps folders between active and working, with parked and pinned precedence", () => {
+    const active = makeThread({ id: ThreadId.make("active"), title: "Active" });
+    const filed = makeThread({ id: ThreadId.make("filed"), title: "Filed" });
+    const working = makeThread({ id: ThreadId.make("working"), title: "Working" });
+    const pinned = makeThread({ id: ThreadId.make("pinned"), title: "Pinned", pinnedAt: NOW });
+    const settled = makeThread({
+      id: ThreadId.make("settled"),
+      title: "Settled",
+      settledOverride: "settled",
+    });
+    const snoozed = makeThread({
+      id: ThreadId.make("snoozed"),
+      title: "Snoozed",
+      snoozedUntil: "2026-06-03T00:00:00.000Z",
+    });
+    const folder = {
+      environmentId,
+      id: ThreadFolderId.make("folder"),
+      name: "Work",
+      icon: null,
+      threadIds: [filed.id, pinned.id, settled.id, snoozed.id],
+      createdAt: NOW,
+      updatedAt: NOW,
+    };
+    const folders = [
+      folder,
+      { ...folder, id: ThreadFolderId.make("empty"), name: "Empty", threadIds: [] },
+    ];
+    const input = {
+      threads: [active, filed, working, pinned, settled, snoozed],
+      folders,
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+      workingShelfEnabled: true,
+      workingShelfExpanded: true,
+      snoozedShelfExpanded: true,
+      isWorking: (thread: EnvironmentThreadShell) => thread === working || thread === filed,
+    };
+    const layout = buildThreadListV2Items(input);
+    const items = buildThreadListV2ListItems({
+      ...layout,
+      pendingTasks: [],
+      folderHeaders: layout.folderHeaders,
+    });
+    expect(
+      items.map((item) => (item.type === "v2-thread" ? item.item.thread.id : item.type)),
+    ).toEqual([
+      pinned.id,
+      active.id,
+      "v2-folder-header",
+      filed.id,
+      "v2-folder-header",
+      "v2-working-shelf",
+      working.id,
+      "v2-snoozed-shelf",
+      snoozed.id,
+      "v2-settled-shelf",
+      settled.id,
+    ]);
+    const collapsed = buildThreadListV2Items({
+      ...input,
+      collapsedFolderKeys: new Set([environmentId + ":folder"]),
+    });
+    expect(collapsed.items.some((item) => item.thread.id === filed.id)).toBe(false);
+    const selected = buildThreadListV2Items({
+      ...input,
+      collapsedFolderKeys: new Set([environmentId + ":folder"]),
+      selectedThreadKey: environmentId + ":" + filed.id,
+    });
+    expect(selected.items.some((item) => item.thread.id === filed.id)).toBe(true);
+    expect(
+      getThreadListV2OrderedSection({ ...input, section: "active" }).map((thread) => thread.id),
+    ).toEqual([active.id, working.id]);
+    expect(
+      getThreadListV2OrderedSection({ ...input, section: "pinned" }).map((thread) => thread.id),
+    ).toEqual([pinned.id]);
+    const search = buildThreadListV2Items({ ...input, searchQuery: "Filed" });
+    expect(search.items.map((item) => item.thread.id)).toEqual([filed.id]);
+    expect(search.folderHeaders).toEqual([]);
   });
 });

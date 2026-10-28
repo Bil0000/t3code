@@ -11,7 +11,7 @@ import {
   nextSnoozeWakeAfter,
 } from "../features/threads/threadListV2";
 import { appAtomRegistry } from "./atom-registry";
-import { environmentServerConfigsAtom } from "./server";
+import { threadFoldersAtom, environmentServerConfigsAtom } from "./server";
 import { environmentThreadShells } from "./threads";
 import { queuedThreadKeysAtom } from "./use-thread-outbox";
 
@@ -68,6 +68,7 @@ export function beginPendingThreadOrder(pending: PendingThreadOrder) {
     const nowMs = Date.now();
     const ordered = getThreadListV2OrderedSection({
       threads,
+      folders: appAtomRegistry.get(threadFoldersAtom),
       section: current.section,
       now: new Date(nowMs).toISOString(),
       queuedThreadKeys: appAtomRegistry.get(queuedThreadKeysAtom),
@@ -89,6 +90,7 @@ export function beginPendingThreadOrder(pending: PendingThreadOrder) {
   unsubscribers.push(
     appAtomRegistry.subscribe(environmentThreadShells.navigationThreadShellsAtom, refresh),
     appAtomRegistry.subscribe(environmentServerConfigsAtom, refresh),
+    appAtomRegistry.subscribe(threadFoldersAtom, refresh),
     appAtomRegistry.subscribe(queuedThreadKeysAtom, refresh),
     minuteTick.subscribe(refresh),
   );

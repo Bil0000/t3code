@@ -42,6 +42,7 @@ vi.mock("react-native", () => ({
       state.alerts.push({ title, buttons }),
   },
 }));
+vi.mock("expo-crypto", () => ({ randomUUID: () => "uuid" }));
 vi.mock("expo-haptics", () => ({
   impactAsync: async () => {},
   ImpactFeedbackStyle: { Light: "light" },
@@ -62,6 +63,8 @@ vi.mock("../../state/session", () => ({
 }));
 vi.mock("../../state/server", () => ({
   environmentServerConfigsAtom: "server-configs",
+  serverEnvironment: { mutateThreadFolders: "mutate-thread-folders" },
+  threadFoldersAtom: "thread-folders",
 }));
 vi.mock("../../state/atom-registry", () => ({
   appAtomRegistry: {
