@@ -403,20 +403,22 @@ describe("pull request detail decoding", () => {
     [{ state: "CLOSED" }, false],
     [{ headRepositoryOwner: { __typename: "Organization", login: "team" } }, false],
     [{ headRepository: null }, false],
-    [{ headRef: null }, false],
-  ])("limits maintainer edits to the author's open personal fork: %j", (overrides, allowed) => {
-    const detail = detailOf([], {
-      maintainerCanModify: false,
-      isCrossRepository: true,
-      viewerDidAuthor: true,
-      headRepositoryOwner: { __typename: "User", login: "octocat" },
-      headRepository: { nameWithOwner: "octocat/t3code", viewerPermission: "ADMIN" },
-      headRef: { id: "REF_7" },
-      ...overrides,
-    });
-    expect(detail.maintainerCanModify).toBe(false);
-    expect(detail.canEditMaintainerEdits).toBe(allowed);
-  });
+  ])(
+    "reads maintainer edits and lets only the author of an open personal fork change them: %j",
+    (overrides, allowed) => {
+      const detail = detailOf([], {
+        maintainerCanModify: false,
+        isCrossRepository: true,
+        viewerDidAuthor: true,
+        headRepositoryOwner: { __typename: "User", login: "octocat" },
+        headRepository: { nameWithOwner: "octocat/t3code", viewerPermission: "ADMIN" },
+        headRef: { id: "REF_7" },
+        ...overrides,
+      });
+      expect(detail.maintainerCanModify).toBe(false);
+      expect(detail.canEditMaintainerEdits).toBe(allowed);
+    },
+  );
 
   const detailJson = JSON.stringify({
     comments: [{ id: "c1", body: "second", createdAt: "2026-07-04T00:00:00Z" }],

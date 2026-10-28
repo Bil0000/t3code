@@ -1,0 +1,163 @@
+import "~/index.css";
+import { EnvironmentId, ProjectId } from "@t3tools/contracts";
+import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
+import { expect, it, vi } from "vite-plus/test";
+import { page } from "vite-plus/test/browser";
+
+const mocks = vi.hoisted(() => ({
+  update: vi.fn<(input: unknown) => Promise<{ _tag: "Success" | "Failure" }>>(),
+  notify: vi.fn(),
+}));
+vi.mock(
+  import("~/state/pullRequests"),
+  () => ({ pullRequestEnvironment: { update: {} } }) as never,
+);
+vi.mock(
+  import("~/state/use-atom-command"),
+  () => ({ useAtomCommand: () => mocks.update }) as never,
+);
+
+vi.mock(import("../ui/toast"), () => ({ toastManager: { add: mocks.notify } }) as never);
+vi.mock(import("~/state/server"), async () => {
+  const { Atom } = await import("effect/reactivity");
+  return { primaryServerKeybindingsAtom: Atom.make([]) } as never;
+});
+vi.mock(import("./PullRequestThreadLinks"), () => ({ PullRequestThreadLinks: () => null }));
+vi.mock(
+  import("./PullRequestDetailActions"),
+  () => ({ ActOnEnvironmentPicker: () => null }) as never,
+);
+
+import { render } from "../../../test/render";
+import { PullRequestActionsMenu } from "./PullRequestActionsMenu";
+
+const reference = { projectId: ProjectId.make("project"), repository: "owner/repo", number: 7 };
+const environmentId = EnvironmentId.make("environment");
+
+type Detail = Parameters<typeof PullRequestActionsMenu>[0]["detail"];
+
+const openDetail: Detail = {
+  url: "https://github.com/owner/repo/pull/7",
+  state: "open",
+  isDraft: false,
+  headBranch: "feature",
+  maintainerCanModify: true,
+  capabilities: {
+    diff: true,
+    comment: true,
+    actions: [],
+    mergeMethods: [],
+    search: true,
+    review: { inlineComment: true, reply: true, resolve: true, verdicts: [] },
+    reviewers: { request: true, listCandidates: true },
+    edit: { changeRequest: true, comment: true, maintainerEdits: true },
+  },
+  viewerPermissions: {
+    actions: [],
+    comment: true,
+    resolve: true,
+    verdicts: [],
+    requestReviewers: true,
+    maintainerEdits: true,
+  },
+};
+
+function setup() {
+  mocks.update.mockReset().mockResolvedValue({ _tag: "Success" });
+  mocks.notify.mockReset();
+  return (detail: Detail = openDetail) => (
+    <PullRequestActionsMenu
+      environmentId={environmentId}
+      reference={reference}
+      pullRequestKey="owner/repo/7"
+      detail={detail}
+      terminology={sourceControlClients.get("github").changeRequest}
+      linkThreadRef={null}
+      onThreadPickerOpenChange={() => {}}
+      refreshing={false}
+      refreshFromHost={async () => {}}
+      handoff={null}
+      attachesToComposer={false}
+      askAboutPullRequest={() => {}}
+      explainPullRequest={() => {}}
+      canFixFindings={false}
+      startFixFindings={() => {}}
+      handoffLabels={{ fixFindings: "Fix review findings" }}
+      canWriteGuide={false}
+      guideRunning={false}
+      guideWritten={false}
+      writeGuide={() => {}}
+      pickableEnvironments={[]}
+      actingEnvironmentId={environmentId}
+      onActingEnvironmentChange={() => {}}
+      can={() => false}
+      autoMergeArmed={false}
+      showsDraftToggle={false}
+      showsMergeNow={false}
+      showsAutoMerge={false}
+      showsMergeMethods={false}
+      allowedMergeMethods={[]}
+      selectedMergeMethod="squash"
+      onSelectMergeMethod={() => {}}
+      showsDeleteBranch={false}
+      environmentConnected={true}
+      canWriteSourceControl={true}
+      onMaintainerEditsSaved={() => {}}
+      confirmDeleteBranch={async () => {}}
+      pendingAction={null}
+      perform={async () => true}
+      openOnHostText="Open on GitHub"
+      copyReference={() => {}}
+    />
+  );
+}
+
+it("saves maintainer edits, and restores the previous value with an error when saving fails", async () => {
+  const control = setup();
+  let settle!: (value: { _tag: "Failure" }) => void;
+  mocks.update.mockReturnValueOnce(
+    new Promise<{ _tag: "Failure" }>((resolve) => {
+      settle = resolve;
+    }),
+  );
+  await using screen = await render(control());
+  await screen.getByRole("button", { name: "More pull request actions" }).click();
+  const checkbox = page.getByRole("menuitemcheckbox", { name: "Allow edits from maintainers" });
+  await expect.element(checkbox).toBeChecked();
+  await checkbox.click();
+  await expect.element(checkbox).not.toBeChecked();
+  await expect.element(page.getByRole("status")).toHaveTextContent("Saving…");
+  expect(mocks.update).toHaveBeenCalledExactlyOnceWith({
+    environmentId,
+    input: { ...reference, maintainerCanModify: false },
+  });
+  settle({ _tag: "Failure" });
+  await expect.element(checkbox).toBeChecked();
+  expect(mocks.notify).toHaveBeenCalledWith(
+    expect.objectContaining({ type: "error", title: "Could not save maintainer access" }),
+  );
+});
+
+it.each<[string, Detail]>([
+  ["closed", { ...openDetail, state: "closed" }],
+  [
+    "not authored by the viewer",
+    {
+      ...openDetail,
+      viewerPermissions: { ...openDetail.viewerPermissions, maintainerEdits: false },
+    },
+  ],
+  [
+    "on a host without maintainer edits",
+    {
+      ...openDetail,
+      capabilities: { ...openDetail.capabilities, edit: { changeRequest: true, comment: true } },
+    },
+  ],
+])("hides maintainer edits on a pull request that is %s", async (_, detail) => {
+  const control = setup();
+  await using screen = await render(control(detail));
+  await screen.getByRole("button", { name: "More pull request actions" }).click();
+  await expect.element(page.getByRole("menuitem", { name: "Open on GitHub" })).toBeVisible();
+  expect(document.querySelector('[role="menuitemcheckbox"]')).toBeNull();
+});

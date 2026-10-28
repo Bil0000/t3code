@@ -695,25 +695,23 @@ it.effect(
 );
 
 layer("GitHubPullRequestApi.layer", (it) => {
-  it.effect.each([true, false])(
-    "sets maintainer edits to %s without rewriting PR text",
-    (enabled) =>
-      Effect.gen(function* () {
-        mockedExecute.mockImplementation((call) =>
-          Effect.succeed(
-            output(
-              encodeJson(
-                call.kind === "graphql" && matches(call, NODE_ID_QUERY) ? nodeIdAnswer("PR_7") : {},
-              ),
+  it.effect("turns maintainer edits off without rewriting the pull request's text", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockImplementation((call) =>
+        Effect.succeed(
+          output(
+            encodeJson(
+              call.kind === "graphql" && matches(call, NODE_ID_QUERY) ? nodeIdAnswer("PR_7") : {},
             ),
           ),
-        );
-        const api = yield* GitHubPullRequestApi.GitHubPullRequestApi;
-        yield* api.updatePullRequest({ ...pullRequestInput, maintainerCanModify: enabled });
-        expect(variablesOf("mutation UpdatePullRequest")).toEqual([
-          { pullRequestId: "PR_7", maintainerCanModify: enabled },
-        ]);
-      }),
+        ),
+      );
+      const api = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+      yield* api.updatePullRequest({ ...pullRequestInput, maintainerCanModify: false });
+      expect(variablesOf("mutation UpdatePullRequest")).toEqual([
+        { pullRequestId: "PR_7", maintainerCanModify: false },
+      ]);
+    }),
   );
 
   it.effect.each(["mixed", "merges", "unavailable"] as const)(

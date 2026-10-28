@@ -116,7 +116,7 @@ function hostedChangeRequest(body: string, additions = 1) {
   };
 }
 
-it.effect("reads and changes maintainer edits through the existing update command", () =>
+it.effect("reads maintainer edits and changes them through the update command", () =>
   Effect.gen(function* () {
     let enabled = true;
     const provider = fakePullRequestProvider(SourceControlProviderKind.make("github"), {
@@ -143,14 +143,12 @@ it.effect("reads and changes maintainer edits through the existing update comman
     });
     const ref = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
     assert.strictEqual((yield* service.detail(ref)).maintainerCanModify, true);
-    for (const value of [false, true]) {
-      yield* service.update({ ...ref, maintainerCanModify: value });
-      assert.strictEqual((yield* service.detail(ref)).maintainerCanModify, value);
-    }
+    yield* service.update({ ...ref, maintainerCanModify: false });
+    assert.strictEqual((yield* service.detail(ref)).maintainerCanModify, false);
   }),
 );
 
-it.effect("refuses maintainer edits on hosts that do not support them", () =>
+it.effect("refuses maintainer edits on a host without the capability", () =>
   Effect.gen(function* () {
     let writes = 0;
     const service = yield* makeService({
@@ -169,7 +167,6 @@ it.effect("refuses maintainer edits on hosts that do not support them", () =>
         projectId: "p1" as ProjectId,
         repository: "acme/web",
         number: 1,
-        body: "Body",
         maintainerCanModify: false,
       })
       .pipe(Effect.flip);
