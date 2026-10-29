@@ -2,7 +2,7 @@ import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environ
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import type { EnvironmentThreadFolder } from "@t3tools/client-runtime/state/thread-folders";
 import { resolveThreadCurrentPullRequestLink } from "@t3tools/client-runtime/thread-pull-requests";
-import type { ProjectIconOverride } from "@t3tools/contracts";
+import { AuthOrchestrationOperateScope, type ProjectIconOverride } from "@t3tools/contracts";
 import { ChevronDownIcon, FolderClosedIcon, FolderOpenIcon } from "lucide-react";
 import {
   memo,
@@ -14,6 +14,7 @@ import {
 
 import { cn } from "~/lib/utils";
 import { projectIconColorClassName, projectIconTintClassName } from "../../projectIconColors";
+import { useEnvironmentScope } from "../../state/session";
 import { requestThreadFolderRename, useThreadFolderRenameKey } from "../../state/threadFolders";
 import { useUiStateStore } from "../../uiStateStore";
 import { ProjectIconOverrideGlyph } from "../ProjectFavicon";
@@ -111,12 +112,12 @@ export const SidebarThreadFolderHeader = memo(function SidebarThreadFolderHeader
   collapsed: boolean;
   threads: readonly EnvironmentThreadShell[];
   hiddenThreads: readonly EnvironmentThreadShell[];
-  canOperate: boolean;
   onToggle: (folderKey: string) => void;
   onRename: (folder: EnvironmentThreadFolder, name: string) => void;
   onContextMenu: (folder: EnvironmentThreadFolder, position: { x: number; y: number }) => void;
 }) {
   const { folder, folderKey, collapsed, threads, hiddenThreads, onToggle } = props;
+  const canOperate = useEnvironmentScope(folder.environmentId, AuthOrchestrationOperateScope);
   const isRenaming = useThreadFolderRenameKey() === folderKey;
   const localLastVisitedAtById = useUiStateStore((state) => state.threadLastVisitedAtById);
   const icon = folder.icon;
@@ -157,7 +158,7 @@ export const SidebarThreadFolderHeader = memo(function SidebarThreadFolderHeader
     onToggle(folderKey);
   };
   const handleDoubleClick = (event: ReactMouseEvent) => {
-    if (isRenaming || !props.canOperate) return;
+    if (isRenaming || !canOperate) return;
     if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
     if (foldClicksRef.current.count % 2 === 1) onToggle(folderKey);
@@ -166,7 +167,7 @@ export const SidebarThreadFolderHeader = memo(function SidebarThreadFolderHeader
   };
   const handleKeyDown = (event: ReactKeyboardEvent) => {
     if (event.target !== event.currentTarget) return;
-    if (event.key === "F2" && props.canOperate) {
+    if (event.key === "F2" && canOperate) {
       event.preventDefault();
       requestThreadFolderRename(folderKey);
       return;

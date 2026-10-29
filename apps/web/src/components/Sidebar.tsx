@@ -3515,10 +3515,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                               collapsed={block.collapsed}
                               threads={block.threads}
                               hiddenThreads={block.hiddenThreads}
-                              canOperate={readEnvironmentScope(
-                                block.folder.environmentId,
-                                AuthOrchestrationOperateScope,
-                              )}
                               onToggle={handleToggleThreadFolder}
                               onRename={handleThreadFolderRename}
                               onContextMenu={handleThreadFolderContextMenu}

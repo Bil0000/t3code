@@ -94,7 +94,7 @@ export function buildMultiSelectFolderMenuItems(
   return [
     {
       id: "folder:new-from-selection",
-      label: `New folder from ${input.threadIds.length} threads`,
+      label: `New folder from selection (${input.threadIds.length})`,
       icon: "folder",
       disabled: !input.canOperate,
     },

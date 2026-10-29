@@ -156,7 +156,7 @@ every device connected to that environment.
 
 To make a folder, open a thread's menu and choose **Move to folder → New folder…**, or press
 `mod+g` on the open thread. To start one from several threads, select them and right-click →
-**New folder from N threads**. Type the name right away, or double-click a folder later to rename
+**New folder from selection**. Type the name right away, or double-click a folder later to rename
 it. Press `mod+g` again, or choose **Remove from folder**, to take a thread out.
 
 A folder can have its own icon and color. Click it to collapse it. Its menu can settle every

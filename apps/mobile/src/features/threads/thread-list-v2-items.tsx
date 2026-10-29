@@ -39,7 +39,7 @@ import { canSnooze } from "@t3tools/client-runtime/state/thread-settled";
 import { threadChipCopyTarget } from "@t3tools/client-runtime/thread-reference";
 import type { MenuAction } from "@react-native-menu/menu";
 import { memo, useCallback, useMemo, useState, type ComponentProps } from "react";
-import { Pressable, useWindowDimensions, View } from "react-native";
+import { Pressable, type PressableProps, useWindowDimensions, View } from "react-native";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 
 import type { ThreadListProvider } from "../../state/thread-list-environments";
@@ -184,6 +184,8 @@ function ThreadListV2Section(props: {
     readonly accessibilityLabel: string;
     readonly accessibilityHint: string;
   };
+  readonly onTouchStart?: PressableProps["onTouchStart"];
+  readonly onPress?: PressableProps["onPress"];
 }) {
   const snoozed = props.tone === "snoozed";
   const sidebarPane = props.pane === "sidebar";
@@ -242,7 +244,8 @@ function ThreadListV2Section(props: {
       }}
       className={className}
       disabled={props.disclosure.disabled}
-      onPress={props.disclosure.onToggle}
+      onTouchStart={props.onTouchStart}
+      onPress={props.onPress ?? props.disclosure.onToggle}
       style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
     >
       {content}
@@ -315,6 +318,7 @@ export const ThreadListV2FolderHeader = memo(function ThreadListV2FolderHeader(p
       <ThreadListV2Section
         pane={props.pane}
         label={`${item.folder.name} (${item.count})${props.environmentLabel ? " · " + props.environmentLabel : ""}`}
+        onPress={() => props.onToggle(item.folderKey)}
         leading={
           <View className={cn("h-7 w-7 items-center justify-center rounded-lg", colors.background)}>
             {icon ? (
