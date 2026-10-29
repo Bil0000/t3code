@@ -122,7 +122,12 @@ const suggestionLayer = Layer.mergeAll(
         classifyThreadFolder: (input) =>
           (input.folderName === "Racing"
             ? sql`UPDATE thread_folders SET name = 'Renamed'`.pipe(Effect.orDie)
-            : Effect.void
+            : input.folderName === "Switching"
+              ? sql`
+                  UPDATE thread_folders
+                  SET rule_json = '{"branches":["*"]}', rule_set_at = '2027-01-01T00:00:00.000Z'
+                `.pipe(Effect.orDie)
+              : Effect.void
           ).pipe(
             Effect.as({
               threadIds: [
@@ -611,6 +616,12 @@ it.effect("files validated title picks and batches only eligible smart threads",
       .mutate({ type: "folder.applyRule", folderId: reviews })
       .pipe(Effect.flip);
     assert.match(stale.message, /changed while threads were sorted/);
+    assert.notInclude((yield* folders.list()).folders[0]!.threadIds, other);
+    yield* folders.mutate({ type: "folder.update", folderId: reviews, name: "Switching" });
+    const switched = yield* folders
+      .mutate({ type: "folder.applyRule", folderId: reviews })
+      .pipe(Effect.flip);
+    assert.match(switched.message, /changed while threads were sorted/);
     assert.notInclude((yield* folders.list()).folders[0]!.threadIds, other);
   }).pipe(Effect.provide(layer)),
 );

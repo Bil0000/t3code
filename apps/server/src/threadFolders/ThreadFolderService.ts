@@ -373,10 +373,9 @@ const make = Effect.gen(function* () {
           });
         }
         if (
-          rule.smart &&
-          (smart === undefined ||
-            smart.folder.name !== folder.name ||
-            smart.folder.ruleSetAt !== folder.ruleSetAt)
+          (rule.smart && smart === undefined) ||
+          (smart !== undefined &&
+            (smart.folder.name !== folder.name || smart.folder.ruleSetAt !== folder.ruleSetAt))
         ) {
           return yield* folderError("The folder changed while threads were sorted. Try again.", {
             folderId: mutation.folderId,
