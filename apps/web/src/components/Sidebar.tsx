@@ -1,5 +1,6 @@
 import {
   type EnvironmentThreadFolder,
+  resolveFolderReorder,
   scopedThreadFolderKey,
 } from "@t3tools/client-runtime/state/thread-folders";
 import {
@@ -196,7 +197,6 @@ import {
 } from "./threadActionMenu.logic";
 import {
   foldSidebarThreadFolders,
-  resolveFolderReorder,
   applySidebarThreadDrop,
   filterSidebarV2VisibleThreads,
   groupSidebarThreadsByProject,
@@ -521,6 +521,7 @@ function useSidebarThreads(input: {
     folders: threadFolders,
     collapsedKeys: new Set(collapsedFolderKeys),
     routeThreadKey: routeRowThreadKey,
+    settledShelfExpanded,
   });
   // Older settled threads load in pages; the shelf lists them only as far as they are loaded.
   const olderSettledShelf = useOlderSettledShelf({
@@ -529,7 +530,11 @@ function useSidebarThreads(input: {
     visibleCount: settledVisibleCount,
   });
   const listedSettledThreads = settledThreads.filter(olderSettledShelf.isListed);
-  useOlderSettledShelfGrowth(olderSettledShelf, listedSettledThreads);
+  // Filed settled threads fill the shelf too, so they count toward the pages it needs.
+  useOlderSettledShelfGrowth(
+    olderSettledShelf,
+    partition.settledThreads.filter(olderSettledShelf.isListed),
+  );
   const settledFolderThreadCount = threadFolderBlocks
     .filter((block) => block.settled)
     .reduce((total, block) => total + block.threads.length, 0);
@@ -580,14 +585,20 @@ function useSidebarThreads(input: {
           };
         });
   const folderRows = threadFolderBlocks.flatMap((block) => block.rows);
+  // Keyboard order follows the screen: settled folders sit under the Settled header.
+  const folderThreads = (settled: boolean) =>
+    threadFolderBlocks
+      .filter((block) => block.settled === settled)
+      .flatMap((block) => block.rows.map((row) => row.thread));
   const orderedThreads = [
-    ...folderRows.map((row) => row.thread),
+    ...folderThreads(false),
     ...pinnedThreads,
     ...(projectFolders === null
       ? activeThreads
       : projectFolders.flatMap((folder) => folder.threads)),
     ...visibleWorkingThreads,
     ...visibleSnoozedThreads,
+    ...folderThreads(true),
     ...renderedSettledThreads,
   ];
   const sectionByThreadKey = new Map<string, SidebarSection>();
@@ -1731,6 +1742,24 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       }
     })();
   };
+  const handleThreadFolderSettle = useStableCallback(
+    (folder: EnvironmentThreadFolder, action: "settle" | "unsettle") => {
+      const members =
+        threadFolderBlocksRef.current.find((block) => block.key === scopedThreadFolderKey(folder))
+          ?.threads ?? [];
+      if (action === "settle") {
+        settleThreads(
+          members.filter((thread) => thread.settledOverride !== "settled").map(threadShellKey),
+        );
+        return;
+      }
+      for (const thread of members) {
+        if (thread.settledOverride === "settled") {
+          attemptUnsettle(scopeThreadRef(thread.environmentId, thread.id));
+        }
+      }
+    },
+  );
   const handleThreadFolderContextMenu = useStableCallback(
     async (folder: EnvironmentThreadFolder, position: { x: number; y: number }) => {
       const api = readLocalApi();
@@ -1759,7 +1788,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                   id: "auto-file:enabled",
                   label: "Enabled",
                   checked: folder.rule !== null && folder.autoFile,
-                  disabled: folder.rule === null,
                 },
                 {
                   id: "auto-file:disabled",
@@ -1771,7 +1799,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                   label: folder.rule ? "Edit rule…" : "Set rule…",
                   separatorBefore: true,
                 },
-                ...(folder.rule ? [{ id: "apply-rule", label: "File matching threads now" }] : []),
+                ...(folder.rule
+                  ? [{ id: "apply-rule", label: "File matching unsettled threads now" }]
+                  : []),
               ],
             },
             ...(siblings.length > 1
@@ -1840,11 +1870,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         case "auto-file:enabled":
         case "auto-file:disabled": {
           const autoFile = clicked.value === "auto-file:enabled";
-          if (folder.rule === null || autoFile === folder.autoFile) return;
+          if (autoFile === (folder.rule !== null && folder.autoFile)) return;
+          // With no rule, opting in files by the folder's name.
           void mutateThreadFolders(folder.environmentId, {
             type: "folder.update",
             folderId: folder.id,
             autoFile,
+            ...(autoFile && folder.rule === null ? { rule: { smart: true } } : {}),
           });
           return;
         }
@@ -1865,14 +1897,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             folderId: folder.id,
           });
           return;
-        case "settle": {
-          settleThreads(settling.map(threadShellKey));
-          return;
-        }
+        case "settle":
         case "unsettle":
-          for (const thread of unsettling) {
-            attemptUnsettle(scopeThreadRef(thread.environmentId, thread.id));
-          }
+          handleThreadFolderSettle(folder, clicked.value);
           return;
       }
     },
@@ -2099,7 +2126,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     return true;
   };
   const dropThreadContextDrag = (point: { x: number; y: number }) => {
-    const folderDrop = folderDropKeyRef.current;
+    const folderDrop = folderDropAt(point);
     const key = contextDragKeyRef.current;
     const thread = key === null ? undefined : threadByKeyRef.current.get(key);
     if (folderDrop !== null && thread !== undefined) {
@@ -2318,12 +2345,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     // Settled folders fold away with the shelf, except the one holding the open thread.
     items.push(
       ...threadFolderBlocks
-        .filter(
-          (block) =>
-            block.settled &&
-            (settledShelfExpanded ||
-              block.threads.some((thread) => threadShellKey(thread) === routeRowThreadKey)),
-        )
+        .filter((block) => block.settled && (settledShelfExpanded || block.rows.length > 0))
         .map(folderMarker),
     );
     items.push(...settledRows);
@@ -3853,6 +3875,15 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                   : (folderReorder.marks.get(block.key) ?? null)
                               }
                               onDragStart={startFolderReorder}
+                              settleAction={
+                                !serverConfigs.has(block.folder.environmentId) ||
+                                block.threads.length === 0
+                                  ? null
+                                  : block.settled
+                                    ? "unsettle"
+                                    : "settle"
+                              }
+                              onSettle={handleThreadFolderSettle}
                               onToggle={handleToggleThreadFolder}
                               onRename={handleThreadFolderRename}
                               onContextMenu={handleThreadFolderContextMenu}

@@ -2,9 +2,9 @@ import { ThreadFolderId, type ThreadFolderRule } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  addRulePattern,
   buildFolderUpdate,
-  folderRuleDraft,
+  folderRuleEditor,
+  folderRuleFromEditor,
   type FolderCustomizeDraft,
 } from "./folderCustomize.logic";
 
@@ -20,7 +20,7 @@ const folder = {
 const unchanged: FolderCustomizeDraft = {
   name: folder.name,
   icon: folder.icon,
-  rule: folderRuleDraft(folder.rule),
+  rule: branchRule,
   autoFile: true,
 };
 
@@ -37,18 +37,13 @@ describe("buildFolderUpdate", () => {
     ],
     [
       "rule emptied clears it",
-      { ...unchanged, rule: folderRuleDraft(null) },
+      { ...unchanged, rule: null },
       { type: "folder.update", folderId, rule: null, autoFile: false },
     ],
     [
       "rule changed keeps the opt-out",
-      { ...unchanged, autoFile: false, rule: { ...unchanged.rule, pullRequest: true } },
-      {
-        type: "folder.update",
-        folderId,
-        rule: { branches: ["feat/*"], pullRequest: true },
-        autoFile: false,
-      },
+      { ...unchanged, autoFile: false, rule: { smart: true } },
+      { type: "folder.update", folderId, rule: { smart: true }, autoFile: false },
     ],
   ] as const)("%s", (_label, draft, expected) => {
     expect(buildFolderUpdate(folder, draft)).toEqual(expected);
@@ -56,22 +51,28 @@ describe("buildFolderUpdate", () => {
 
   it("sends nothing for auto-file alone when there is no rule", () => {
     const ruleless = { ...folder, rule: null, autoFile: false };
-    expect(
-      buildFolderUpdate(ruleless, { ...unchanged, rule: folderRuleDraft(null), autoFile: true }),
-    ).toBeNull();
+    expect(buildFolderUpdate(ruleless, { ...unchanged, rule: null, autoFile: true })).toBeNull();
   });
 });
 
-describe("addRulePattern", () => {
-  it("trims, skips blanks and case-insensitive duplicates", () => {
-    expect(addRulePattern([], "  main ")).toEqual(["main"]);
-    expect(addRulePattern(["main"], "MAIN")).toEqual(["main"]);
-    expect(addRulePattern(["main"], "   ")).toEqual(["main"]);
-    expect(
-      addRulePattern(
-        Array.from({ length: 20 }, (_, i) => `b${i}`),
-        "x",
-      ),
-    ).toHaveLength(20);
+describe("folderRuleEditor", () => {
+  it.each([
+    [null, { mode: "name", pattern: "" }],
+    [{ smart: true }, { mode: "name", pattern: "" }],
+    [{ branches: ["feat/*"] }, { mode: "branch", pattern: "feat/*" }],
+    [{ worktrees: ["t3-1"] }, { mode: "worktree", pattern: "t3-1" }],
+    [{ branches: ["a", "b"] }, null],
+    [{ branches: ["a"], pullRequest: true }, null],
+    [{ titleKeywords: ["review"] }, null],
+  ] as const)("%j", (rule, expected) => {
+    expect(folderRuleEditor(rule)).toEqual(expected);
+  });
+});
+
+describe("folderRuleFromEditor", () => {
+  it("saves a smart rule by name and drops a blank pattern", () => {
+    expect(folderRuleFromEditor("name", "")).toEqual({ smart: true });
+    expect(folderRuleFromEditor("branch", " feat/* ")).toEqual({ branches: ["feat/*"] });
+    expect(folderRuleFromEditor("worktree", "  ")).toBeNull();
   });
 });

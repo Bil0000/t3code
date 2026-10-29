@@ -3,7 +3,14 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/model
 import type { EnvironmentThreadFolder } from "@t3tools/client-runtime/state/thread-folders";
 import { resolveThreadCurrentPullRequestLink } from "@t3tools/client-runtime/thread-pull-requests";
 import { AuthOrchestrationOperateScope, type ProjectIconOverride } from "@t3tools/contracts";
-import { ChevronDownIcon, FolderClosedIcon, FolderOpenIcon, SparklesIcon } from "lucide-react";
+import {
+  CheckIcon,
+  ChevronDownIcon,
+  FolderClosedIcon,
+  FolderOpenIcon,
+  SparklesIcon,
+  Undo2Icon,
+} from "lucide-react";
 import {
   memo,
   useRef,
@@ -19,6 +26,7 @@ import { requestThreadFolderRename, useThreadFolderRenameKey } from "../../state
 import { useUiStateStore } from "../../uiStateStore";
 import { ProjectIconOverrideGlyph } from "../ProjectFavicon";
 import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { resolveSidebarFolderDot, resolveThreadLastVisitedAt } from "../Sidebar.logic";
 
 const FOLDER_DOT_CLASS_NAME = {
@@ -118,6 +126,9 @@ export const SidebarThreadFolderHeader = memo(function SidebarThreadFolderHeader
   /** Where a dragged folder would land relative to this one. */
   reorderMark: "before" | "after" | null;
   onDragStart: (folder: EnvironmentThreadFolder, event: PointerEvent) => void;
+  /** Settles every thread, or un-settles a settled folder; null hides the button. */
+  settleAction: "settle" | "unsettle" | null;
+  onSettle: (folder: EnvironmentThreadFolder, action: "settle" | "unsettle") => void;
   onToggle: (folderKey: string) => void;
   onRename: (folder: EnvironmentThreadFolder, name: string) => void;
   onContextMenu: (folder: EnvironmentThreadFolder, position: { x: number; y: number }) => void;
@@ -281,6 +292,36 @@ export const SidebarThreadFolderHeader = memo(function SidebarThreadFolderHeader
             className={cn("size-1.5 shrink-0 rounded-full", FOLDER_DOT_CLASS_NAME[dot])}
           />
         ) : null}
+        {isRenaming || props.settleAction === null || !canOperate ? null : (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  aria-label={
+                    props.settleAction === "settle" ? "Settle folder" : "Un-settle folder"
+                  }
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    props.onSettle(folder, props.settleAction!);
+                  }}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onDoubleClick={(event) => event.stopPropagation()}
+                  className="inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground opacity-0 transition-opacity hover:text-sidebar-foreground focus-visible:opacity-100 group-focus-within/thread-folder:opacity-100 group-hover/thread-folder:opacity-100 pointer-coarse:opacity-100"
+                />
+              }
+            >
+              {props.settleAction === "settle" ? (
+                <CheckIcon aria-hidden className="size-3.5" />
+              ) : (
+                <Undo2Icon aria-hidden className="size-3.5" />
+              )}
+            </TooltipTrigger>
+            <TooltipPopup side="top">
+              {props.settleAction === "settle" ? "Settle folder" : "Un-settle folder"}
+            </TooltipPopup>
+          </Tooltip>
+        )}
         {isRenaming ? null : (
           <ChevronDownIcon
             aria-hidden

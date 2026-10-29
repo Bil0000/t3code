@@ -1,7 +1,11 @@
 import { EnvironmentId, ThreadFolderId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { type EnvironmentThreadFolder, layoutThreadFolders } from "./threadFolders.ts";
+import {
+  type EnvironmentThreadFolder,
+  layoutThreadFolders,
+  resolveFolderReorder,
+} from "./threadFolders.ts";
 
 const local = EnvironmentId.make("local");
 const remote = EnvironmentId.make("remote");
@@ -46,5 +50,25 @@ describe("layoutThreadFolders", () => {
       "remote:a",
       "local:c",
     ]);
+  });
+});
+
+describe("resolveFolderReorder", () => {
+  it.each([
+    [0, { beforeFolderId: "a" }],
+    [1, null],
+    [2, null],
+    [3, { beforeFolderId: "d" }],
+    [4, { beforeFolderId: null }],
+  ])("drops b at slot %i", (index, expected) => {
+    expect(resolveFolderReorder(["a", "b", "c", "d"], ["a", "b", "c", "d"], "b", index)).toEqual(
+      expected,
+    );
+  });
+
+  it("orders within the section the folder shows in", () => {
+    const order = ["settled", "b", "c", "late"];
+    expect(resolveFolderReorder(order, ["b", "c"], "b", 2)).toEqual({ beforeFolderId: "late" });
+    expect(resolveFolderReorder(order, ["c", "b"], "b", 0)).toEqual({ beforeFolderId: "c" });
   });
 });

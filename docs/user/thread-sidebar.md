@@ -169,15 +169,16 @@ to file it, or drag it onto a loose thread to take it out. Press `mod+g` again, 
 
 A folder holds all of its threads, including pinned, snoozed, and settled ones, so they collapse
 with it. Choose **Customize…** in its menu to set an icon (any Lucide icon, an emoji, or letters)
-and a color. **Settle folder** settles every thread in it. When every thread in a folder is
-settled, the folder moves to **Settled**, still holding its threads; **Un-settle folder** brings it
-back. Deleting a folder never deletes its threads.
+and a color. Hover a folder and click the check to settle every thread in it. When every thread in
+a folder is settled, the folder moves to **Settled**, collapsed, still holding its threads; click
+the undo arrow to bring it back. Deleting a folder never deletes its threads.
 
-To keep a folder filled for you, choose **Auto-file behavior → Set rule…** and set a rule: branch or worktree
-patterns (`*` matches anything), title words, projects, providers, or whether the thread has a pull
-request. New threads that match go into the first matching folder, top to bottom. **File matching
-threads now** moves existing threads that match. Use **Auto-file behavior → Disabled** to stop. A
-thread you move by hand is never filed automatically again.
+Auto-file is off until you turn it on for a folder: choose **Auto-file behavior → Enabled**, or
+switch it on under **Customize… → Auto-file**. By default it files new threads whose work fits the
+folder's name, judged by your text model while it titles the thread, so it costs no extra call.
+Threads you filed there by hand teach it what the folder means. You can match by branch or
+worktree pattern instead (`*` matches anything). **File matching unsettled threads now** files
+existing unsettled threads once. A thread you move by hand is never filed automatically again.
 
 Agents connected through T3 Code can create folders, set rules, and file threads for you. For
 example, ask for "put the review threads in a Reviews folder".

@@ -7,7 +7,6 @@ import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 import {
   foldSidebarThreadFolders,
-  resolveFolderReorder,
   archiveSelectedThreadEntries,
   deleteSelectedThreadEntries,
   getFallbackThreadIdAfterDelete,
@@ -1486,6 +1485,7 @@ describe("foldSidebarThreadFolders", () => {
       folders: [folder, { ...folder, id: ThreadFolderId.make("empty"), threadIds: [] }],
       collapsedKeys: new Set<string>(),
       routeThreadKey: null,
+      settledShelfExpanded: true,
     };
     const result = foldSidebarThreadFolders(input);
     expect(result.blocks[0]?.rows).toEqual([
@@ -1503,6 +1503,28 @@ describe("foldSidebarThreadFolders", () => {
       folders: [{ ...folder, threadIds: [settled.id] }],
     });
     expect(allSettled.blocks[0]?.settled).toBe(true);
+    expect(allSettled.blocks[0]?.collapsed).toBe(true);
+    const opened = foldSidebarThreadFolders({
+      ...input,
+      folders: [{ ...folder, threadIds: [settled.id] }],
+      collapsedKeys: new Set([`${localEnvironmentId}:${folder.id}`]),
+    });
+    expect(opened.blocks[0]?.rows).toEqual([{ thread: settled, section: "settled" }]);
+    const shelfClosed = foldSidebarThreadFolders({
+      ...input,
+      folders: [{ ...folder, threadIds: [settled.id, snoozed.id] }],
+      settledShelfExpanded: false,
+    });
+    expect(shelfClosed.blocks[0]?.rows).toHaveLength(2);
+    const settledShelfClosed = foldSidebarThreadFolders({
+      ...input,
+      folders: [{ ...folder, threadIds: [settled.id, snoozed.id] }],
+      snoozedThreads: [],
+      settledThreads: [settled, snoozed],
+      settledShelfExpanded: false,
+      routeThreadKey: `${localEnvironmentId}:${snoozed.id}`,
+    });
+    expect(settledShelfClosed.blocks[0]?.rows).toEqual([{ thread: snoozed, section: "settled" }]);
     for (const shelf of [
       result.pinnedThreads,
       result.workingThreads,
@@ -1518,25 +1540,5 @@ describe("foldSidebarThreadFolders", () => {
     });
     expect(collapsed.blocks[0]?.rows).toEqual([{ thread: settled, section: "settled" }]);
     expect(collapsed.blocks[0]?.hiddenThreads).toEqual([pinned, working, active, snoozed]);
-  });
-});
-
-describe("resolveFolderReorder", () => {
-  it.each([
-    [0, { beforeFolderId: "a" }],
-    [1, null],
-    [2, null],
-    [3, { beforeFolderId: "d" }],
-    [4, { beforeFolderId: null }],
-  ])("drops b at slot %i", (index, expected) => {
-    expect(resolveFolderReorder(["a", "b", "c", "d"], ["a", "b", "c", "d"], "b", index)).toEqual(
-      expected,
-    );
-  });
-
-  it("orders within the section the folder shows in", () => {
-    const order = ["settled", "b", "c", "late"];
-    expect(resolveFolderReorder(order, ["b", "c"], "b", 2)).toEqual({ beforeFolderId: "late" });
-    expect(resolveFolderReorder(order, ["c", "b"], "b", 0)).toEqual({ beforeFolderId: "c" });
   });
 });

@@ -19,7 +19,6 @@ import {
   type ThreadFolderListResult,
   type ThreadFolderMutation,
   type ThreadFolderMutationResult,
-  type ThreadFolderSuggestRuleResult,
   type ThreadId,
 } from "@t3tools/contracts";
 import { AsyncResult, Atom } from "effect/reactivity";
@@ -126,31 +125,6 @@ export async function mutateThreadFolders(
       stackedThreadToast({
         type: "error",
         title: failureTitle,
-        description: failure instanceof Error ? failure.message : String(failure),
-      }),
-    );
-  }
-  return null;
-}
-
-/** Asks the environment's text model for a rule fitting the folder name; null after a toast. */
-export async function suggestThreadFolderRule(
-  environmentId: EnvironmentId,
-  folderName: string,
-): Promise<ThreadFolderSuggestRuleResult | null> {
-  const result: AtomCommandResult<ThreadFolderSuggestRuleResult, unknown> = await runAtomCommand(
-    appAtomRegistry,
-    serverEnvironment.suggestThreadFolderRule,
-    { environmentId, input: { folderName } },
-    { label: "thread folder rule suggestion", reportFailure: false },
-  );
-  if (result._tag === "Success") return result.value;
-  if (!isAtomCommandInterrupted(result)) {
-    const failure = squashAtomCommandFailure(result);
-    toastManager.add(
-      stackedThreadToast({
-        type: "error",
-        title: "Could not suggest a rule",
         description: failure instanceof Error ? failure.message : String(failure),
       }),
     );

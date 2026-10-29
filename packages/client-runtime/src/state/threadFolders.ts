@@ -68,3 +68,21 @@ export function findThreadFolder(
     ) ?? null
   );
 }
+
+/**
+ * Where a folder lands when dropped at `index` among `shown`, the folders of its section in
+ * screen order, as the server's `beforeFolderId` over the stored `order`.
+ */
+export function resolveFolderReorder<Id>(
+  order: readonly Id[],
+  shown: readonly Id[],
+  folderId: Id,
+  index: number,
+): { readonly beforeFolderId: Id | null } | null {
+  const from = shown.indexOf(folderId);
+  if (from === -1 || index === from || index === from + 1) return null;
+  const before = shown[index];
+  if (before !== undefined) return { beforeFolderId: before };
+  const rest = order.filter((id) => id !== folderId);
+  return { beforeFolderId: rest[rest.indexOf(shown.at(-1)!) + 1] ?? null };
+}

@@ -1,69 +1,40 @@
 import type {
   ProjectIconOverride,
-  ProjectId,
-  ProviderInstanceId,
   ThreadFolder,
   ThreadFolderMutation,
   ThreadFolderRule,
 } from "@t3tools/contracts";
 
-export const MAX_RULE_ENTRIES = 20;
-const MAX_RULE_PATTERN_LENGTH = 200;
-
-export interface FolderRuleDraft {
-  readonly projectIds: ReadonlyArray<ProjectId>;
-  readonly branches: ReadonlyArray<string>;
-  readonly worktrees: ReadonlyArray<string>;
-  readonly titleKeywords: ReadonlyArray<string>;
-  readonly pullRequest: boolean | null;
-  readonly providerInstanceIds: ReadonlyArray<ProviderInstanceId>;
-}
+export type FolderRuleMode = "name" | "branch" | "worktree";
 
 export interface FolderCustomizeDraft {
   readonly name: string;
   readonly icon: ProjectIconOverride | null;
-  readonly rule: FolderRuleDraft;
+  readonly rule: ThreadFolderRule | null;
   readonly autoFile: boolean;
 }
 
-export function folderRuleDraft(rule: ThreadFolderRule | null): FolderRuleDraft {
-  return {
-    projectIds: rule?.projectIds ?? [],
-    branches: rule?.branches ?? [],
-    worktrees: rule?.worktrees ?? [],
-    titleKeywords: rule?.titleKeywords ?? [],
-    pullRequest: rule?.pullRequest ?? null,
-    providerInstanceIds: rule?.providerInstanceIds ?? [],
-  };
+/** The simple editor state for a rule, or null when the rule needs more than one condition. */
+export function folderRuleEditor(
+  rule: ThreadFolderRule | null,
+): { readonly mode: FolderRuleMode; readonly pattern: string } | null {
+  if (rule === null) return { mode: "name", pattern: "" };
+  if (Object.values(rule).filter((value) => value !== undefined).length !== 1) return null;
+  if (rule.smart === true) return { mode: "name", pattern: "" };
+  const [pattern, ...rest] = rule.branches ?? rule.worktrees ?? [];
+  if (pattern === undefined || rest.length > 0) return null;
+  return { mode: rule.branches ? "branch" : "worktree", pattern };
 }
 
-/** Builds fields in one fixed order, so equal rules serialize equally. */
-export function folderRuleFromDraft(draft: FolderRuleDraft): ThreadFolderRule | null {
-  const rule: ThreadFolderRule = {
-    ...(draft.projectIds.length > 0 ? { projectIds: draft.projectIds } : {}),
-    ...(draft.branches.length > 0 ? { branches: draft.branches } : {}),
-    ...(draft.worktrees.length > 0 ? { worktrees: draft.worktrees } : {}),
-    ...(draft.titleKeywords.length > 0 ? { titleKeywords: draft.titleKeywords } : {}),
-    ...(draft.pullRequest !== null ? { pullRequest: draft.pullRequest } : {}),
-    ...(draft.providerInstanceIds.length > 0
-      ? { providerInstanceIds: draft.providerInstanceIds }
-      : {}),
-  };
-  return Object.keys(rule).length > 0 ? rule : null;
-}
-
-/** Adds a trimmed pattern once; returns the list unchanged when it cannot take it. */
-export function addRulePattern(list: ReadonlyArray<string>, value: string): ReadonlyArray<string> {
-  const pattern = value.trim();
-  if (
-    pattern === "" ||
-    pattern.length > MAX_RULE_PATTERN_LENGTH ||
-    list.length >= MAX_RULE_ENTRIES ||
-    list.some((entry) => entry.toLowerCase() === pattern.toLowerCase())
-  ) {
-    return list;
-  }
-  return [...list, pattern];
+/** A blank pattern is no rule, so an empty rule is never saved. */
+export function folderRuleFromEditor(
+  mode: FolderRuleMode,
+  pattern: string,
+): ThreadFolderRule | null {
+  if (mode === "name") return { smart: true };
+  const value = pattern.trim();
+  if (value === "") return null;
+  return mode === "branch" ? { branches: [value] } : { worktrees: [value] };
 }
 
 const sameJson = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
@@ -76,18 +47,16 @@ export function buildFolderUpdate(
   draft: FolderCustomizeDraft,
 ): FolderUpdate | null {
   const name = draft.name.trim();
-  const rule = folderRuleFromDraft(draft.rule);
-  const current = folder.rule === null ? null : folderRuleFromDraft(folderRuleDraft(folder.rule));
-  const ruleChanged = !sameJson(rule, current);
-  const autoFile = rule !== null && draft.autoFile;
+  const ruleChanged = !sameJson(draft.rule, folder.rule);
+  const autoFile = draft.rule !== null && draft.autoFile;
   const update: FolderUpdate = {
     type: "folder.update",
     folderId: folder.id,
     ...(name !== "" && name !== folder.name ? { name } : {}),
     ...(!sameJson(draft.icon, folder.icon) ? { icon: draft.icon } : {}),
-    ...(ruleChanged ? { rule } : {}),
-    // The server re-enables auto-file when a rule changes, so a kept opt-out must be sent.
-    ...((ruleChanged && rule !== null) || autoFile !== folder.autoFile ? { autoFile } : {}),
+    ...(ruleChanged ? { rule: draft.rule } : {}),
+    // A rule change carries the switch too, so one save sets both.
+    ...(ruleChanged || autoFile !== folder.autoFile ? { autoFile } : {}),
   };
   return Object.keys(update).length > 2 ? update : null;
 }

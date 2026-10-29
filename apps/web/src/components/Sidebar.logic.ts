@@ -58,6 +58,8 @@ export function foldSidebarThreadFolders<T extends EnvironmentThreadShell>(input
   readonly folders: readonly EnvironmentThreadFolder[];
   readonly collapsedKeys: ReadonlySet<string>;
   readonly routeThreadKey: string | null;
+  /** A closed Settled shelf folds settled folders away like a collapsed folder. */
+  readonly settledShelfExpanded: boolean;
 }) {
   const ordered: Array<{ readonly thread: T; readonly section: SidebarFolderSection }> = [
     ...input.pinnedThreads.map((thread) => ({ thread, section: "pinned" as const })),
@@ -81,14 +83,17 @@ export function foldSidebarThreadFolders<T extends EnvironmentThreadShell>(input
     snoozedThreads: input.snoozedThreads.filter((thread) => unfiled.has(thread)),
     settledThreads: input.settledThreads.filter((thread) => unfiled.has(thread)),
     blocks: layout.blocks.map((block) => {
-      const collapsed = input.collapsedKeys.has(block.key);
       const rows = block.threads.map((thread) => ({ thread, section: sectionOf.get(thread)! }));
+      // A folder whose every member is settled moves to the Settled shelf, card and all.
+      const settled = rows.length > 0 && rows.every((row) => row.section === "settled");
+      // Settled folders start collapsed, so a stored key flips each folder from its default.
+      const collapsed =
+        input.collapsedKeys.has(block.key) !== settled || (settled && !input.settledShelfExpanded);
       const hidden = collapsed ? rows.filter((row) => !isRoute(row.thread)) : [];
       return {
         ...block,
         collapsed,
-        // A folder whose every member is settled moves to the Settled shelf, card and all.
-        settled: rows.length > 0 && rows.every((row) => row.section === "settled"),
+        settled,
         rows: collapsed ? rows.filter((row) => isRoute(row.thread)) : rows,
         hiddenThreads: hidden.map((row) => row.thread),
         // Parked members never light the folder's status dot.
@@ -98,24 +103,6 @@ export function foldSidebarThreadFolders<T extends EnvironmentThreadShell>(input
       };
     }),
   };
-}
-
-/**
- * Where a folder lands when dropped at `index` among `shown`, the folders of its section in
- * screen order, as the server's `beforeFolderId` over the stored `order`.
- */
-export function resolveFolderReorder<Id>(
-  order: readonly Id[],
-  shown: readonly Id[],
-  folderId: Id,
-  index: number,
-): { readonly beforeFolderId: Id | null } | null {
-  const from = shown.indexOf(folderId);
-  if (from === -1 || index === from || index === from + 1) return null;
-  const before = shown[index];
-  if (before !== undefined) return { beforeFolderId: before };
-  const rest = order.filter((id) => id !== folderId);
-  return { beforeFolderId: rest[rest.indexOf(shown.at(-1)!) + 1] ?? null };
 }
 
 export function shouldNavigateAfterThreadPark(input: {
