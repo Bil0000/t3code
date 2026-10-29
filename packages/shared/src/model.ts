@@ -196,12 +196,33 @@ function withDescriptorCurrentValue(
   };
 }
 
+// Ultracode was a Claude effort level before it became its own toggle; that level ran at xhigh.
+function withLegacyUltracodeEffort(
+  descriptors: ReadonlyArray<ProviderOptionDescriptor>,
+  selections: ReadonlyArray<ProviderOptionSelection> | null | undefined,
+): ReadonlyArray<ProviderOptionSelection> | null | undefined {
+  if (
+    getRawSelectionValueById(selections, "effort") !== "ultracode" ||
+    !descriptors.some(
+      (descriptor) => descriptor.id === "ultracode" && descriptor.type === "boolean",
+    )
+  ) {
+    return selections;
+  }
+  return [
+    ...(selections ?? []).filter(({ id }) => id !== "effort" && id !== "ultracode"),
+    { id: "effort", value: "xhigh" },
+    { id: "ultracode", value: true },
+  ];
+}
+
 export function getProviderOptionDescriptors(input: {
   caps: ModelCapabilities;
   selections?: ReadonlyArray<ProviderOptionSelection> | null | undefined;
 }): ReadonlyArray<ProviderOptionDescriptor> {
-  const { caps, selections } = input;
+  const { caps } = input;
   const baseDescriptors = (caps.optionDescriptors ?? []).map(cloneDescriptor);
+  const selections = withLegacyUltracodeEffort(baseDescriptors, input.selections);
 
   return baseDescriptors.map((descriptor) =>
     withDescriptorCurrentValue(
@@ -312,7 +333,9 @@ export function buildExplicitProviderOptionSelectionsFromDescriptors(
   if (!selections || selections.length === 0) {
     return undefined;
   }
-  const explicitIds = new Set(selections.map((selection) => selection.id));
+  const explicitIds = new Set(
+    (withLegacyUltracodeEffort(descriptors ?? [], selections) ?? []).map(({ id }) => id),
+  );
   const normalized = buildProviderOptionSelectionsFromDescriptors(descriptors)?.filter(
     (selection) => explicitIds.has(selection.id),
   );
