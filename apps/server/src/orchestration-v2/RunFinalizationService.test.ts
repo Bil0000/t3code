@@ -5,6 +5,7 @@ import {
   ThreadId,
   type OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
@@ -20,6 +21,8 @@ it.effect("runs refreshes per checkout one at a time, without blocking finalize"
   const runId = RunId.make("run_refresh_failure");
   const scopeId = CheckpointScopeId.make("scope_refresh_failure");
   const captured: string[] = [];
+  const releaseFirst = Deferred.makeUnsafe<void>();
+  const secondRan = Deferred.makeUnsafe<void>();
   const layer = RunFinalization.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -39,9 +42,12 @@ it.effect("runs refreshes per checkout one at a time, without blocking finalize"
         }),
         Layer.succeed(RunFinalization.RunFinalizationObserver, {
           refresh: () =>
-            Effect.sync(() => {
+            Effect.suspend(() => {
               captured.push("refresh");
-            }).pipe(Effect.andThen(Effect.never)),
+              return captured.filter((step) => step === "refresh").length === 1
+                ? Deferred.await(releaseFirst)
+                : Deferred.succeed(secondRan, undefined);
+            }),
           refreshAfterTurn: () => Effect.void,
         }),
       ),
@@ -52,6 +58,9 @@ it.effect("runs refreshes per checkout one at a time, without blocking finalize"
     yield* service.finalize({ threadId, runId, scopeId });
     yield* service.finalize({ threadId, runId, scopeId });
     assert.deepEqual(captured, ["checkpoint", "refresh", "checkpoint"]);
+    yield* Deferred.succeed(releaseFirst, undefined);
+    yield* Deferred.await(secondRan);
+    assert.deepEqual(captured, ["checkpoint", "refresh", "checkpoint", "refresh"]);
   }).pipe(Effect.provide(layer));
 });
 
