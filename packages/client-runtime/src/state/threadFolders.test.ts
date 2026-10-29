@@ -5,6 +5,9 @@ import {
   type EnvironmentThreadFolder,
   layoutThreadFolders,
   resolveFolderReorder,
+  threadFolderCollect,
+  threadFolderCollectChoices,
+  threadFolderCollectUpdate,
 } from "./threadFolders.ts";
 
 const local = EnvironmentId.make("local");
@@ -70,5 +73,62 @@ describe("resolveFolderReorder", () => {
     const order = ["settled", "b", "c", "late"];
     expect(resolveFolderReorder(order, ["b", "c"], "b", 2)).toEqual({ beforeFolderId: "late" });
     expect(resolveFolderReorder(order, ["c", "b"], "b", 0)).toEqual({ beforeFolderId: "c" });
+  });
+});
+
+describe("threadFolderCollect", () => {
+  const base = folder(local, "f", []);
+  it.each([
+    [null, true, { by: "off" }],
+    [{ smart: true }, false, { by: "off" }],
+    [{ smart: true }, true, { by: "topic" }],
+    [{ branches: ["feat/*"] }, true, { by: "branch", value: "feat/*" }],
+    [{ worktrees: ["t3-1"] }, true, { by: "worktree", value: "t3-1" }],
+    [{ branches: ["a", "b"] }, true, { by: "custom" }],
+    [{ smart: true, titleKeywords: ["x"] }, true, { by: "custom" }],
+  ] as const)("%j autoFile=%s", (rule, autoFile, expected) => {
+    expect(threadFolderCollect({ ...base, rule, autoFile })).toEqual(expected);
+  });
+
+  it("builds the update for a choice and skips the current one", () => {
+    const topic = { ...base, rule: { smart: true }, autoFile: true };
+    expect(threadFolderCollectUpdate(topic, { by: "topic" })).toBeNull();
+    expect(threadFolderCollectUpdate(topic, { by: "off" })).toEqual({
+      type: "folder.update",
+      folderId: base.id,
+      autoFile: false,
+    });
+    expect(threadFolderCollectUpdate(base, { by: "off" })).toBeNull();
+    expect(threadFolderCollectUpdate(topic, { by: "branch", value: "main" })).toEqual({
+      type: "folder.update",
+      folderId: base.id,
+      rule: { branches: ["main"] },
+      autoFile: true,
+    });
+  });
+});
+
+describe("threadFolderCollectChoices", () => {
+  const shell = (id: string, branch: string | null, worktreePath: string | null, at: string) => ({
+    ...thread(local, id),
+    branch,
+    worktreePath,
+    updatedAt: at,
+    archivedAt: null,
+  });
+  it("lists the folder's own branches first, then recent ones, keeping the current value", () => {
+    const choices = threadFolderCollectChoices(
+      { ...folder(local, "f", ["member"]), rule: { branches: ["old/*"] }, autoFile: true },
+      [
+        shell("recent", "feat/b", "/w/t3-2/", "2026-01-03"),
+        shell("member", "feat/a", "/w/t3-1", "2026-01-01"),
+        shell("dupe", "feat/b", null, "2026-01-02"),
+        { ...shell("remote", "remote", null, "2026-01-09"), environmentId: remote },
+      ],
+    );
+    expect(choices).toEqual({
+      branches: ["old/*", "feat/a", "feat/b"],
+      worktrees: ["t3-1", "t3-2"],
+    });
   });
 });

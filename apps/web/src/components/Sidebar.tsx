@@ -2,6 +2,9 @@ import {
   type EnvironmentThreadFolder,
   resolveFolderReorder,
   scopedThreadFolderKey,
+  threadFolderCollect,
+  threadFolderCollectChoices,
+  threadFolderCollectUpdate,
 } from "@t3tools/client-runtime/state/thread-folders";
 import {
   useThreadFolders,
@@ -1687,10 +1690,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       attemptSettle(scopeThreadRef(thread.environmentId, thread.id), { coSettlingKeys });
     }
   };
-  const [folderCustomizeTarget, setFolderCustomizeTarget] = useState<{
-    readonly folder: EnvironmentThreadFolder;
-    readonly tab: "appearance" | "auto-file";
-  } | null>(null);
+  const [folderCustomizeTarget, setFolderCustomizeTarget] =
+    useState<EnvironmentThreadFolder | null>(null);
   const handleToggleThreadFolder = useStableCallback(toggleThreadFolder);
   const handleThreadFolderRename = useStableCallback(
     (folder: EnvironmentThreadFolder, name: string) => {
@@ -1773,34 +1774,58 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       const siblings = folderSection(folder).shown;
       const index = siblings.findIndex((candidate) => candidate.id === folder.id);
       const supportsSettlement = serverConfigs.has(folder.environmentId);
+      const collect = threadFolderCollect(folder);
+      const choices = threadFolderCollectChoices(folder, threads);
+      const choiceItems = (by: "branch" | "worktree", values: ReadonlyArray<string>) =>
+        values.length === 0
+          ? [{ id: `collect:${by}:none`, label: "None yet", disabled: true }]
+          : values.map((value) => ({
+              id: `collect:${by}:${value}`,
+              label: value,
+              checked: collect.by === by && collect.value === value,
+            }));
       const clicked = await settlePromise(() =>
         api.contextMenu.show(
           [
             { id: "rename", label: "Rename folder", icon: "pencil", disabled: !canOperate },
             { id: "customize", label: "Customize…", icon: "folder", disabled: !canOperate },
             {
-              id: "auto-file-behavior",
-              label: "Auto-file behavior",
+              id: "collect",
+              label: "Collect new threads",
               icon: "folder-tree",
               disabled: !canOperate,
               children: [
+                { id: "collect:off", label: "Off", checked: collect.by === "off" },
+                { id: "collect:topic", label: "By topic", checked: collect.by === "topic" },
                 {
-                  id: "auto-file:enabled",
-                  label: "Enabled",
-                  checked: folder.rule !== null && folder.autoFile,
+                  id: "collect:branch",
+                  label: collect.by === "branch" ? `By branch: ${collect.value}` : "By branch",
+                  children: choiceItems("branch", choices.branches),
                 },
                 {
-                  id: "auto-file:disabled",
-                  label: "Disabled",
-                  checked: folder.rule === null || !folder.autoFile,
+                  id: "collect:worktree",
+                  label:
+                    collect.by === "worktree" ? `By worktree: ${collect.value}` : "By worktree",
+                  children: choiceItems("worktree", choices.worktrees),
                 },
-                {
-                  id: "auto-file",
-                  label: folder.rule ? "Edit rule…" : "Set rule…",
-                  separatorBefore: true,
-                },
+                ...(collect.by === "custom"
+                  ? [
+                      {
+                        id: "collect:custom",
+                        label: "Set by an agent",
+                        checked: true,
+                        disabled: true,
+                      },
+                    ]
+                  : []),
                 ...(folder.rule
-                  ? [{ id: "apply-rule", label: "File matching unsettled threads now" }]
+                  ? [
+                      {
+                        id: "apply-rule",
+                        label: "Collect existing threads now",
+                        separatorBefore: true,
+                      },
+                    ]
                   : []),
               ],
             },
@@ -1854,37 +1879,33 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       );
       if (
         clicked._tag === "Failure" ||
+        clicked.value === null ||
         !readEnvironmentScope(folder.environmentId, AuthOrchestrationOperateScope)
       )
         return;
+      const [, by, ...value] = clicked.value.split(":");
+      if (clicked.value.startsWith("collect:")) {
+        const update =
+          by === "off" || by === "topic"
+            ? threadFolderCollectUpdate(folder, { by })
+            : (by === "branch" || by === "worktree") && value.length > 0
+              ? threadFolderCollectUpdate(folder, { by, value: value.join(":") })
+              : null;
+        if (update) void mutateThreadFolders(folder.environmentId, update);
+        return;
+      }
       switch (clicked.value) {
         case "rename":
           requestThreadFolderRename(scopedThreadFolderKey(folder));
           return;
         case "customize":
-          setFolderCustomizeTarget({ folder, tab: "appearance" });
+          setFolderCustomizeTarget(folder);
           return;
-        case "auto-file":
-          setFolderCustomizeTarget({ folder, tab: "auto-file" });
-          return;
-        case "auto-file:enabled":
-        case "auto-file:disabled": {
-          const autoFile = clicked.value === "auto-file:enabled";
-          if (autoFile === (folder.rule !== null && folder.autoFile)) return;
-          // With no rule, opting in files by the folder's name.
-          void mutateThreadFolders(folder.environmentId, {
-            type: "folder.update",
-            folderId: folder.id,
-            autoFile,
-            ...(autoFile && folder.rule === null ? { rule: { smart: true } } : {}),
-          });
-          return;
-        }
         case "apply-rule":
           void mutateThreadFolders(
             folder.environmentId,
             { type: "folder.applyRule", folderId: folder.id },
-            "Could not file matching threads",
+            "Could not collect threads",
           );
           return;
         case "move-up":
@@ -4118,18 +4139,14 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         </SidebarGroup>
       </SidebarContent>
       {folderCustomizeTarget &&
-      readEnvironmentScope(
-        folderCustomizeTarget.folder.environmentId,
-        AuthOrchestrationOperateScope,
-      ) ? (
+      readEnvironmentScope(folderCustomizeTarget.environmentId, AuthOrchestrationOperateScope) ? (
         <Suspense fallback={null}>
           <FolderCustomizeDialog
             folder={
               threadFolderBlocks.find(
-                (block) => block.key === scopedThreadFolderKey(folderCustomizeTarget.folder),
-              )?.folder ?? folderCustomizeTarget.folder
+                (block) => block.key === scopedThreadFolderKey(folderCustomizeTarget),
+              )?.folder ?? folderCustomizeTarget
             }
-            initialTab={folderCustomizeTarget.tab}
             open
             onOpenChange={(open) => {
               if (!open) setFolderCustomizeTarget(null);

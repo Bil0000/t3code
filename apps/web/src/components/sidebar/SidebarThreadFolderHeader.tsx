@@ -268,7 +268,7 @@ export const SidebarThreadFolderHeader = memo(function SidebarThreadFolderHeader
         )}
         {folder.rule !== null && folder.autoFile ? (
           <SparklesIcon
-            aria-label="Auto-files new threads"
+            aria-label="Collects new threads"
             className="size-3 shrink-0 text-sidebar-muted-foreground"
           />
         ) : null}

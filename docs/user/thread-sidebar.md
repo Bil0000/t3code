@@ -173,12 +173,16 @@ and a color. Hover a folder and click the check to settle every thread in it. Wh
 a folder is settled, the folder moves to **Settled**, collapsed, still holding its threads; click
 the undo arrow to bring it back. Deleting a folder never deletes its threads.
 
-Auto-file is off until you turn it on for a folder: choose **Auto-file behavior → Enabled**, or
-switch it on under **Customize… → Auto-file**. By default it files new threads whose work fits the
-folder's name, judged by your text model while it titles the thread, so it costs no extra call.
-Threads you filed there by hand teach it what the folder means. You can match by branch or
-worktree pattern instead (`*` matches anything). **File matching unsettled threads now** files
-existing unsettled threads once. A thread you move by hand is never filed automatically again.
+A folder can also collect new threads for you. Open its menu and choose **Collect new threads**:
+
+- **By topic** files new threads whose work fits the folder's name. Your text model judges this
+  while it titles the thread, so it costs no extra call. Threads you filed there by hand teach it
+  what the folder means.
+- **By branch** or **By worktree** lists recent branches and worktrees to pick from.
+- **Off** stops collecting. It is off for every new folder.
+
+**Collect existing threads now** files unsettled threads that already match. A thread you move by
+hand is never collected automatically again.
 
 Agents connected through T3 Code can create folders, set rules, and file threads for you. For
 example, ask for "put the review threads in a Reviews folder".

@@ -1,4 +1,10 @@
-import type { EnvironmentId, ThreadFolder, ThreadId } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  ThreadFolder,
+  ThreadFolderMutation,
+  ThreadFolderRule,
+  ThreadId,
+} from "@t3tools/contracts";
 
 export interface EnvironmentThreadFolder extends ThreadFolder {
   readonly environmentId: EnvironmentId;
@@ -85,4 +91,91 @@ export function resolveFolderReorder<Id>(
   if (before !== undefined) return { beforeFolderId: before };
   const rest = order.filter((id) => id !== folderId);
   return { beforeFolderId: rest[rest.indexOf(shown.at(-1)!) + 1] ?? null };
+}
+
+/** How a folder collects new threads, in the terms the folder menu offers. */
+export type ThreadFolderCollect =
+  | { readonly by: "off" }
+  | { readonly by: "topic" }
+  | { readonly by: "branch" | "worktree"; readonly value: string }
+  | { readonly by: "custom" };
+
+export function threadFolderCollect(
+  folder: Pick<ThreadFolder, "rule" | "autoFile">,
+): ThreadFolderCollect {
+  const rule = folder.rule;
+  if (rule === null || !folder.autoFile) return { by: "off" };
+  if (Object.values(rule).filter((value) => value !== undefined).length === 1) {
+    if (rule.smart === true) return { by: "topic" };
+    if (rule.branches?.length === 1) return { by: "branch", value: rule.branches[0]! };
+    if (rule.worktrees?.length === 1) return { by: "worktree", value: rule.worktrees[0]! };
+  }
+  return { by: "custom" };
+}
+
+/** The `folder.update` that makes a folder collect by `choice`, or null when it already does. */
+export function threadFolderCollectUpdate(
+  folder: Pick<ThreadFolder, "id" | "rule" | "autoFile">,
+  choice: Exclude<ThreadFolderCollect, { readonly by: "custom" }>,
+): Extract<ThreadFolderMutation, { readonly type: "folder.update" }> | null {
+  if (choice.by === "off") {
+    return folder.autoFile ? { type: "folder.update", folderId: folder.id, autoFile: false } : null;
+  }
+  const rule: ThreadFolderRule =
+    choice.by === "topic"
+      ? { smart: true }
+      : choice.by === "branch"
+        ? { branches: [choice.value] }
+        : { worktrees: [choice.value] };
+  if (folder.autoFile && JSON.stringify(folder.rule) === JSON.stringify(rule)) return null;
+  return { type: "folder.update", folderId: folder.id, rule, autoFile: true };
+}
+
+/**
+ * Branches and worktree names to offer, from the folder's own threads first and then the
+ * environment's most recent ones, with the folder's current value always included.
+ */
+export function threadFolderCollectChoices(
+  folder: EnvironmentThreadFolder,
+  threads: ReadonlyArray<{
+    readonly environmentId: EnvironmentId;
+    readonly id: ThreadId;
+    readonly branch: string | null;
+    readonly worktreePath: string | null;
+    readonly updatedAt: string;
+    readonly archivedAt: string | null;
+  }>,
+  limit = 6,
+): { readonly branches: ReadonlyArray<string>; readonly worktrees: ReadonlyArray<string> } {
+  const members = new Set<string>(folder.threadIds);
+  const current = threadFolderCollect(folder);
+  // Ranks each value by its best thread: folder members first, then the most recent.
+  const rank = (by: "branch" | "worktree") => {
+    const best = new Map<string, readonly [member: number, updatedAt: string]>();
+    for (const thread of threads) {
+      if (thread.environmentId !== folder.environmentId || thread.archivedAt !== null) continue;
+      const value =
+        by === "branch"
+          ? thread.branch
+          : (thread.worktreePath
+              ?.replace(/[\\/]+$/, "")
+              .split(/[\\/]/)
+              .at(-1) ?? null);
+      if (!value) continue;
+      const score = [Number(members.has(thread.id)), thread.updatedAt] as const;
+      const previous = best.get(value);
+      if (
+        !previous ||
+        score[0] > previous[0] ||
+        (score[0] === previous[0] && score[1] > previous[1])
+      )
+        best.set(value, score);
+    }
+    const ordered = [...best]
+      .sort(([, a], [, b]) => b[0] - a[0] || b[1].localeCompare(a[1]))
+      .map(([value]) => value);
+    const pinned = current.by === by ? [current.value] : [];
+    return [...new Set([...pinned, ...ordered])].slice(0, limit);
+  };
+  return { branches: rank("branch"), worktrees: rank("worktree") };
 }
