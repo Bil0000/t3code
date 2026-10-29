@@ -81,6 +81,12 @@ export function readEnvironmentSupportsThreadFolders(environmentId: EnvironmentI
   return appAtomRegistry.get(threadFolderEnvironmentIdsAtom).includes(environmentId);
 }
 
+export function readThreadFoldersLoaded(environmentId: EnvironmentId): boolean {
+  return AsyncResult.isSuccess(
+    appAtomRegistry.get(serverEnvironment.threadFoldersLive({ environmentId, input: {} })),
+  );
+}
+
 export function readThreadFolder(ref: ScopedThreadRef): EnvironmentThreadFolder | null {
   return findThreadFolder(readThreadFolders(), {
     environmentId: ref.environmentId,

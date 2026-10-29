@@ -61,6 +61,7 @@ import {
   moveThreadsToFolder,
   readEnvironmentSupportsThreadFolders,
   readThreadFolder,
+  readThreadFoldersLoaded,
   requestThreadFolderRename,
 } from "../../state/threadFolders";
 import { scopedThreadFolderKey } from "@t3tools/client-runtime/state/thread-folders";
@@ -604,7 +605,7 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
       ) {
         return false;
       }
-      if (event.repeat) return;
+      if (event.repeat || !readThreadFoldersLoaded(environmentId)) return;
       const { threadId } = activeThreadRef;
       if (readThreadFolder(activeThreadRef) !== null) {
         void moveThreadsToFolder({ environmentId, threadIds: [threadId], folderId: null });
