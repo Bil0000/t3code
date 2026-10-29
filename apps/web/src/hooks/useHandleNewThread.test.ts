@@ -243,6 +243,10 @@ vi.mock("../lib/chatThreadActions", async (importOriginal) => ({
   hasExplicitComposerModelSelection: () => false,
   resolveNewThreadModelSelectionOverride: () => testState.modelSelectionOverride,
 }));
+vi.mock("../providerInstances", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../providerInstances")>()),
+  resolveDefaultProviderModelSelection: () => null,
+}));
 vi.mock("../lib/t3ProjectFileDefaults", () => ({
   readT3ProjectFile: () => testState.projectFileRead,
 }));
