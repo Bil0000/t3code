@@ -17,12 +17,15 @@ import * as Schema from "effect/Schema";
 import { createMuseSdkHost, createMuseSdkHostEffect, type MuseSdkHost } from "./sdk.ts";
 import { museModelCapabilities, resolveMuseReasoningEffort } from "./modelCatalog.ts";
 import type { ProviderTextGeneration } from "@t3tools/provider-core/server/textGeneration";
-import { investigationUnsupported } from "@t3tools/provider-core/server/textGenerationOperations";
+import {
+  investigationUnsupported,
+  validFolderPick,
+} from "@t3tools/provider-core/server/textGenerationOperations";
 import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
-  buildThreadFolderRulePrompt,
+  buildThreadFolderClassificationPrompt,
   buildThreadTitlePrompt,
 } from "@t3tools/provider-core/server/textGenerationPrompts";
 import {
@@ -339,16 +342,19 @@ export const makeMuseTextGeneration = Effect.fn("makeMuseTextGeneration")(functi
       ...buildThreadTitlePrompt(input),
       modelSelection: input.modelSelection,
     });
-    return { title: sanitizeThreadTitle(generated.title) };
+    return {
+      title: sanitizeThreadTitle(generated.title),
+      ...validFolderPick(input, generated),
+    };
   });
   const generateReviewGuide: ProviderTextGeneration["generateReviewGuide"] = () =>
     Effect.fail(investigationUnsupported("generateReviewGuide", "Muse Code"));
-  const generateThreadFolderRule: ProviderTextGeneration["generateThreadFolderRule"] = Effect.fn(
-    "MuseTextGeneration.generateThreadFolderRule",
+  const classifyThreadFolder: ProviderTextGeneration["classifyThreadFolder"] = Effect.fn(
+    "MuseTextGeneration.classifyThreadFolder",
   )(function* (input) {
     return yield* runMuseJson({
-      operation: "generateThreadFolderRule",
-      ...buildThreadFolderRulePrompt(input),
+      operation: "classifyThreadFolder",
+      ...buildThreadFolderClassificationPrompt(input),
       modelSelection: input.modelSelection,
     });
   });
@@ -358,6 +364,6 @@ export const makeMuseTextGeneration = Effect.fn("makeMuseTextGeneration")(functi
     generateBranchName,
     generateThreadTitle,
     generateReviewGuide,
-    generateThreadFolderRule,
+    classifyThreadFolder,
   } satisfies ProviderTextGeneration;
 });

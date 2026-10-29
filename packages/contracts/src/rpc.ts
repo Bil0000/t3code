@@ -402,8 +402,6 @@ import {
   ThreadFolderListResult,
   ThreadFolderMutation,
   ThreadFolderMutationResult,
-  ThreadFolderSuggestRuleInput,
-  ThreadFolderSuggestRuleResult,
 } from "./threadFolder.ts";
 
 export const WS_METHODS = {
@@ -539,7 +537,6 @@ export const WS_METHODS = {
 
   threadFoldersSubscribe: "threadFolders.subscribe",
   threadFoldersMutate: "threadFolders.mutate",
-  threadFoldersSuggestRule: "threadFolders.suggestRule",
 
   scheduledTasksSubscribe: "scheduledTasks.subscribe",
   scheduledTasksUpsert: "scheduledTasks.upsert",
@@ -1870,12 +1867,6 @@ const WsThreadFoldersMutateRpc = Rpc.make(WS_METHODS.threadFoldersMutate, {
   error: Schema.Union([ThreadFolderError, EnvironmentAuthorizationError]),
 });
 
-const WsThreadFoldersSuggestRuleRpc = Rpc.make(WS_METHODS.threadFoldersSuggestRule, {
-  payload: ThreadFolderSuggestRuleInput,
-  success: ThreadFolderSuggestRuleResult,
-  error: Schema.Union([ThreadFolderError, EnvironmentAuthorizationError]),
-});
-
 const WsScheduledTasksSubscribeRpc = Rpc.make(WS_METHODS.scheduledTasksSubscribe, {
   payload: ScheduledTaskListInput,
   success: ScheduledTaskListResult,
@@ -2022,7 +2013,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerSignalProcessRpc,
   WsThreadFoldersSubscribeRpc,
   WsThreadFoldersMutateRpc,
-  WsThreadFoldersSuggestRuleRpc,
   WsScheduledTasksSubscribeRpc,
   WsScheduledTasksUpsertRpc,
   WsScheduledTasksSetEnabledRpc,

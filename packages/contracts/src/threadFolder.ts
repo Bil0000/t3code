@@ -25,6 +25,7 @@ const ThreadFolderRuleList = <S extends Schema.Top>(item: S) =>
  * any entry of a list may match. Patterns are case-insensitive and `*` matches any run.
  */
 export const ThreadFolderRule = Schema.Struct({
+  smart: Schema.optional(Schema.Boolean),
   projectIds: Schema.optional(ThreadFolderRuleList(ProjectId)),
   branches: Schema.optional(ThreadFolderRuleList(ThreadFolderRulePattern)),
   /** Matches the full worktree path or its last segment. */
@@ -111,17 +112,6 @@ export const ThreadFolderMutationResult = Schema.Struct({
   folders: ForwardCompatibleArray(ThreadFolder),
 });
 export type ThreadFolderMutationResult = typeof ThreadFolderMutationResult.Type;
-
-export const ThreadFolderSuggestRuleInput = Schema.Struct({
-  folderName: ThreadFolderName,
-});
-export type ThreadFolderSuggestRuleInput = typeof ThreadFolderSuggestRuleInput.Type;
-
-export const ThreadFolderSuggestRuleResult = Schema.Struct({
-  rule: ThreadFolderRule,
-  icon: Schema.NullOr(ProjectIconOverride),
-});
-export type ThreadFolderSuggestRuleResult = typeof ThreadFolderSuggestRuleResult.Type;
 
 export class ThreadFolderError extends Schema.TaggedError<ThreadFolderError>()(
   "ThreadFolderError",

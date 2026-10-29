@@ -9,17 +9,33 @@ export interface ThreadFolderRuleSubject {
   readonly hasPullRequest: boolean;
 }
 
-const globPattern = (pattern: string) =>
-  new RegExp(
-    `^${pattern
-      .toLowerCase()
-      .split("*")
-      .map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
-      .join(".*")}$`,
-  );
+// Greedy `*` matching, at most pattern × value steps; a regex of many `.*` backtracks exponentially.
+function matchesGlob(pattern: string, value: string): boolean {
+  let p = 0;
+  let v = 0;
+  let star = -1;
+  let resume = 0;
+  while (v < value.length) {
+    if (p < pattern.length && pattern[p] === "*") {
+      star = p++;
+      resume = v;
+    } else if (p < pattern.length && pattern[p] === value[v]) {
+      p++;
+      v++;
+    } else if (star !== -1) {
+      p = star + 1;
+      v = ++resume;
+    } else {
+      return false;
+    }
+  }
+  while (pattern[p] === "*") p++;
+  return p === pattern.length;
+}
 
 const matchesAny = (value: string | null, patterns: ReadonlyArray<string>) =>
-  value !== null && patterns.some((pattern) => globPattern(pattern).test(value.toLowerCase()));
+  value !== null &&
+  patterns.some((pattern) => matchesGlob(pattern.toLowerCase(), value.toLowerCase()));
 
 // A keyword must start a word: "review" matches "reviews", never "preview".
 const wordStart = (keyword: string) =>
@@ -33,14 +49,17 @@ const lastSegment = (path: string) =>
 
 /** True when a rule has at least one condition, so an empty rule never files every thread. */
 export function threadFolderRuleHasConditions(rule: ThreadFolderRule): boolean {
-  return Object.values(rule).some((value) => value !== undefined);
+  return Object.entries(rule).some(([key, value]) =>
+    key === "smart" ? value === true : value !== undefined,
+  );
 }
 
 export function threadMatchesFolderRule(
   rule: ThreadFolderRule,
   thread: ThreadFolderRuleSubject,
 ): boolean {
-  if (!threadFolderRuleHasConditions(rule)) return false;
+  if (!Object.entries(rule).some(([key, value]) => key !== "smart" && value !== undefined))
+    return false;
   if (rule.projectIds && !rule.projectIds.includes(thread.projectId)) return false;
   if (rule.providerInstanceIds && !rule.providerInstanceIds.includes(thread.providerInstanceId)) {
     return false;
@@ -72,7 +91,10 @@ export function pickThreadFolderForRule<
   return (
     folders.find(
       (folder) =>
-        folder.autoFile && folder.rule !== null && threadMatchesFolderRule(folder.rule, thread),
+        folder.autoFile &&
+        folder.rule !== null &&
+        !folder.rule.smart &&
+        threadMatchesFolderRule(folder.rule, thread),
     ) ?? null
   );
 }

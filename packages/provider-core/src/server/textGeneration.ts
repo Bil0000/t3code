@@ -8,7 +8,10 @@ import type {
 import type * as Effect from "effect/Effect";
 
 import type { TextGenerationPolicy } from "./textGenerationPolicy.ts";
-import type { ThreadFolderRuleOutput, ThreadTitleForkSource } from "./textGenerationPrompts.ts";
+import type {
+  ThreadFolderClassificationOutput,
+  ThreadTitleForkSource,
+} from "./textGenerationPrompts.ts";
 
 export interface CommitMessageGenerationInput {
   cwd: string;
@@ -57,6 +60,22 @@ export interface BranchNameGenerationResult {
 }
 
 export interface ThreadTitleGenerationInput {
+  /** `examples` are titles of threads people filed there by hand. */
+  folders?:
+    | ReadonlyArray<{
+        readonly id: string;
+        readonly name: string;
+        readonly examples: ReadonlyArray<string>;
+      }>
+    | undefined;
+  folderContext?:
+    | {
+        readonly branch: string | null;
+        readonly worktreeName: string | null;
+        readonly projectName: string;
+        readonly hasPullRequest: boolean;
+      }
+    | undefined;
   linkedContext?: string | undefined;
   cwd: string;
   message: string;
@@ -69,6 +88,7 @@ export interface ThreadTitleGenerationInput {
 
 export interface ThreadTitleGenerationResult {
   title: string;
+  folderId?: string | null | undefined;
   needsRefinement?: boolean | undefined;
 }
 
@@ -97,15 +117,17 @@ export type ReviewGuideGenerationResult = Omit<
   "headSha" | "generatedAt" | "modelSelection"
 >;
 
-export interface ThreadFolderRuleGenerationInput {
+export interface ThreadFolderClassificationInput {
   cwd: string;
   folderName: string;
-  threads: ReadonlyArray<ThreadFolderRuleSample>;
-  projects: ReadonlyArray<{ readonly id: string; readonly name: string }>;
+  /** Titles of threads people filed in this folder by hand. */
+  examples: ReadonlyArray<string>;
+  threads: ReadonlyArray<ThreadFolderSample>;
   modelSelection: ModelSelection;
 }
 
-export interface ThreadFolderRuleSample {
+export interface ThreadFolderSample {
+  readonly id: string;
   readonly title: string;
   readonly branch: string | null;
   readonly worktreeName: string | null;
@@ -113,7 +135,7 @@ export interface ThreadFolderRuleSample {
   readonly projectName: string | null;
 }
 
-export type ThreadFolderRuleGenerationResult = typeof ThreadFolderRuleOutput.Type;
+export type ThreadFolderClassificationResult = typeof ThreadFolderClassificationOutput.Type;
 
 export interface ProviderTextGeneration {
   readonly generateCommitMessage: (
@@ -136,7 +158,7 @@ export interface ProviderTextGeneration {
     input: ReviewGuideGenerationInput,
   ) => Effect.Effect<ReviewGuideGenerationResult, TextGenerationError>;
 
-  readonly generateThreadFolderRule: (
-    input: ThreadFolderRuleGenerationInput,
-  ) => Effect.Effect<ThreadFolderRuleGenerationResult, TextGenerationError>;
+  readonly classifyThreadFolder: (
+    input: ThreadFolderClassificationInput,
+  ) => Effect.Effect<ThreadFolderClassificationResult, TextGenerationError>;
 }
