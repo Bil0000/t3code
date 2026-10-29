@@ -15,7 +15,7 @@ import * as CheckpointCapture from "./CheckpointCaptureService.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as RunFinalization from "./RunFinalizationService.ts";
 
-it.effect("finalizes without awaiting the post-checkpoint workspace refresh", () => {
+it.effect("runs refreshes per checkout one at a time, without blocking finalize", () => {
   const threadId = ThreadId.make("thread_refresh_failure");
   const runId = RunId.make("run_refresh_failure");
   const scopeId = CheckpointScopeId.make("scope_refresh_failure");
@@ -50,7 +50,8 @@ it.effect("finalizes without awaiting the post-checkpoint workspace refresh", ()
   return Effect.gen(function* () {
     const service = yield* RunFinalization.RunFinalizationService;
     yield* service.finalize({ threadId, runId, scopeId });
-    assert.deepEqual(captured, ["checkpoint", "refresh"]);
+    yield* service.finalize({ threadId, runId, scopeId });
+    assert.deepEqual(captured, ["checkpoint", "refresh", "checkpoint"]);
   }).pipe(Effect.provide(layer));
 });
 
