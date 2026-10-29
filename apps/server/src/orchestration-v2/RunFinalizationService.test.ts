@@ -15,7 +15,7 @@ import * as CheckpointCapture from "./CheckpointCaptureService.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as RunFinalization from "./RunFinalizationService.ts";
 
-it.effect("completes finalization when the post-checkpoint workspace refresh fails", () => {
+it.effect("finalizes without awaiting the post-checkpoint workspace refresh", () => {
   const threadId = ThreadId.make("thread_refresh_failure");
   const runId = RunId.make("run_refresh_failure");
   const scopeId = CheckpointScopeId.make("scope_refresh_failure");
@@ -39,13 +39,9 @@ it.effect("completes finalization when the post-checkpoint workspace refresh fai
         }),
         Layer.succeed(RunFinalization.RunFinalizationObserver, {
           refresh: () =>
-            Effect.gen(function* () {
+            Effect.sync(() => {
               captured.push("refresh");
-              return yield* new RunFinalization.RunFinalizationRefreshError({
-                cwd: "/repo",
-                cause: new Error("Git command timed out"),
-              });
-            }),
+            }).pipe(Effect.andThen(Effect.never)),
           refreshAfterTurn: () => Effect.void,
         }),
       ),
