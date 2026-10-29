@@ -203,6 +203,16 @@ export function useThreadListActions(): {
   readonly createFolder: (thread: EnvironmentThreadShell) => void;
   readonly renameFolder: (folder: EnvironmentThreadFolder) => void;
   readonly deleteFolder: (folder: EnvironmentThreadFolder) => void;
+  readonly moveFolder: (
+    folder: EnvironmentThreadFolder,
+    direction: "up" | "down",
+  ) => Promise<boolean>;
+  readonly setFolderAutoFile: (
+    folder: EnvironmentThreadFolder,
+    autoFile: boolean,
+  ) => Promise<boolean>;
+  readonly applyFolderRule: (folder: EnvironmentThreadFolder) => Promise<boolean>;
+  readonly settleFolder: (folder: EnvironmentThreadFolder, settled: boolean) => Promise<boolean>;
   readonly archiveThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly confirmDeleteThread: (thread: EnvironmentThreadShell) => void;
   readonly settleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
@@ -241,6 +251,43 @@ export function useThreadListActions(): {
     const error = Cause.squash(result.cause);
     Dialog.alert("Could not change folder", error instanceof Error ? error.message : "Try again.");
     return false;
+  };
+  const moveFolder = (folder: EnvironmentThreadFolder, direction: "up" | "down") => {
+    const folders = appAtomRegistry
+      .get(threadFoldersAtom)
+      .filter((candidate) => candidate.environmentId === folder.environmentId);
+    const index = folders.findIndex((candidate) => candidate.id === folder.id);
+    if (index < 0 || (direction === "up" ? index === 0 : index === folders.length - 1)) {
+      return Promise.resolve(false);
+    }
+    return mutateFolder(folder, {
+      type: "folder.reorder",
+      folderId: folder.id,
+      beforeFolderId:
+        direction === "up" ? folders[index - 1]!.id : (folders[index + 2]?.id ?? null),
+    });
+  };
+  const setFolderAutoFile = (folder: EnvironmentThreadFolder, autoFile: boolean) =>
+    folder.rule
+      ? mutateFolder(folder, { type: "folder.update", folderId: folder.id, autoFile })
+      : Promise.resolve(false);
+  const applyFolderRule = (folder: EnvironmentThreadFolder) =>
+    folder.rule
+      ? mutateFolder(folder, { type: "folder.applyRule", folderId: folder.id })
+      : Promise.resolve(false);
+  const settleFolder = async (folder: EnvironmentThreadFolder, settled: boolean) => {
+    const members = appAtomRegistry
+      .get(environmentThreadShells.threadShellsAtom)
+      .filter(
+        (thread) =>
+          thread.environmentId === folder.environmentId &&
+          folder.threadIds.includes(thread.id) &&
+          (thread.settledOverride === "settled") !== settled,
+      );
+    const results = await Promise.all(
+      members.map((thread) => (settled ? settleThread(thread) : unsettleThread(thread))),
+    );
+    return results.every(Boolean);
   };
   const moveThreadToFolder = (thread: EnvironmentThreadShell, folderId: ThreadFolderId | null) =>
     mutateFolder(thread, { type: "folder.move", threadIds: [thread.id], folderId });
@@ -793,6 +840,10 @@ export function useThreadListActions(): {
     createFolder,
     renameFolder,
     deleteFolder,
+    moveFolder,
+    setFolderAutoFile,
+    applyFolderRule,
+    settleFolder,
     archiveThread,
     confirmDeleteThread,
     settleThread,

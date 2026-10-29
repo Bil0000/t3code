@@ -270,10 +270,9 @@ export function getThreadListV2OrderedSection(input: {
   readonly snoozeEnvironmentIds?: ReadonlySet<EnvironmentId>;
   readonly queuedThreadKeys?: ReadonlySet<string>;
 }): EnvironmentThreadShell[] {
-  const unfiled =
-    input.section === "active" && input.folders?.length
-      ? new Set(layoutThreadFolders({ threads: input.threads, folders: input.folders }).unfiled)
-      : null;
+  const unfiled = input.folders?.length
+    ? new Set(layoutThreadFolders({ threads: input.threads, folders: input.folders }).unfiled)
+    : null;
   const queuedThreadKeys = input.queuedThreadKeys?.size ? input.queuedThreadKeys : undefined;
   const threads = input.threads.filter((thread) => {
     if (thread.archivedAt !== null || thread.lineage.relationshipToParent === "subagent")
@@ -384,6 +383,7 @@ export interface ThreadListV2SettledShelfListItem {
 
 export interface ThreadListV2FolderHeaderListItem {
   readonly type: "v2-folder-header";
+  readonly settled: boolean;
   readonly key: string;
   readonly folderKey: string;
   readonly environmentId: EnvironmentId;
@@ -426,6 +426,7 @@ export function threadListV2ListItemsAreEqual(
         previous.key === item.key &&
         previous.folder === item.folder &&
         previous.count === item.count &&
+        previous.settled === item.settled &&
         previous.expanded === item.expanded &&
         previous.disabled === item.disabled
       );
@@ -567,16 +568,17 @@ export function buildThreadListV2ListItems(input: {
   const workingEnd = snoozedShelfHeaderIndex ?? snoozedEnd;
   const activeEnd = workingShelfHeaderIndex ?? workingEnd;
   const result: ThreadListV2ListItem[] = [...pendingItems];
-  let folderIndex = 0;
-  const folderHeaders = input.folderHeaders ?? [];
-  for (let index = 0; index <= activeEnd; index += 1) {
-    while (folderHeaders[folderIndex]?.index === index) {
-      result.push({
-        ...folderHeaders[folderIndex]!,
-        disabled: input.shelfPreferencesLoading === true,
-      });
-      folderIndex += 1;
+  const pushFolders = (folders: ThreadListV2Layout["folderHeaders"], index: number) => {
+    for (const header of folders) {
+      if (header.index === index) {
+        result.push({ ...header, disabled: input.shelfPreferencesLoading === true });
+      }
     }
+  };
+  const openFolders = (input.folderHeaders ?? []).filter((header) => !header.settled);
+  const settledFolders = (input.folderHeaders ?? []).filter((header) => header.settled);
+  for (let index = 0; index <= activeEnd; index += 1) {
+    pushFolders(openFolders, index);
     if (index < activeEnd) result.push(threadItems[index]!);
   }
   const shelfDisabled = input.shelfPreferencesLoading === true;
@@ -608,7 +610,10 @@ export function buildThreadListV2ListItems(input: {
       expanded: input.settledShelfExpanded !== false,
       disabled: shelfDisabled,
     });
-    result.push(...threadItems.slice(settledShelfHeaderIndex));
+    for (let index = settledShelfHeaderIndex; index <= threadItems.length; index += 1) {
+      pushFolders(settledFolders, index);
+      if (index < threadItems.length) result.push(threadItems[index]!);
+    }
   }
   return result.map((entry, index) => {
     if (entry.type !== "v2-thread" && entry.type !== "v2-pending") return entry;
@@ -780,10 +785,7 @@ export function buildThreadListV2Items(input: {
         snoozed: snoozedThreads.has(thread),
         pinned: pinnedThreads.has(thread),
         folderKey: (() => {
-          const folder =
-            !slim.has(thread) && !pinnedThreads.has(thread)
-              ? findThreadFolder(input.folders ?? [], thread)
-              : null;
+          const folder = findThreadFolder(input.folders ?? [], thread);
           return folder ? scopedThreadFolderKey(folder) : undefined;
         })(),
         wokeAt: slim.has(thread) ? null : resolveThreadListV2WokeAt(thread, { now }),
@@ -803,8 +805,19 @@ export function buildThreadListV2Items(input: {
     };
   }
 
+  const orderedPinned = sortPinnedThreadsByOrderKey(pinned);
+  const allOrderedSnoozed = [...snoozed].sort(
+    (left, right) =>
+      parseTimestampMs(left.snoozedUntil ?? "") - parseTimestampMs(right.snoozedUntil ?? ""),
+  );
+  const allOrderedSettled = sortSettledThreadsReusingLast(settled);
   const folderLayout = layoutThreadFolders({
-    threads: sortThreadsForListV2([...active, ...working]),
+    threads: [
+      ...orderedPinned,
+      ...sortThreadsForListV2([...active, ...working]),
+      ...allOrderedSnoozed,
+      ...allOrderedSettled,
+    ],
     folders: (input.folders ?? []).filter(
       (folder) => input.environmentId === null || folder.environmentId === input.environmentId,
     ),
@@ -816,10 +829,7 @@ export function buildThreadListV2Items(input: {
     ? sortInboxThreadsByReturn(unfiledActive, input.inboxReturnAt)
     : applyPendingThreadOrder(sortThreadsForListV2(unfiledActive), "active", pending);
   const orderedWorking = sortWorkingThreadsBySend(unfiledWorking);
-  const orderedSnoozed = [...snoozed].sort(
-    (left, right) =>
-      parseTimestampMs(left.snoozedUntil ?? "") - parseTimestampMs(right.snoozedUntil ?? ""),
-  );
+  const orderedSnoozed = allOrderedSnoozed.filter((thread) => unfiled.has(thread));
   const selectedThreadKey = input.selectedThreadKey ?? null;
   const visibleWorking =
     input.workingShelfExpanded === true
@@ -833,7 +843,7 @@ export function buildThreadListV2Items(input: {
       : orderedSnoozed.filter(
           (thread) => `${thread.environmentId}:${thread.id}` === selectedThreadKey,
         );
-  const orderedSettled = sortSettledThreadsReusingLast(settled);
+  const orderedSettled = allOrderedSettled.filter((thread) => unfiled.has(thread));
   const listedSettled =
     input.isListedSettled === undefined
       ? orderedSettled
@@ -860,7 +870,7 @@ export function buildThreadListV2Items(input: {
 
   const items: ThreadListV2Item[] = [];
   for (const thread of applyPendingThreadOrder(
-    sortPinnedThreadsByOrderKey(pinned),
+    orderedPinned.filter((thread) => unfiled.has(thread)),
     "pinned",
     pending,
   )) {
@@ -883,8 +893,14 @@ export function buildThreadListV2Items(input: {
       isLast: false,
     });
   }
+  const snoozedThreads = new Set(snoozed);
+  const settledThreads = new Set(settled);
+  const pinnedThreads = new Set(pinned);
   const folderHeaders: Array<ThreadListV2FolderHeaderListItem & { readonly index: number }> = [];
-  for (const block of folderLayout.blocks) {
+  // A folder whose every member is settled sits on the Settled shelf.
+  const isSettledFolder = (block: (typeof folderLayout.blocks)[number]) =>
+    block.threads.length > 0 && block.threads.every((thread) => settledThreads.has(thread));
+  const pushFolder = (block: (typeof folderLayout.blocks)[number]) => {
     const expanded = !input.collapsedFolderKeys?.has(block.key);
     folderHeaders.push({
       type: "v2-folder-header",
@@ -893,6 +909,7 @@ export function buildThreadListV2Items(input: {
       environmentId: block.folder.environmentId,
       folder: block.folder,
       count: block.threads.length,
+      settled: isSettledFolder(block),
       expanded,
       disabled: false,
       index: items.length,
@@ -901,15 +918,20 @@ export function buildThreadListV2Items(input: {
       if (!expanded && `${thread.environmentId}:${thread.id}` !== selectedThreadKey) continue;
       items.push({
         thread,
-        variant: "card",
-        snoozed: false,
-        pinned: false,
+        variant: snoozedThreads.has(thread) || settledThreads.has(thread) ? "slim" : "card",
+        snoozed: snoozedThreads.has(thread),
+        pinned: pinnedThreads.has(thread),
         folderKey: block.key,
-        wokeAt: resolveThreadListV2WokeAt(thread, { now }),
+        wokeAt:
+          snoozedThreads.has(thread) || settledThreads.has(thread)
+            ? null
+            : resolveThreadListV2WokeAt(thread, { now }),
         isLast: false,
       });
     }
-  }
+  };
+  for (const block of folderLayout.blocks) if (!isSettledFolder(block)) pushFolder(block);
+  const settledFolders = folderLayout.blocks.filter(isSettledFolder);
   const workingShelfHeaderIndex = orderedWorking.length > 0 ? items.length : null;
   for (const thread of visibleWorking) {
     items.push({
@@ -932,7 +954,16 @@ export function buildThreadListV2Items(input: {
       isLast: false,
     });
   }
-  const settledShelfHeaderIndex = settledTotal > 0 ? items.length : null;
+  const settledShelfHeaderIndex =
+    settledTotal > 0 || settledFolders.length > 0 ? items.length : null;
+  for (const block of settledFolders) {
+    if (
+      input.settledShelfExpanded !== false ||
+      block.threads.some((thread) => `${thread.environmentId}:${thread.id}` === selectedThreadKey)
+    ) {
+      pushFolder(block);
+    }
+  }
   for (const thread of visibleSettled) {
     items.push({
       thread,
@@ -956,7 +987,8 @@ export function buildThreadListV2Items(input: {
     workingShelfHeaderIndex,
     snoozedCount: orderedSnoozed.length,
     snoozedShelfHeaderIndex,
-    settledCount: settledTotal,
+    settledCount:
+      settledTotal + settledFolders.reduce((total, block) => total + block.threads.length, 0),
     settledShelfHeaderIndex,
     nextSnoozeWakeAt,
     contentOnlyThreadKeys,

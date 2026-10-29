@@ -177,6 +177,7 @@ const LEGACY_MENU_ACTIONS: MenuAction[] = [
 function ThreadListV2Section(props: {
   readonly label: string;
   readonly leading?: ReactNode;
+  readonly labelAccessory?: ReactNode;
   readonly pane?: "screen" | "sidebar";
   readonly tone?: "default" | "snoozed";
   readonly disclosure?: {
@@ -211,6 +212,7 @@ function ThreadListV2Section(props: {
       >
         {props.label}
       </Text>
+      {props.labelAccessory}
       <View
         className={cn(
           "h-px flex-1",
@@ -301,8 +303,15 @@ export const ThreadListV2FolderHeader = memo(function ThreadListV2FolderHeader(p
   readonly onToggle: (key: string) => void;
   readonly onRename: (folder: EnvironmentThreadFolder) => void;
   readonly onDelete: (folder: EnvironmentThreadFolder) => void;
+  readonly folders: ReadonlyArray<EnvironmentThreadFolder>;
+  readonly onMove: (folder: EnvironmentThreadFolder, direction: "up" | "down") => Promise<boolean>;
+  readonly onAutoFile: (folder: EnvironmentThreadFolder, autoFile: boolean) => Promise<boolean>;
+  readonly onApplyRule: (folder: EnvironmentThreadFolder) => Promise<boolean>;
+  readonly onSettle: (folder: EnvironmentThreadFolder, settled: boolean) => Promise<boolean>;
 }) {
   const { item } = props;
+  const folders = props.folders.filter((folder) => folder.environmentId === item.environmentId);
+  const folderIndex = folders.findIndex((folder) => folder.id === item.folder.id);
   const icon = item.folder.icon;
   const colors = projectIconColorClassNames(icon && "color" in icon ? icon.color : "blue");
   return (
@@ -310,17 +319,67 @@ export const ThreadListV2FolderHeader = memo(function ThreadListV2FolderHeader(p
       shouldOpenOnLongPress
       actions={[
         { id: "rename", title: "Rename", image: "square.and.pencil" },
+        ...(folderIndex > 0 ? [{ id: "move-up", title: "Move up", image: "arrow.up" }] : []),
+        ...(folderIndex >= 0 && folderIndex < folders.length - 1
+          ? [{ id: "move-down", title: "Move down", image: "arrow.down" }]
+          : []),
+        ...(item.folder.rule
+          ? [
+              {
+                id: "auto-file",
+                title: "Auto-file behavior",
+                image: "tray.and.arrow.down",
+                subactions: [
+                  {
+                    id: "auto-file:enabled",
+                    title: "Enabled",
+                    state: item.folder.autoFile ? ("on" as const) : ("off" as const),
+                  },
+                  {
+                    id: "auto-file:disabled",
+                    title: "Disabled",
+                    state: item.folder.autoFile ? ("off" as const) : ("on" as const),
+                  },
+                  { id: "apply-rule", title: "File matching threads now" },
+                ],
+              },
+            ]
+          : []),
+        item.settled
+          ? { id: "unsettle", title: "Un-settle folder", image: "arrow.uturn.backward" }
+          : { id: "settle", title: "Settle folder", image: "checkmark.circle" },
         { id: "delete", title: "Delete folder", image: "trash", attributes: { destructive: true } },
       ]}
       onPressAction={({ nativeEvent }) => {
         if (nativeEvent.event === "rename") props.onRename(item.folder);
         if (nativeEvent.event === "delete") props.onDelete(item.folder);
+        if (nativeEvent.event === "move-up") void props.onMove(item.folder, "up");
+        if (nativeEvent.event === "move-down") void props.onMove(item.folder, "down");
+        if (nativeEvent.event === "apply-rule") void props.onApplyRule(item.folder);
+        if (nativeEvent.event === "auto-file:enabled" && !item.folder.autoFile)
+          void props.onAutoFile(item.folder, true);
+        if (nativeEvent.event === "auto-file:disabled" && item.folder.autoFile)
+          void props.onAutoFile(item.folder, false);
+        if (nativeEvent.event === "settle") void props.onSettle(item.folder, true);
+        if (nativeEvent.event === "unsettle") void props.onSettle(item.folder, false);
       }}
     >
       <ThreadListV2Section
         pane={props.pane}
         label={`${item.folder.name} (${item.count})${props.environmentLabel ? " · " + props.environmentLabel : ""}`}
         onPress={() => props.onToggle(item.folderKey)}
+        labelAccessory={
+          item.folder.rule && item.folder.autoFile ? (
+            <SymbolView
+              name="sparkles"
+              size={10}
+              tintColorClassName={
+                props.pane === "sidebar" ? "accent-drawer-foreground-muted" : "accent-icon-muted"
+              }
+              accessibilityLabel="Auto-files new threads"
+            />
+          ) : null
+        }
         leading={
           <View className={cn("h-7 w-7 items-center justify-center rounded-lg", colors.background)}>
             {icon ? (

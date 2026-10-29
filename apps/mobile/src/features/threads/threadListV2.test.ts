@@ -1722,7 +1722,7 @@ describe("Working section beta", () => {
 });
 
 describe("thread folders", () => {
-  it("keeps folders between active and working, with parked and pinned precedence", () => {
+  it("keeps every member in its folder, ordered by pinned, active, snoozed and settled", () => {
     const active = makeThread({ id: ThreadId.make("active"), title: "Active" });
     const filed = makeThread({ id: ThreadId.make("filed"), title: "Filed" });
     const working = makeThread({ id: ThreadId.make("working"), title: "Working" });
@@ -1743,6 +1743,9 @@ describe("thread folders", () => {
       name: "Work",
       icon: null,
       threadIds: [filed.id, pinned.id, settled.id, snoozed.id],
+      rule: null,
+      autoFile: false,
+      ruleSetAt: null,
       createdAt: NOW,
       updatedAt: NOW,
     };
@@ -1770,35 +1773,79 @@ describe("thread folders", () => {
     expect(
       items.map((item) => (item.type === "v2-thread" ? item.item.thread.id : item.type)),
     ).toEqual([
-      pinned.id,
       active.id,
       "v2-folder-header",
+      pinned.id,
       filed.id,
+      snoozed.id,
+      settled.id,
       "v2-folder-header",
       "v2-working-shelf",
       working.id,
-      "v2-snoozed-shelf",
-      snoozed.id,
-      "v2-settled-shelf",
-      settled.id,
     ]);
+    expect(layout.folderHeaders.map((header) => header.count)).toEqual([4, 0]);
+    expect(
+      layout.items.filter((item) => item.variant === "slim").map((item) => item.thread.id),
+    ).toEqual([snoozed.id, settled.id]);
+    expect(layout.snoozedCount).toBe(0);
+    expect(layout.settledCount).toBe(0);
     const collapsed = buildThreadListV2Items({
       ...input,
       collapsedFolderKeys: new Set([environmentId + ":folder"]),
     });
-    expect(collapsed.items.some((item) => item.thread.id === filed.id)).toBe(false);
+    expect(collapsed.items.map((item) => item.thread.id)).toEqual([active.id, working.id]);
+    for (const member of [filed, pinned, snoozed, settled]) {
+      const selectedMember = buildThreadListV2Items({
+        ...input,
+        collapsedFolderKeys: new Set([environmentId + ":folder"]),
+        selectedThreadKey: environmentId + ":" + member.id,
+      });
+      expect(
+        selectedMember.items.filter((item) => item.folderKey).map((item) => item.thread.id),
+      ).toEqual([member.id]);
+    }
     const selected = buildThreadListV2Items({
       ...input,
       collapsedFolderKeys: new Set([environmentId + ":folder"]),
       selectedThreadKey: environmentId + ":" + filed.id,
     });
     expect(selected.items.some((item) => item.thread.id === filed.id)).toBe(true);
+    const settledFolder = buildThreadListV2Items({
+      ...input,
+      folders: [{ ...folder, threadIds: [settled.id] }],
+    });
+    expect(settledFolder.folderHeaders.map((header) => header.index)).toEqual([
+      settledFolder.settledShelfHeaderIndex,
+    ]);
+    expect(settledFolder.settledCount).toBe(1);
+    expect(
+      buildThreadListV2ListItems({ ...settledFolder, pendingTasks: [] })
+        .map((item) => (item.type === "v2-thread" ? item.item.thread.id : item.type))
+        .slice(-3),
+    ).toEqual(["v2-settled-shelf", "v2-folder-header", settled.id]);
+    for (const threads of [[settled], [working, settled]]) {
+      const layout = buildThreadListV2Items({
+        ...input,
+        threads,
+        folders: [{ ...folder, threadIds: [settled.id] }],
+      });
+      expect(
+        buildThreadListV2ListItems({ ...layout, pendingTasks: [] }).map((item) =>
+          item.type === "v2-thread" ? item.item.thread.id : item.type,
+        ),
+      ).toEqual([
+        ...(threads.length > 1 ? ["v2-working-shelf", working.id] : []),
+        "v2-settled-shelf",
+        "v2-folder-header",
+        settled.id,
+      ]);
+    }
     expect(
       getThreadListV2OrderedSection({ ...input, section: "active" }).map((thread) => thread.id),
     ).toEqual([active.id, working.id]);
     expect(
       getThreadListV2OrderedSection({ ...input, section: "pinned" }).map((thread) => thread.id),
-    ).toEqual([pinned.id]);
+    ).toEqual([]);
     const search = buildThreadListV2Items({ ...input, searchQuery: "Filed" });
     expect(search.items.map((item) => item.thread.id)).toEqual([filed.id]);
     expect(search.folderHeaders).toEqual([]);

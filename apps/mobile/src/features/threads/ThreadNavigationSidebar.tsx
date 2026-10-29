@@ -160,6 +160,10 @@ function ThreadNavigationSidebarPane(
     createFolder,
     renameFolder,
     deleteFolder,
+    moveFolder,
+    setFolderAutoFile,
+    applyFolderRule,
+    settleFolder,
     archiveThread,
     confirmDeleteThread,
     settleThread,
@@ -634,6 +638,11 @@ function ThreadNavigationSidebarPane(
             item={item}
             pane="sidebar"
             onToggle={toggleFolder}
+            folders={folders}
+            onMove={moveFolder}
+            onAutoFile={setFolderAutoFile}
+            onApplyRule={applyFolderRule}
+            onSettle={settleFolder}
             onRename={renameFolder}
             onDelete={deleteFolder}
             environmentLabel={

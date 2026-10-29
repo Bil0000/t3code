@@ -91,6 +91,10 @@ export function HomeRouteScreen() {
     createFolder,
     renameFolder,
     deleteFolder,
+    moveFolder,
+    setFolderAutoFile,
+    applyFolderRule,
+    settleFolder,
     archiveThread,
     confirmDeleteThread,
     settleThread,
@@ -248,6 +252,10 @@ export function HomeRouteScreen() {
           onSetThreadAutoSettle={setThreadAutoSettle}
           onMoveThreadToFolder={moveThreadToFolder}
           onCreateFolder={createFolder}
+          onMoveFolder={moveFolder}
+          onFolderAutoFile={setFolderAutoFile}
+          onApplyFolderRule={applyFolderRule}
+          onSettleFolder={settleFolder}
           onRenameFolder={renameFolder}
           onDeleteFolder={deleteFolder}
           onMoveThread={moveThread}
