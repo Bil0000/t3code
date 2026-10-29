@@ -90,6 +90,11 @@ export const ThreadFolderMutation = Schema.Union([
     beforeFolderId: Schema.NullOr(ThreadFolderId),
   }),
   Schema.Struct({
+    // Moves every unfiled thread that matches the folder's rule into it.
+    type: Schema.Literal("folder.applyRule"),
+    folderId: ThreadFolderId,
+  }),
+  Schema.Struct({
     type: Schema.Literal("folder.delete"),
     folderId: ThreadFolderId,
   }),
@@ -106,6 +111,17 @@ export const ThreadFolderMutationResult = Schema.Struct({
   folders: ForwardCompatibleArray(ThreadFolder),
 });
 export type ThreadFolderMutationResult = typeof ThreadFolderMutationResult.Type;
+
+export const ThreadFolderSuggestRuleInput = Schema.Struct({
+  folderName: ThreadFolderName,
+});
+export type ThreadFolderSuggestRuleInput = typeof ThreadFolderSuggestRuleInput.Type;
+
+export const ThreadFolderSuggestRuleResult = Schema.Struct({
+  rule: ThreadFolderRule,
+  icon: Schema.NullOr(ProjectIconOverride),
+});
+export type ThreadFolderSuggestRuleResult = typeof ThreadFolderSuggestRuleResult.Type;
 
 export class ThreadFolderError extends Schema.TaggedError<ThreadFolderError>()(
   "ThreadFolderError",

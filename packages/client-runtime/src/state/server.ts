@@ -1501,6 +1501,10 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.threadFoldersMutate,
       concurrency: configConcurrency,
     }),
+    suggestThreadFolderRule: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:thread-folders:suggest-rule",
+      tag: WS_METHODS.threadFoldersSuggestRule,
+    }),
     upsertScheduledTask: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:scheduled-task:upsert",
       tag: WS_METHODS.scheduledTasksUpsert,

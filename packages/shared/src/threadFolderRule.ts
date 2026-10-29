@@ -21,7 +21,15 @@ const globPattern = (pattern: string) =>
 const matchesAny = (value: string | null, patterns: ReadonlyArray<string>) =>
   value !== null && patterns.some((pattern) => globPattern(pattern).test(value.toLowerCase()));
 
-const lastSegment = (path: string) => path.replace(/[\\/]+$/, "").split(/[\\/]/).at(-1) ?? path;
+// A keyword must start a word: "review" matches "reviews", never "preview".
+const wordStart = (keyword: string) =>
+  new RegExp(`(?<![\\p{L}\\p{N}])${keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "iu");
+
+const lastSegment = (path: string) =>
+  path
+    .replace(/[\\/]+$/, "")
+    .split(/[\\/]/)
+    .at(-1) ?? path;
 
 /** True when a rule has at least one condition, so an empty rule never files every thread. */
 export function threadFolderRuleHasConditions(rule: ThreadFolderRule): boolean {
@@ -48,9 +56,11 @@ export function threadMatchesFolderRule(
   ) {
     return false;
   }
-  if (rule.titleKeywords) {
-    const title = thread.title.toLowerCase();
-    if (!rule.titleKeywords.some((keyword) => title.includes(keyword.toLowerCase()))) return false;
+  if (
+    rule.titleKeywords &&
+    !rule.titleKeywords.some((keyword) => wordStart(keyword).test(thread.title))
+  ) {
+    return false;
   }
   return true;
 }
