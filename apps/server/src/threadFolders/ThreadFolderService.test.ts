@@ -80,7 +80,7 @@ it.layer(layer)("ThreadFolderService", (it) => {
         type: "folder.create",
         folderId: reviews,
         name: "Reviews",
-        threadIds: [live, other],
+        threadIds: [live, other, deleted],
       });
       assert.deepStrictEqual(
         moved.folders.map((folder) => [folder.id, folder.threadIds]),

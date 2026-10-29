@@ -165,6 +165,11 @@ const make = Effect.gen(function* () {
   ) {
     switch (mutation.type) {
       case "folder.create": {
+        // Retrying a create with the same id is a no-op, so client retries are safe.
+        const replayed = yield* sql`
+          SELECT 1 FROM thread_folders WHERE folder_id = ${mutation.folderId}
+        `;
+        if (replayed.length > 0) return;
         const existing = yield* sql<{ readonly count: number }>`
           SELECT COUNT(*) AS count FROM thread_folders
         `;
@@ -174,8 +179,7 @@ const make = Effect.gen(function* () {
           );
         }
         yield* requireLiveThreads(mutation.threadIds ?? []);
-        // Retrying a create with the same id is a no-op, so client retries are safe.
-        const created = yield* sql`
+        yield* sql`
           INSERT INTO thread_folders (folder_id, name, icon_json, created_at, updated_at)
           VALUES (
             ${mutation.folderId},
@@ -184,10 +188,7 @@ const make = Effect.gen(function* () {
             ${now},
             ${now}
           )
-          ON CONFLICT (folder_id) DO NOTHING
-          RETURNING folder_id
         `;
-        if (created.length === 0) return;
         return yield* placeThreads(mutation.threadIds ?? [], mutation.folderId, now);
       }
       case "folder.update": {
