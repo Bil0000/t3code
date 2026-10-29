@@ -440,7 +440,7 @@ stops matching that deterministic rule. Smart-filed threads stay until moved.
 `rule: {smart:true}` files by the folder name's meaning through the existing title call.
 Other rule conditions must also match. A null rule clears it.
 `apply_rule` files existing unfiled, unsettled threads that match the rule now. For a smart rule,
-it uses one model call with at most 100 active thread samples and skips explicit moves.
+it classifies unfiled active threads in model calls of 100 and skips explicit moves.
 
 ### `t3_thread_send`
 

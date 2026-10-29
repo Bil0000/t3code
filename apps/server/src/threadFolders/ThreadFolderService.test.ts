@@ -54,21 +54,28 @@ const projectionLayer = Layer.unwrap(
       );
     return Layer.mock(ProjectionStore.ProjectionStoreV2)({
       getShellSnapshot: () =>
-        Effect.forEach(
-          [
-            liveThreadShell(live),
-            liveThreadShell(other),
-            {
-              ...liveThreadShell(subagent),
-              lineage: {
-                rootThreadId: live,
-                parentThreadId: live,
-                relationshipToParent: "subagent" as const,
-              },
-            },
-          ],
-          titled,
-        ).pipe(
+        sql<{ readonly thread_id: ThreadId }>`
+          SELECT thread_id FROM orchestration_v2_projection_threads WHERE project_id = 'project:bulk'
+        `.pipe(
+          Effect.orDie,
+          Effect.flatMap((bulk) =>
+            Effect.forEach(
+              [
+                liveThreadShell(live),
+                liveThreadShell(other),
+                {
+                  ...liveThreadShell(subagent),
+                  lineage: {
+                    rootThreadId: live,
+                    parentThreadId: live,
+                    relationshipToParent: "subagent" as const,
+                  },
+                },
+                ...bulk.map((row) => liveThreadShell(row.thread_id)),
+              ],
+              titled,
+            ),
+          ),
           Effect.map((threads) => ({
             schemaVersion: 1,
             snapshotSequence: 0,
@@ -542,6 +549,7 @@ it.effect("files validated title picks and batches only eligible smart threads",
       folderId: reviews,
       rule: { smart: true, titleKeywords: ["billing"] },
     });
+    assert.deepStrictEqual(yield* folders.smartCandidates(live), []);
     yield* folders.applySmartPick(live, reviews);
     assert.deepStrictEqual((yield* folders.list()).folders[0]!.threadIds, []);
     yield* folders.mutate({ type: "folder.update", folderId: reviews, rule: { smart: true } });
@@ -568,5 +576,22 @@ it.effect("files validated title picks and batches only eligible smart threads",
     assert.deepStrictEqual(yield* folders.smartCandidates(other), [
       { id: reviews, name: "Reviews", examples: ["Review PR 12"] },
     ]);
+    for (let index = 0; index < 100; index++) {
+      yield* sql`
+        INSERT INTO orchestration_v2_projection_threads ${sql.insert({
+          thread_id: `thread:bulk-${index}`,
+          project_id: "project:bulk",
+          title: "Bulk",
+          default_provider: "codex",
+          runtime_mode: "full-access",
+          interaction_mode: "default",
+          created_at: "2026-01-01T00:00:00.000Z",
+          updated_at: "2026-01-01T00:00:00.000Z",
+          payload_json: "{}",
+        })}
+      `;
+    }
+    yield* folders.mutate({ type: "folder.applyRule", folderId: reviews });
+    assert.strictEqual((yield* folders.list()).folders[0]!.threadIds.length, 102);
   }).pipe(Effect.provide(layer)),
 );

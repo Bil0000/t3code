@@ -18,6 +18,7 @@ import {
 } from "@t3tools/shared/threadFolderRule";
 import { visibleThreadPullRequests } from "../sourceControl/threadPullRequests.ts";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
+import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -248,24 +249,22 @@ const make = Effect.gen(function* () {
     const snapshot = yield* threads
       .getShellSnapshot({ location: "active" })
       .pipe(Effect.mapError((cause) => folderError("Could not read threads.", { cause })));
-    return snapshot.threads
-      .filter(
-        (shell) =>
-          !excluded.has(shell.id) &&
-          shell.deletedAt === null &&
-          shell.archivedAt === null &&
-          shell.settledOverride !== "settled" &&
-          shell.lineage.relationshipToParent !== "subagent" &&
-          folder.rule !== null &&
-          matchesSmartConditions(folder.rule, shell),
-      )
-      .slice(0, smart ? 100 : undefined);
+    return snapshot.threads.filter(
+      (shell) =>
+        !excluded.has(shell.id) &&
+        shell.deletedAt === null &&
+        shell.archivedAt === null &&
+        shell.settledOverride !== "settled" &&
+        shell.lineage.relationshipToParent !== "subagent" &&
+        folder.rule !== null &&
+        matchesSmartConditions(folder.rule, shell),
+    );
   });
 
   const apply = Effect.fn("ThreadFolderService.apply")(function* (
     mutation: ThreadFolderMutation,
     now: string,
-    smartMatches?: ReadonlyArray<string>,
+    smartMatches?: ReadonlySet<string>,
   ) {
     switch (mutation.type) {
       case "folder.create": {
@@ -373,7 +372,7 @@ const make = Effect.gen(function* () {
         const matching = rule.smart
           ? (yield* batchCandidates(
               folders.find((folder) => folder.id === mutation.folderId)!,
-            )).filter((shell) => smartMatches?.includes(shell.id))
+            )).filter((shell) => smartMatches?.has(shell.id))
           : (yield* batchCandidates(
               folders.find((folder) => folder.id === mutation.folderId)!,
               false,
@@ -407,7 +406,7 @@ const make = Effect.gen(function* () {
 
   const mutate: ThreadFolderService["Service"]["mutate"] = Effect.fn("ThreadFolderService.mutate")(
     function* (mutation) {
-      let smartMatches: ReadonlyArray<string> | undefined;
+      let smartMatches: ReadonlySet<string> | undefined;
       if (mutation.type === "folder.applyRule") {
         const folder = (yield* list()).folders.find((entry) => entry.id === mutation.folderId);
         if (folder?.rule?.smart) {
@@ -424,27 +423,33 @@ const make = Effect.gen(function* () {
           const settings = yield* serverSettings.getSettings.pipe(
             Effect.mapError((cause) => folderError("Could not read settings.", { cause })),
           );
-          const result = yield* textGeneration
-            .classifyThreadFolder({
-              cwd: serverConfig.cwd,
-              folderName: folder.name,
-              examples: yield* handFiledExamples(folder.id).pipe(
-                Effect.mapError((cause) => folderError("Could not read folder.", { cause })),
-              ),
-              threads: samples.map((shell) => ({
-                id: shell.id,
-                title: shell.title,
-                branch: shell.branch,
-                worktreeName: shell.worktreePath?.split(/[\\/]/).findLast(Boolean) ?? null,
-                hasPullRequest: visibleThreadPullRequests(shell.pullRequests ?? []).length > 0,
-                projectName: projectNames.get(shell.projectId) ?? null,
-              })),
-              modelSelection: settings.textGenerationModelSelection,
-            })
-            .pipe(
-              Effect.mapError((cause) => folderError("Could not classify threads.", { cause })),
-            );
-          smartMatches = result.threadIds.filter((id) => samples.some((shell) => shell.id === id));
+          const examples = yield* handFiledExamples(folder.id).pipe(
+            Effect.mapError((cause) => folderError("Could not read folder.", { cause })),
+          );
+          const results = yield* Effect.forEach(
+            Arr.chunksOf(samples, 100),
+            (batch) =>
+              textGeneration
+                .classifyThreadFolder({
+                  cwd: serverConfig.cwd,
+                  folderName: folder.name,
+                  examples,
+                  threads: batch.map((shell) => ({
+                    id: shell.id,
+                    title: shell.title,
+                    branch: shell.branch,
+                    worktreeName: shell.worktreePath?.split(/[\\/]/).findLast(Boolean) ?? null,
+                    hasPullRequest: visibleThreadPullRequests(shell.pullRequests ?? []).length > 0,
+                    projectName: projectNames.get(shell.projectId) ?? null,
+                  })),
+                  modelSelection: settings.textGenerationModelSelection,
+                })
+                .pipe(
+                  Effect.mapError((cause) => folderError("Could not classify threads.", { cause })),
+                ),
+            { concurrency: 4 },
+          );
+          smartMatches = new Set(results.flatMap((result) => result.threadIds));
         }
       }
       const now = DateTime.formatIso(yield* DateTime.now);
@@ -551,6 +556,7 @@ const make = Effect.gen(function* () {
       (folder) =>
         folder.autoFile &&
         folder.rule?.smart &&
+        matchesSmartConditions(folder.rule, shell) &&
         folder.ruleSetAt !== null &&
         DateTime.toEpochMillis(shell.createdAt) > Date.parse(folder.ruleSetAt),
     );
@@ -573,10 +579,7 @@ const make = Effect.gen(function* () {
             const candidate = (yield* smartCandidates(threadId)).find(
               (folder) => folder.id === folderId,
             );
-            if (!candidate) return;
-            const folder = (yield* list()).folders.find((entry) => entry.id === candidate.id);
-            const shell = yield* threads.getThreadShell(threadId);
-            if (shell && folder?.rule && matchesSmartConditions(folder.rule, shell))
+            if (candidate)
               yield* placeThreads(
                 [threadId],
                 candidate.id,
