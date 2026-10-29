@@ -151,6 +151,11 @@ function selectOpenCodeRuntimeTextGeneration(
         v1: v1.generateReviewGuide(input),
         v2: v2.generateReviewGuide(input),
       }),
+    generateThreadFolderRule: (input) =>
+      byOpenCodeRuntime(probe.get, {
+        v1: v1.generateThreadFolderRule(input),
+        v2: v2.generateThreadFolderRule(input),
+      }),
   };
 }
 

@@ -8,7 +8,7 @@ import type {
 import type * as Effect from "effect/Effect";
 
 import type { TextGenerationPolicy } from "./textGenerationPolicy.ts";
-import type { ThreadTitleForkSource } from "./textGenerationPrompts.ts";
+import type { ThreadFolderRuleOutput, ThreadTitleForkSource } from "./textGenerationPrompts.ts";
 
 export interface CommitMessageGenerationInput {
   cwd: string;
@@ -97,6 +97,24 @@ export type ReviewGuideGenerationResult = Omit<
   "headSha" | "generatedAt" | "modelSelection"
 >;
 
+export interface ThreadFolderRuleGenerationInput {
+  cwd: string;
+  folderName: string;
+  threads: ReadonlyArray<ThreadFolderRuleSample>;
+  projects: ReadonlyArray<{ readonly id: string; readonly name: string }>;
+  modelSelection: ModelSelection;
+}
+
+export interface ThreadFolderRuleSample {
+  readonly title: string;
+  readonly branch: string | null;
+  readonly worktreeName: string | null;
+  readonly hasPullRequest: boolean;
+  readonly projectName: string | null;
+}
+
+export type ThreadFolderRuleGenerationResult = typeof ThreadFolderRuleOutput.Type;
+
 export interface ProviderTextGeneration {
   readonly generateCommitMessage: (
     input: CommitMessageGenerationInput,
@@ -117,4 +135,8 @@ export interface ProviderTextGeneration {
   readonly generateReviewGuide: (
     input: ReviewGuideGenerationInput,
   ) => Effect.Effect<ReviewGuideGenerationResult, TextGenerationError>;
+
+  readonly generateThreadFolderRule: (
+    input: ThreadFolderRuleGenerationInput,
+  ) => Effect.Effect<ThreadFolderRuleGenerationResult, TextGenerationError>;
 }

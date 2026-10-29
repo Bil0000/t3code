@@ -151,7 +151,17 @@ it.effect("files this thread into a folder, needs a target, and refuses read-onl
 
     const moved = yield* call({ action: "move", folderId: "folder:reviews" });
     expect(moved.isError).toBe(false);
-    const created = yield* call({ action: "create", name: "Reviews" });
+    const created = yield* call({
+      action: "create",
+      name: "Reviews",
+      rule: { branches: ["main"] },
+      autoFile: true,
+    });
+    yield* call({ action: "update", folderId: "folder:reviews", rule: null, autoFile: false });
+    yield* call({ action: "reorder", folderId: "folder:reviews", beforeFolderId: null });
+    expect(
+      declaredFailure(yield* call({ action: "reorder", folderId: "folder:reviews" })),
+    ).toMatchObject({ code: "invalid_request" });
     expect(created.structuredContent).toMatchObject({
       folderId: expect.stringMatching(/^folder:/),
     });
@@ -168,7 +178,15 @@ it.effect("files this thread into a folder, needs a target, and refuses read-onl
     ).toMatchObject({ code: "orchestration_error" });
     expect(mutations).toEqual([
       { type: "folder.move", threadIds: [threadId], folderId: "folder:reviews" },
-      { type: "folder.create", folderId: expect.stringMatching(/^folder:/), name: "Reviews" },
+      {
+        type: "folder.create",
+        folderId: expect.stringMatching(/^folder:/),
+        name: "Reviews",
+        rule: { branches: ["main"] },
+        autoFile: true,
+      },
+      { type: "folder.update", folderId: "folder:reviews", rule: null, autoFile: false },
+      { type: "folder.reorder", folderId: "folder:reviews", beforeFolderId: null },
     ]);
 
     const refused = yield* call(
@@ -176,9 +194,17 @@ it.effect("files this thread into a folder, needs a target, and refuses read-onl
       clientScope("read-only"),
     );
     expect(declaredFailure(refused)).toMatchObject({ code: "capability_denied" });
+    expect(
+      declaredFailure(
+        yield* call(
+          { action: "reorder", folderId: "folder:reviews", beforeFolderId: null },
+          clientScope("read-only"),
+        ),
+      ),
+    ).toMatchObject({ code: "capability_denied" });
     const listed = yield* call({ action: "list" }, clientScope("read-only"));
     expect(listed.isError).toBe(false);
-    expect(mutations).toHaveLength(2);
+    expect(mutations).toHaveLength(4);
   }).pipe(
     Effect.provide(
       McpHttpServer.layerThreadToolkit.pipe(

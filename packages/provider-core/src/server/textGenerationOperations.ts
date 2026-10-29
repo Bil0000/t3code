@@ -11,6 +11,7 @@ import {
   buildCommitMessagePrompt,
   buildPrContentPrompt,
   buildReviewGuidePrompt,
+  buildThreadFolderRulePrompt,
   buildThreadTitlePrompt,
 } from "./textGenerationPrompts.ts";
 import {
@@ -167,11 +168,23 @@ export function fromRunner(name: string, run: Runner): ProviderTextGeneration {
     });
   });
 
+  const generateThreadFolderRule: ProviderTextGeneration["generateThreadFolderRule"] = Effect.fn(
+    `${name}.generateThreadFolderRule`,
+  )(function* (input) {
+    return yield* run({
+      operation: "generateThreadFolderRule",
+      cwd: input.cwd,
+      modelSelection: input.modelSelection,
+      ...buildThreadFolderRulePrompt(input),
+    });
+  });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
     generateReviewGuide,
+    generateThreadFolderRule,
   } satisfies ProviderTextGeneration;
 }

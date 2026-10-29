@@ -22,6 +22,7 @@ import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
+  buildThreadFolderRulePrompt,
   buildThreadTitlePrompt,
 } from "@t3tools/provider-core/server/textGenerationPrompts";
 import {
@@ -342,11 +343,21 @@ export const makeMuseTextGeneration = Effect.fn("makeMuseTextGeneration")(functi
   });
   const generateReviewGuide: ProviderTextGeneration["generateReviewGuide"] = () =>
     Effect.fail(investigationUnsupported("generateReviewGuide", "Muse Code"));
+  const generateThreadFolderRule: ProviderTextGeneration["generateThreadFolderRule"] = Effect.fn(
+    "MuseTextGeneration.generateThreadFolderRule",
+  )(function* (input) {
+    return yield* runMuseJson({
+      operation: "generateThreadFolderRule",
+      ...buildThreadFolderRulePrompt(input),
+      modelSelection: input.modelSelection,
+    });
+  });
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
     generateReviewGuide,
+    generateThreadFolderRule,
   } satisfies ProviderTextGeneration;
 });

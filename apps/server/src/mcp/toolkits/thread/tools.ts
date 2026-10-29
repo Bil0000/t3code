@@ -24,6 +24,7 @@ import {
   ThreadFolder,
   ThreadFolderId,
   ThreadFolderName,
+  ThreadFolderRule,
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Schema from "effect/Schema";
@@ -244,11 +245,22 @@ const ScheduledTaskRunTool = Tool.make("run_scheduled_task_now", {
 
 const ThreadFolderTool = Tool.make("t3_thread_folder", {
   description:
-    "Sidebar folders grouping threads across this environment's projects. list. create: `name`, optional `icon`, `threadIds`. update: `folderId` with `name` or `icon` (null clears). delete: threads stay. move: `threadIds` (default this thread) into `folderId`, or out with null.",
+    'Sidebar folders: list, create (name), update/delete (folderId), reorder (folderId before beforeFolderId; null=end), move (threadIds default this thread, folderId null=out), apply_rule (folderId: file existing matching threads now). create/update: icon (any Lucide icon name), rule, autoFile; null clears icon/rule. Rules auto-file new threads: group by branch = one folder per branch, branches:[branch]; PR reviews = {pullRequest:true,titleKeywords:["review"]}; worktree X = {worktrees:[X]}.',
   parameters: Schema.Struct({
     environmentId: OrchestratorMcpEnvironmentTarget,
-    action: Schema.Literals(["list", "create", "update", "delete", "move"]),
+    action: Schema.Literals([
+      "list",
+      "create",
+      "update",
+      "delete",
+      "move",
+      "reorder",
+      "apply_rule",
+    ]),
     folderId: Schema.optional(Schema.NullOr(ThreadFolderId)),
+    beforeFolderId: Schema.optional(Schema.NullOr(ThreadFolderId)),
+    rule: Schema.optional(Schema.NullOr(ThreadFolderRule)),
+    autoFile: Schema.optional(Schema.Boolean),
     name: Schema.optional(ThreadFolderName),
     icon: Schema.optional(Schema.NullOr(ProjectIconOverride)),
     threadIds: Schema.optional(

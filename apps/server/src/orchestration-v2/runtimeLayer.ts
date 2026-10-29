@@ -376,7 +376,9 @@ export const layerProduction = Layer.mergeAll(
   layerScheduledTaskProvided,
   layerScratchThreadPromotionProvided,
   layerSecretRequestsProvided,
-  ThreadFolderService.layer.pipe(Layer.provide(ProjectionStore.layer)),
+  ThreadFolderService.layer.pipe(
+    Layer.provide(Layer.mergeAll(ProjectionStore.layer, ProjectStore.layer, TextGeneration.layer)),
+  ),
   GuestShareService.layer.pipe(
     Layer.provide(Layer.merge(layerOrchestratorProvided, layerCommandOutputHubProvided)),
   ),

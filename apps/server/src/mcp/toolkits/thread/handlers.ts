@@ -3,6 +3,7 @@ import {
   type ProjectIconOverride,
   type RuntimeRequestId,
   type ThreadFolderError,
+  type ThreadFolderRule,
   ThreadFolderId,
   type ThreadFolderMutation,
   ThreadId,
@@ -104,7 +105,10 @@ const listFolders = Effect.fn("mcp.listThreadFolders")(function* () {
 });
 
 const writeFolders = Effect.fn("mcp.writeThreadFolders")(function* (input: {
-  readonly action: "create" | "update" | "delete" | "move";
+  readonly action: "create" | "update" | "delete" | "move" | "reorder" | "apply_rule";
+  readonly beforeFolderId?: ThreadFolderId | null | undefined;
+  readonly rule?: ThreadFolderRule | null | undefined;
+  readonly autoFile?: boolean | undefined;
   readonly folderId?: ThreadFolderId | null | undefined;
   readonly name?: string | undefined;
   readonly icon?: ProjectIconOverride | null | undefined;
@@ -122,6 +126,8 @@ const writeFolders = Effect.fn("mcp.writeThreadFolders")(function* (input: {
         folderId: ThreadFolderId.make(`folder:${yield* crypto.randomUUIDv4().pipe(Effect.orDie)}`),
         name: yield* required(input.name, "name"),
         ...(input.icon === undefined ? {} : { icon: input.icon }),
+        ...(input.rule === undefined ? {} : { rule: input.rule }),
+        ...(input.autoFile === undefined ? {} : { autoFile: input.autoFile }),
         ...(input.threadIds === undefined || input.threadIds.length === 0
           ? {}
           : { threadIds: input.threadIds }),
@@ -129,10 +135,15 @@ const writeFolders = Effect.fn("mcp.writeThreadFolders")(function* (input: {
       break;
     }
     case "update":
-      if (input.name === undefined && input.icon === undefined) {
+      if (
+        input.name === undefined &&
+        input.icon === undefined &&
+        input.rule === undefined &&
+        input.autoFile === undefined
+      ) {
         return yield* new OrchestratorMcpFailure({
           code: "invalid_request",
-          message: "update needs `name` or `icon`.",
+          message: "update needs `name`, `icon`, `rule`, or `autoFile`.",
         });
       }
       mutation = {
@@ -140,7 +151,19 @@ const writeFolders = Effect.fn("mcp.writeThreadFolders")(function* (input: {
         folderId: yield* folderId(),
         ...(input.name === undefined ? {} : { name: input.name }),
         ...(input.icon === undefined ? {} : { icon: input.icon }),
+        ...(input.rule === undefined ? {} : { rule: input.rule }),
+        ...(input.autoFile === undefined ? {} : { autoFile: input.autoFile }),
       };
+      break;
+    case "reorder":
+      mutation = {
+        type: "folder.reorder",
+        folderId: yield* folderId(),
+        beforeFolderId: yield* required(input.beforeFolderId, "beforeFolderId"),
+      };
+      break;
+    case "apply_rule":
+      mutation = { type: "folder.applyRule", folderId: yield* folderId() };
       break;
     case "delete":
       mutation = { type: "folder.delete", folderId: yield* folderId() };
@@ -418,7 +441,17 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
       ),
       McpToolAccess.writes(
         (input) =>
-          writeFolders({ ...input, action: input.action === "delete" ? "delete" : "update" }),
+          writeFolders({
+            ...input,
+            action:
+              input.action === "delete"
+                ? "delete"
+                : input.action === "reorder"
+                  ? "reorder"
+                  : input.action === "apply_rule"
+                    ? "apply_rule"
+                    : "update",
+          }),
         { refusal: "change this environment's sidebar folders" },
       ),
     ),
