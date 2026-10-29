@@ -197,7 +197,7 @@ function withDescriptorCurrentValue(
 }
 
 // Ultracode was a Claude effort level before it became its own toggle; that level ran at xhigh.
-function withLegacyUltracodeEffort(
+export function withLegacyUltracodeEffort(
   descriptors: ReadonlyArray<ProviderOptionDescriptor>,
   selections: ReadonlyArray<ProviderOptionSelection> | null | undefined,
 ): ReadonlyArray<ProviderOptionSelection> | null | undefined {
@@ -209,10 +209,11 @@ function withLegacyUltracodeEffort(
   ) {
     return selections;
   }
+  const ultracode = getRawSelectionValueById(selections, "ultracode");
   return [
     ...(selections ?? []).filter(({ id }) => id !== "effort" && id !== "ultracode"),
     { id: "effort", value: "xhigh" },
-    { id: "ultracode", value: true },
+    { id: "ultracode", value: typeof ultracode === "boolean" ? ultracode : true },
   ];
 }
 

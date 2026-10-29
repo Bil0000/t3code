@@ -76,6 +76,12 @@ describe("descriptor helpers", () => {
       { id: "effort", value: "xhigh" },
       { id: "ultracode", value: true },
     ]);
+    expect(
+      getProviderOptionDescriptors({
+        caps,
+        selections: [...selections, { id: "ultracode", value: false }],
+      }).find(({ id }) => id === "ultracode")?.currentValue,
+    ).toBe(false);
   });
 
   it("compares complete model selections independent of option ordering", () => {
