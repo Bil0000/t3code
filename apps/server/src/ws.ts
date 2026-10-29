@@ -2138,7 +2138,6 @@ export const layerWsRpc = (
           ),
         [WS_METHODS.threadFoldersSubscribe]: (_input) => threadFolders.subscribeList(),
         [WS_METHODS.threadFoldersMutate]: (input) => threadFolders.mutate(input),
-        [WS_METHODS.threadFoldersSuggestRule]: (input) => threadFolders.suggestRule(input),
         [WS_METHODS.scheduledTasksSubscribe]: (_input) =>
           scheduledTasks.subscribeList().pipe(Stream.map(withVisibleWebhookUrls)),
         [WS_METHODS.scheduledTasksUpsert]: (input) => scheduledTasks.upsert(input),

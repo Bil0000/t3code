@@ -1,7 +1,7 @@
 import {
   MAX_THREAD_FOLDERS,
-  ProjectIconOverride,
   StoredProjectIcon,
+  type OrchestrationV2ThreadShell,
   type ThreadFolder,
   ThreadFolderError,
   ThreadFolderRule,
@@ -9,8 +9,6 @@ import {
   type ThreadFolderListResult,
   type ThreadFolderMutation,
   type ThreadFolderMutationResult,
-  type ThreadFolderSuggestRuleInput,
-  type ThreadFolderSuggestRuleResult,
   type ThreadId,
 } from "@t3tools/contracts";
 import {
@@ -46,10 +44,16 @@ export class ThreadFolderService extends Context.Service<
     readonly mutate: (
       mutation: ThreadFolderMutation,
     ) => Effect.Effect<ThreadFolderMutationResult, ThreadFolderError>;
-    /** Asks the text generation model for a rule; writes nothing. */
-    readonly suggestRule: (
-      input: ThreadFolderSuggestRuleInput,
-    ) => Effect.Effect<ThreadFolderSuggestRuleResult, ThreadFolderError>;
+    readonly smartCandidates: (
+      threadId: ThreadId,
+    ) => Effect.Effect<
+      ReadonlyArray<{ id: ThreadFolderId; name: string; examples: ReadonlyArray<string> }>,
+      ThreadFolderError
+    >;
+    readonly applySmartPick: (
+      threadId: ThreadId,
+      folderId: string,
+    ) => Effect.Effect<void, ThreadFolderError>;
   }
 >()("t3/threadFolders/ThreadFolderService") {}
 
@@ -72,12 +76,10 @@ interface MemberRow {
 const decodeRule = Schema.decodeUnknownOption(Schema.fromJsonString(ThreadFolderRule));
 const encodeRule = Schema.encodeSync(Schema.fromJsonString(ThreadFolderRule));
 
-const decodeSuggestedRule = Schema.decodeUnknownOption(ThreadFolderRule);
-const decodeSuggestedIcon = Schema.decodeUnknownOption(ProjectIconOverride);
-const MAX_RULE_SUGGESTION_SAMPLES = 60;
-
 const decodeIcon = Schema.decodeUnknownOption(Schema.fromJsonString(StoredProjectIcon));
 const encodeIcon = Schema.encodeSync(Schema.fromJsonString(StoredProjectIcon));
+
+const MAX_FOLDER_EXAMPLES = 5;
 
 const folderError = (message: string, options?: { folderId?: ThreadFolderId; cause?: unknown }) =>
   new ThreadFolderError({
@@ -205,9 +207,65 @@ const make = Effect.gen(function* () {
     );
   });
 
+  const matchesSmartConditions = (rule: ThreadFolderRule, shell: OrchestrationV2ThreadShell) => {
+    const { smart: _smart, ...conditions } = rule;
+    return (
+      !threadFolderRuleHasConditions(conditions) ||
+      threadMatchesFolderRule(conditions, {
+        ...shell,
+        hasPullRequest: visibleThreadPullRequests(shell.pullRequests ?? []).length > 0,
+      })
+    );
+  };
+
+  // Titles of threads people filed by hand teach the model what a folder means.
+  const handFiledExamples = Effect.fn("ThreadFolderService.handFiledExamples")(function* (
+    folderId: ThreadFolderId,
+  ) {
+    const rows = yield* sql<{ readonly title: string }>`
+      SELECT threads.title FROM thread_folder_members AS members
+      JOIN thread_folder_explicit_moves AS moves ON moves.thread_id = members.thread_id
+      JOIN orchestration_v2_projection_threads AS threads
+        ON threads.thread_id = members.thread_id AND threads.deleted_at IS NULL
+      WHERE members.folder_id = ${folderId}
+      ORDER BY members.added_at DESC
+      LIMIT ${MAX_FOLDER_EXAMPLES}
+    `;
+    return rows.map((row) => row.title);
+  });
+
+  const batchCandidates = Effect.fn("ThreadFolderService.batchCandidates")(function* (
+    folder: ThreadFolder,
+    smart = true,
+  ) {
+    const folders = yield* readFolders;
+    const excluded = new Set(folders.flatMap((entry) => entry.threadIds));
+    if (smart)
+      for (const row of yield* sql<{
+        thread_id: ThreadId;
+      }>`SELECT thread_id FROM thread_folder_explicit_moves`)
+        excluded.add(row.thread_id);
+    const snapshot = yield* threads
+      .getShellSnapshot({ location: "active" })
+      .pipe(Effect.mapError((cause) => folderError("Could not read threads.", { cause })));
+    return snapshot.threads
+      .filter(
+        (shell) =>
+          !excluded.has(shell.id) &&
+          shell.deletedAt === null &&
+          shell.archivedAt === null &&
+          shell.settledOverride !== "settled" &&
+          shell.lineage.relationshipToParent !== "subagent" &&
+          folder.rule !== null &&
+          matchesSmartConditions(folder.rule, shell),
+      )
+      .slice(0, smart ? 100 : undefined);
+  });
+
   const apply = Effect.fn("ThreadFolderService.apply")(function* (
     mutation: ThreadFolderMutation,
     now: string,
+    smartMatches?: ReadonlyArray<string>,
   ) {
     switch (mutation.type) {
       case "folder.create": {
@@ -243,7 +301,7 @@ const make = Effect.gen(function* () {
             ${mutation.icon == null ? null : encodeIcon(mutation.icon)},
             ${positions[0]!.position},
             ${rule === null ? null : encodeRule(rule)},
-            ${Number(mutation.autoFile ?? rule !== null)},
+            ${Number(mutation.autoFile ?? false)},
             ${rule === null ? null : now},
             ${now},
             ${now}
@@ -258,11 +316,8 @@ const make = Effect.gen(function* () {
         if (rule !== null && !threadFolderRuleHasConditions(rule)) {
           return yield* folderError("A folder rule needs at least one condition.");
         }
-        const autoFile =
-          mutation.rule === null
-            ? false
-            : (mutation.autoFile ??
-              (mutation.rule === undefined ? current.autoFile : rule !== null));
+        // Auto-file is opt-in per folder; editing a rule keeps the folder's choice.
+        const autoFile = mutation.rule === null ? false : (mutation.autoFile ?? current.autoFile);
         if (autoFile && rule === null) {
           return yield* folderError("Auto-file needs a folder rule.");
         }
@@ -315,19 +370,19 @@ const make = Effect.gen(function* () {
             folderId: mutation.folderId,
           });
         }
-        const filed = new Set(folders.flatMap((folder) => folder.threadIds));
-        const snapshot = yield* threads
-          .getShellSnapshot({ location: "active" })
-          .pipe(Effect.mapError((cause) => folderError("Could not read threads.", { cause })));
-        const matching = snapshot.threads.filter(
-          (shell) =>
-            !filed.has(shell.id) &&
-            shell.lineage.relationshipToParent !== "subagent" &&
-            threadMatchesFolderRule(rule, {
-              ...shell,
-              hasPullRequest: visibleThreadPullRequests(shell.pullRequests ?? []).length > 0,
-            }),
-        );
+        const matching = rule.smart
+          ? (yield* batchCandidates(
+              folders.find((folder) => folder.id === mutation.folderId)!,
+            )).filter((shell) => smartMatches?.includes(shell.id))
+          : (yield* batchCandidates(
+              folders.find((folder) => folder.id === mutation.folderId)!,
+              false,
+            )).filter((shell) =>
+              threadMatchesFolderRule(rule, {
+                ...shell,
+                hasPullRequest: visibleThreadPullRequests(shell.pullRequests ?? []).length > 0,
+              }),
+            );
         return yield* placeThreads(
           matching.map((shell) => shell.id),
           mutation.folderId,
@@ -352,9 +407,49 @@ const make = Effect.gen(function* () {
 
   const mutate: ThreadFolderService["Service"]["mutate"] = Effect.fn("ThreadFolderService.mutate")(
     function* (mutation) {
+      let smartMatches: ReadonlyArray<string> | undefined;
+      if (mutation.type === "folder.applyRule") {
+        const folder = (yield* list()).folders.find((entry) => entry.id === mutation.folderId);
+        if (folder?.rule?.smart) {
+          const samples = yield* batchCandidates(folder).pipe(
+            Effect.mapError((cause) => folderError("Could not read threads.", { cause })),
+          );
+          const projectNames = new Map(
+            (yield* projects
+              .listShells()
+              .pipe(
+                Effect.mapError((cause) => folderError("Could not read projects.", { cause })),
+              )).map((project) => [project.id, project.title]),
+          );
+          const settings = yield* serverSettings.getSettings.pipe(
+            Effect.mapError((cause) => folderError("Could not read settings.", { cause })),
+          );
+          const result = yield* textGeneration
+            .classifyThreadFolder({
+              cwd: serverConfig.cwd,
+              folderName: folder.name,
+              examples: yield* handFiledExamples(folder.id).pipe(
+                Effect.mapError((cause) => folderError("Could not read folder.", { cause })),
+              ),
+              threads: samples.map((shell) => ({
+                id: shell.id,
+                title: shell.title,
+                branch: shell.branch,
+                worktreeName: shell.worktreePath?.split(/[\\/]/).findLast(Boolean) ?? null,
+                hasPullRequest: visibleThreadPullRequests(shell.pullRequests ?? []).length > 0,
+                projectName: projectNames.get(shell.projectId) ?? null,
+              })),
+              modelSelection: settings.textGenerationModelSelection,
+            })
+            .pipe(
+              Effect.mapError((cause) => folderError("Could not classify threads.", { cause })),
+            );
+          smartMatches = result.threadIds.filter((id) => samples.some((shell) => shell.id === id));
+        }
+      }
       const now = DateTime.formatIso(yield* DateTime.now);
       yield* writes.withPermit(
-        sql.withTransaction(apply(mutation, now)).pipe(
+        sql.withTransaction(apply(mutation, now, smartMatches)).pipe(
           Effect.catchTags({
             SqlError: (cause) =>
               Effect.fail(folderError("Could not save the thread folder.", { cause })),
@@ -404,6 +499,7 @@ const make = Effect.gen(function* () {
             if (
               current !== undefined &&
               !(
+                !current.rule?.smart &&
                 current.autoFile &&
                 current.rule !== null &&
                 !threadMatchesFolderRule(current.rule, subject)
@@ -431,74 +527,77 @@ const make = Effect.gen(function* () {
     if (changed) yield* PubSub.publish(changes, undefined);
   });
 
-  const suggestRule = Effect.fn("ThreadFolderService.suggestRule")(function* (
-    input: ThreadFolderSuggestRuleInput,
+  const smartCandidates = Effect.fn("ThreadFolderService.smartCandidates")(function* (
+    threadId: ThreadId,
   ) {
-    const readError = (cause: unknown) => folderError("Could not read threads.", { cause });
-    const snapshot = yield* threads
-      .getShellSnapshot({ location: "active" })
-      .pipe(Effect.mapError(readError));
-    const projectShells = yield* projects.listShells().pipe(Effect.mapError(readError));
-    const settings = yield* serverSettings.getSettings.pipe(
-      Effect.mapError((cause) => folderError("Could not read settings.", { cause })),
-    );
-    const projectNames = new Map<string, string>(
-      projectShells.map((project) => [project.id, project.title]),
-    );
-    const samples = snapshot.threads
-      .filter((shell) => shell.lineage.relationshipToParent !== "subagent")
-      .toSorted(
-        (left, right) =>
-          DateTime.toEpochMillis(right.createdAt) - DateTime.toEpochMillis(left.createdAt),
-      )
-      .slice(0, MAX_RULE_SUGGESTION_SAMPLES)
-      .map((shell) => ({
-        title: shell.title,
-        branch: shell.branch,
-        worktreeName: shell.worktreePath?.split(/[\\/]/).findLast(Boolean) ?? null,
-        hasPullRequest: visibleThreadPullRequests(shell.pullRequests ?? []).length > 0,
-        projectName: projectNames.get(shell.projectId) ?? null,
-      }));
-    const generated = yield* textGeneration
-      .generateThreadFolderRule({
-        cwd: serverConfig.cwd,
-        folderName: input.folderName,
-        threads: samples,
-        projects: projectShells.map((project) => ({ id: project.id, name: project.title })),
-        modelSelection: settings.textGenerationModelSelection,
-      })
-      .pipe(
-        Effect.mapError((cause) =>
-          folderError(`Could not suggest a rule: ${cause.detail}`, { cause }),
-        ),
+    const shell = yield* threads
+      .getThreadShell(threadId)
+      .pipe(Effect.mapError((cause) => folderError("Could not read thread.", { cause })));
+    if (
+      shell === null ||
+      shell.deletedAt !== null ||
+      shell.archivedAt !== null ||
+      shell.settledOverride === "settled" ||
+      shell.lineage.relationshipToParent === "subagent"
+    )
+      return [];
+    const excluded =
+      yield* sql`SELECT 1 FROM thread_folder_explicit_moves WHERE thread_id = ${threadId}
+      UNION ALL SELECT 1 FROM thread_folder_members WHERE thread_id = ${threadId}`.pipe(
+        Effect.mapError((cause) => folderError("Could not read placement.", { cause })),
       );
-    const entries = (values: ReadonlyArray<string>) => {
-      const kept = values.map((value) => value.trim()).filter((value) => value.length > 0);
-      return kept.length === 0 ? undefined : kept.slice(0, 20);
-    };
-    const rule = decodeSuggestedRule(
-      Object.fromEntries(
-        Object.entries({
-          projectIds: entries(generated.projectIds.filter((id) => projectNames.has(id))),
-          branches: entries(generated.branches),
-          worktrees: entries(generated.worktrees),
-          titleKeywords: entries(generated.titleKeywords),
-          pullRequest: generated.pullRequest,
-        }).filter(([, value]) => value != null),
+    if (excluded.length) return [];
+    const smart = (yield* list()).folders.filter(
+      (folder) =>
+        folder.autoFile &&
+        folder.rule?.smart &&
+        folder.ruleSetAt !== null &&
+        DateTime.toEpochMillis(shell.createdAt) > Date.parse(folder.ruleSetAt),
+    );
+    return yield* Effect.forEach(smart, (folder) =>
+      handFiledExamples(folder.id).pipe(
+        Effect.map((examples) => ({ id: folder.id, name: folder.name, examples })),
+        Effect.mapError((cause) => folderError("Could not read folder.", { cause })),
       ),
     );
-    if (Option.isNone(rule) || !threadFolderRuleHasConditions(rule.value)) {
-      return yield* folderError("Could not suggest a rule for this name.");
-    }
-    // Only the name's shape is checked here; the client resolves it against its Lucide set.
-    const icon =
-      generated.icon === null
-        ? Option.none()
-        : decodeSuggestedIcon({ kind: "lucide", ...generated.icon });
-    return { rule: rule.value, icon: Option.getOrNull(icon) };
   });
 
-  return ThreadFolderService.of({ list, subscribeList, mutate, autoFile, suggestRule });
+  const applySmartPick = Effect.fn("ThreadFolderService.applySmartPick")(function* (
+    threadId: ThreadId,
+    folderId: string,
+  ) {
+    yield* writes.withPermit(
+      sql
+        .withTransaction(
+          Effect.gen(function* () {
+            const candidate = (yield* smartCandidates(threadId)).find(
+              (folder) => folder.id === folderId,
+            );
+            if (!candidate) return;
+            const folder = (yield* list()).folders.find((entry) => entry.id === candidate.id);
+            const shell = yield* threads.getThreadShell(threadId);
+            if (shell && folder?.rule && matchesSmartConditions(folder.rule, shell))
+              yield* placeThreads(
+                [threadId],
+                candidate.id,
+                DateTime.formatIso(yield* DateTime.now),
+                false,
+              );
+          }),
+        )
+        .pipe(Effect.mapError((cause) => folderError("Could not file thread.", { cause }))),
+    );
+    yield* PubSub.publish(changes, undefined);
+  });
+
+  return ThreadFolderService.of({
+    list,
+    subscribeList,
+    mutate,
+    autoFile,
+    smartCandidates,
+    applySmartPick,
+  });
 });
 
 export const layer = Layer.effect(ThreadFolderService, make);

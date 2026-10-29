@@ -31,8 +31,8 @@ export type {
   PrContentGenerationResult,
   ReviewGuideGenerationInput,
   ReviewGuideGenerationResult,
-  ThreadFolderRuleGenerationInput,
-  ThreadFolderRuleGenerationResult,
+  ThreadFolderClassificationInput,
+  ThreadFolderClassificationResult,
   ThreadTitleGenerationInput,
   ThreadTitleGenerationResult,
 } from "@t3tools/provider-core/server/textGeneration";
@@ -47,7 +47,7 @@ type TextGenerationOp =
   | "generateBranchName"
   | "generateThreadTitle"
   | "generateReviewGuide"
-  | "generateThreadFolderRule";
+  | "classifyThreadFolder";
 
 const resolveInstance = (
   registry: ProviderInstanceRegistry.ProviderInstanceRegistry["Service"],
@@ -150,16 +150,11 @@ export const make = Effect.gen(function* () {
         service.generateReviewGuide({ ...input, modelSelection }),
       );
     }),
-    generateThreadFolderRule: Effect.fn("TextGeneration.generateThreadFolderRule")(
-      function (input) {
-        return generate(
-          "generateThreadFolderRule",
-          input.modelSelection,
-          (service, modelSelection) =>
-            service.generateThreadFolderRule({ ...input, modelSelection }),
-        );
-      },
-    ),
+    classifyThreadFolder: Effect.fn("TextGeneration.classifyThreadFolder")(function (input) {
+      return generate("classifyThreadFolder", input.modelSelection, (service, modelSelection) =>
+        service.classifyThreadFolder({ ...input, modelSelection }),
+      );
+    }),
     generateThreadTitle: Effect.fn("TextGeneration.generateThreadTitle")(function (input) {
       return generate(
         "generateThreadTitle",

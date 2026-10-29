@@ -433,10 +433,14 @@ moving a thread never changes its `updatedAt` or sidebar order. `list` is a read
 `reorder`, and `delete` are refused to fenced linked callers. The web and mobile sidebars use
 the same `ThreadFolderService` through `threadFolders.mutate`. New folders go first;
 `reorder` places a folder before `beforeFolderId`, or last with null.
-`create` and `update` accept `rule` and `autoFile`. Rules match new threads only;
+`create` and `update` accept `rule` and `autoFile`; auto-file is off unless `autoFile` is true.
+Rules match new threads only;
 explicitly moved threads are never auto-filed again. A thread a rule filed moves on when it
-stops matching that rule. A null rule clears it.
-`apply_rule` files every existing unfiled thread that matches the folder's rule now.
+stops matching that deterministic rule. Smart-filed threads stay until moved.
+`rule: {smart:true}` files by the folder name's meaning through the existing title call.
+Other rule conditions must also match. A null rule clears it.
+`apply_rule` files existing unfiled, unsettled threads that match the rule now. For a smart rule,
+it uses one model call with at most 100 active thread samples and skips explicit moves.
 
 ### `t3_thread_send`
 

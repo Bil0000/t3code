@@ -490,7 +490,7 @@ it.effect.each([false, true])("text generation preflight: exhausted=%s", (exhaus
           generatePrContent: () => Effect.die("unused"),
           generateBranchName: () => Effect.die("unused"),
           generateReviewGuide: () => Effect.die("unused"),
-          generateThreadFolderRule: () => Effect.die("unused"),
+          classifyThreadFolder: () => Effect.die("unused"),
           generateThreadTitle: (input) =>
             Effect.sync(() => {
               calls.push(input.modelSelection);

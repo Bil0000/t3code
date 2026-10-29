@@ -43,8 +43,8 @@ describe("RPC authorization scopes", () => {
     }
   });
 
-  it("keeps triage and folder rule suggestions, which run agents or models, behind operate scope", () => {
-    for (const method of [WS_METHODS.serverPrepareTriage, WS_METHODS.threadFoldersSuggestRule]) {
+  it("keeps triage and folder actions behind operate scope", () => {
+    for (const method of [WS_METHODS.serverPrepareTriage, WS_METHODS.threadFoldersMutate]) {
       expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationOperateScope);
     }
   });

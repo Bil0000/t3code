@@ -202,9 +202,19 @@ it.effect("files this thread into a folder, needs a target, and refuses read-onl
         ),
       ),
     ).toMatchObject({ code: "capability_denied" });
+    expect(
+      declaredFailure(
+        yield* call(
+          { action: "create", name: "Everything", rule: { branches: ["*"] } },
+          linkedScope,
+        ),
+      ),
+    ).toMatchObject({ code: "capability_denied" });
+    const plain = yield* call({ action: "create", name: "Mine" }, linkedScope);
+    expect(plain.isError).toBe(false);
     const listed = yield* call({ action: "list" }, clientScope("read-only"));
     expect(listed.isError).toBe(false);
-    expect(mutations).toHaveLength(4);
+    expect(mutations).toHaveLength(5);
   }).pipe(
     Effect.provide(
       McpHttpServer.layerThreadToolkit.pipe(
@@ -541,6 +551,11 @@ const clientScope = (
   issuedAt: 0,
   capabilities: new Set(["orchestration", "worktree", "pull-requests"]),
 });
+
+const linkedScope: McpInvocationContext.McpInvocationScope = {
+  ...clientScope("approval-required"),
+  client: { ...clientScope("approval-required").client!, linked: true },
+};
 
 it.effect("a client caller targets any thread within its ceiling and cannot act as a thread", () =>
   Effect.gen(function* () {

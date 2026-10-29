@@ -434,7 +434,8 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
     (input) => input.action === "list",
     McpToolAccess.reads(() => listFolders()),
     McpToolAccess.either(
-      (input) => input.action === "create" || input.action === "move",
+      // A rule reaches threads the caller never named, so only rule-free creates are thread writes.
+      (input) => input.action === "move" || (input.action === "create" && input.rule == null),
       McpToolAccess.writesThreads(
         (input) => input.threadIds ?? [undefined],
         (input) => writeFolders({ ...input, action: input.action === "move" ? "move" : "create" }),
@@ -444,13 +445,12 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
           writeFolders({
             ...input,
             action:
-              input.action === "delete"
-                ? "delete"
-                : input.action === "reorder"
-                  ? "reorder"
-                  : input.action === "apply_rule"
-                    ? "apply_rule"
-                    : "update",
+              input.action === "create" ||
+              input.action === "delete" ||
+              input.action === "reorder" ||
+              input.action === "apply_rule"
+                ? input.action
+                : "update",
           }),
         { refusal: "change this environment's sidebar folders" },
       ),

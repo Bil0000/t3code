@@ -245,7 +245,7 @@ const ScheduledTaskRunTool = Tool.make("run_scheduled_task_now", {
 
 const ThreadFolderTool = Tool.make("t3_thread_folder", {
   description:
-    'Sidebar folders: list, create (name), update/delete (folderId), reorder (folderId before beforeFolderId; null=end), move (threadIds default this thread, folderId null=out), apply_rule (folderId: file existing matching threads now). create/update: icon (any Lucide icon name), rule, autoFile; null clears icon/rule. Rules auto-file new threads: group by branch = one folder per branch, branches:[branch]; PR reviews = {pullRequest:true,titleKeywords:["review"]}; worktree X = {worktrees:[X]}.',
+    "Sidebar folders: list, create (name), update/delete (folderId), reorder (folderId before beforeFolderId; null=end), move (threadIds default this thread, folderId null=out), apply_rule (folderId: file matching unsettled threads now). create/update: icon (any Lucide icon name), rule, autoFile (true to auto-file new threads); null clears icon/rule. Rules: group by branch = one folder per branch, branches:[branch]; {smart:true} files by folder name meaning; worktree X = {worktrees:[X]}.",
   parameters: Schema.Struct({
     environmentId: OrchestratorMcpEnvironmentTarget,
     action: Schema.Literals([

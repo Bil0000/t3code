@@ -36,16 +36,21 @@ const deleted = ThreadId.make("thread:deleted");
 const reviews = ThreadFolderId.make("folder:reviews");
 const fixes = ThreadFolderId.make("folder:fixes");
 
-// Shells take their title from the seeded row, so a test can rename a thread with SQL.
+// Shells take their title and settled flag from the seeded row, so a test can change them with SQL.
 const projectionLayer = Layer.unwrap(
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const titled = (shell: OrchestrationV2ThreadShell) =>
-      sql<{ readonly title: string }>`
-        SELECT title FROM orchestration_v2_projection_threads WHERE thread_id = ${shell.id}
+      sql<{ readonly title: string; readonly payload_json: string }>`
+        SELECT title, payload_json FROM orchestration_v2_projection_threads
+        WHERE thread_id = ${shell.id}
       `.pipe(
         Effect.orDie,
-        Effect.map((rows) => ({ ...shell, title: rows[0]?.title ?? shell.title })),
+        Effect.map((rows) => ({
+          ...shell,
+          title: rows[0]?.title ?? shell.title,
+          settledOverride: rows[0]?.payload_json === "settled" ? ("settled" as const) : null,
+        })),
       );
     return Layer.mock(ProjectionStore.ProjectionStoreV2)({
       getShellSnapshot: () =>
@@ -103,14 +108,13 @@ const suggestionLayer = Layer.mergeAll(
   ServerSettings.layerTest(),
   Layer.mock(ServerConfig.ServerConfig)({ cwd: "/srv" } as never),
   Layer.mock(TextGeneration.TextGeneration)({
-    generateThreadFolderRule: (input) =>
+    classifyThreadFolder: (input) =>
       Effect.succeed({
-        projectIds: input.folderName === "Misc" ? ["project:gone"] : [project, "project:gone"],
-        branches: [],
-        worktrees: input.folderName === "Misc" ? [" "] : ["fix-*"],
-        titleKeywords: input.folderName === "Misc" ? [] : input.threads.map((t) => t.title),
-        pullRequest: null,
-        icon: { name: input.folderName === "Misc" ? "Not An Icon" : "bug", color: "red" },
+        threadIds: [
+          ...input.threads.map((thread) => thread.id),
+          ...input.examples.map((title) => `example:${title}`),
+          "thread:invalid",
+        ],
       }),
   }),
 );
@@ -284,7 +288,7 @@ it.effect("orders folders and validates, defaults, and clears rules", () =>
       created.folders.map((f) => f.id),
       [fixes, reviews],
     );
-    assert.isTrue(created.folders[1]!.autoFile);
+    assert.isFalse(created.folders[1]!.autoFile);
     assert.isNotNull(created.folders[1]!.ruleSetAt);
     const reordered = yield* folders.mutate({
       type: "folder.reorder",
@@ -355,12 +359,14 @@ it.effect("auto-files only new unfiled threads, respects folder order and explic
       folderId: reviews,
       name: "Reviews",
       rule: { titleKeywords: ["thread"] },
+      autoFile: true,
     });
     yield* folders.mutate({
       type: "folder.create",
       folderId: fixes,
       name: "Fixes",
       rule: { titleKeywords: ["thread"] },
+      autoFile: true,
     });
     assert.deepStrictEqual((yield* folders.list()).folders[0]!.rule, { titleKeywords: ["thread"] });
     const events = yield* Queue.unbounded<OrchestrationV2DomainEvent>();
@@ -411,6 +417,7 @@ it.effect("auto-files only new unfiled threads, respects folder order and explic
       type: "folder.update",
       folderId: fixes,
       rule: { titleKeywords: ["thread"] },
+      autoFile: true,
     });
     yield* folders.mutate({ type: "folder.update", folderId: reviews, rule: null });
     yield* folders.autoFile(other);
@@ -441,6 +448,7 @@ it.effect("applies a folder rule to existing unfiled threads", () =>
       folderId: reviews,
       name: "Reviews",
       rule: { titleKeywords: ["thread"] },
+      autoFile: true,
     });
     const applied = yield* folders.mutate({ type: "folder.applyRule", folderId: reviews });
     assert.deepStrictEqual(
@@ -467,12 +475,14 @@ it.effect("re-files an auto-filed thread when it stops matching, never a hand-mo
       folderId: reviews,
       name: "Reviews",
       rule: { titleKeywords: ["review"] },
+      autoFile: true,
     });
     yield* folders.mutate({
       type: "folder.create",
       folderId: fixes,
       name: "Fixes",
       rule: { titleKeywords: ["fix"] },
+      autoFile: true,
     });
     yield* rename(live, "Preview the review");
     yield* rename(other, "Review docs");
@@ -494,6 +504,7 @@ it.effect("re-files an auto-filed thread when it stops matching, never a hand-mo
       folderId: docs,
       name: "Docs",
       rule: { titleKeywords: ["docs"] },
+      autoFile: true,
     });
     yield* folders.mutate({ type: "folder.applyRule", folderId: docs });
     assert.deepStrictEqual(yield* members, [[live], [], [other]]);
@@ -503,49 +514,59 @@ it.effect("re-files an auto-filed thread when it stops matching, never a hand-mo
   }).pipe(Effect.provide(layer)),
 );
 
-it.effect("suggests a rule from recent non-subagent threads and keeps only known projects", () =>
+it.effect("files validated title picks and batches only eligible smart threads", () =>
   Effect.gen(function* () {
+    yield* seedThreads;
     const folders = yield* ThreadFolderService.ThreadFolderService;
-    const suggested = yield* folders.suggestRule({ folderName: "Fixes" });
-    assert.deepStrictEqual(suggested, {
-      rule: { projectIds: [project], worktrees: ["fix-*"], titleKeywords: [other, live] },
-      icon: { kind: "lucide", name: "bug", color: "red" },
+    yield* TestClock.setTime(DateTime.toEpochMillis(liveThreadShell(live).createdAt) - 1);
+    yield* folders.mutate({
+      type: "folder.create",
+      folderId: reviews,
+      name: "Reviews",
+      rule: { smart: true },
+      autoFile: true,
     });
-    const empty = yield* folders.suggestRule({ folderName: "Misc" }).pipe(Effect.flip);
-    assert.strictEqual(empty.message, "Could not suggest a rule for this name.");
-  }).pipe(
-    Effect.provide(
-      ThreadFolderService.layer.pipe(
-        Layer.provide(
-          Layer.merge(
-            Layer.mock(ProjectionStore.ProjectionStoreV2)({
-              getShellSnapshot: () =>
-                Effect.succeed({
-                  schemaVersion: 1,
-                  snapshotSequence: 0,
-                  threads: [
-                    liveThreadShell(live),
-                    {
-                      ...liveThreadShell(other),
-                      createdAt: DateTime.add(liveThreadShell(other).createdAt, { minutes: 1 }),
-                    },
-                    {
-                      ...liveThreadShell(subagent),
-                      lineage: {
-                        rootThreadId: live,
-                        parentThreadId: live,
-                        relationshipToParent: "subagent",
-                      },
-                    },
-                  ],
-                  archivedThreads: [],
-                }),
-            }),
-            suggestionLayer,
-          ),
-        ),
-        Layer.provideMerge(SqlitePersistence.layerMemory),
-      ),
-    ),
-  ),
+    assert.deepStrictEqual(yield* folders.smartCandidates(live), [
+      { id: reviews, name: "Reviews", examples: [] },
+    ]);
+    assert.deepStrictEqual(yield* folders.smartCandidates(subagent), []);
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json = 'settled' WHERE thread_id = ${live}`;
+    yield* folders.applySmartPick(live, reviews);
+    assert.deepStrictEqual((yield* folders.list()).folders[0]!.threadIds, []);
+    yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json = '{}' WHERE thread_id = ${live}`;
+    yield* folders.applySmartPick(live, "folder:invalid");
+    assert.deepStrictEqual((yield* folders.list()).folders[0]!.threadIds, []);
+    yield* folders.mutate({
+      type: "folder.update",
+      folderId: reviews,
+      rule: { smart: true, titleKeywords: ["billing"] },
+    });
+    yield* folders.applySmartPick(live, reviews);
+    assert.deepStrictEqual((yield* folders.list()).folders[0]!.threadIds, []);
+    yield* folders.mutate({ type: "folder.update", folderId: reviews, rule: { smart: true } });
+    yield* folders.applySmartPick(live, reviews);
+    assert.deepStrictEqual((yield* folders.list()).folders[0]!.threadIds, [live]);
+    assert.deepStrictEqual(yield* folders.smartCandidates(live), []);
+    yield* folders.autoFile(live);
+    assert.deepStrictEqual((yield* folders.list()).folders[0]!.threadIds, [live]);
+    yield* folders.mutate({ type: "folder.move", threadIds: [other], folderId: null });
+    assert.deepStrictEqual(yield* folders.smartCandidates(other), []);
+    yield* folders.mutate({ type: "folder.applyRule", folderId: reviews });
+    assert.deepStrictEqual((yield* folders.list()).folders[0]!.threadIds, [live]);
+    yield* sql`DELETE FROM thread_folder_explicit_moves WHERE thread_id = ${other}`;
+    yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json = 'settled' WHERE thread_id = ${other}`;
+    yield* folders.mutate({ type: "folder.applyRule", folderId: reviews });
+    assert.deepStrictEqual((yield* folders.list()).folders[0]!.threadIds, [live]);
+    yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json = '{}' WHERE thread_id = ${other}`;
+    yield* folders.mutate({ type: "folder.applyRule", folderId: reviews });
+    assert.deepStrictEqual((yield* folders.list()).folders[0]!.threadIds, [live, other]);
+    yield* sql`UPDATE orchestration_v2_projection_threads SET title = 'Review PR 12' WHERE thread_id = ${live}`;
+    yield* folders.mutate({ type: "folder.move", threadIds: [live], folderId: reviews });
+    yield* folders.mutate({ type: "folder.move", threadIds: [other], folderId: null });
+    yield* sql`DELETE FROM thread_folder_explicit_moves WHERE thread_id = ${other}`;
+    assert.deepStrictEqual(yield* folders.smartCandidates(other), [
+      { id: reviews, name: "Reviews", examples: ["Review PR 12"] },
+    ]);
+  }).pipe(Effect.provide(layer)),
 );
