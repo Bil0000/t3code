@@ -13,6 +13,7 @@ import {
   ProviderInstanceId,
   RunId,
   RuntimeRequestId,
+  ThreadFolderError,
   ThreadId,
   TurnItemId,
   type OrchestrationV2ProjectedTurnItem,
@@ -162,6 +163,9 @@ it.effect("files this thread into a folder, needs a target, and refuses read-onl
     ).toMatchObject({
       code: "invalid_request",
     });
+    expect(
+      declaredFailure(yield* call({ action: "delete", folderId: "folder:broken" })),
+    ).toMatchObject({ code: "orchestration_error" });
     expect(mutations).toEqual([
       { type: "folder.move", threadIds: [threadId], folderId: "folder:reviews" },
       { type: "folder.create", folderId: expect.stringMatching(/^folder:/), name: "Reviews" },
@@ -190,10 +194,14 @@ it.effect("files this thread into a folder, needs a target, and refuses read-onl
           Layer.mock(ThreadFolderService.ThreadFolderService)({
             list: () => Effect.succeed({ folders: [] }),
             mutate: (mutation) =>
-              Effect.sync(() => {
-                mutations.push(mutation);
-                return { folders: [] };
-              }),
+              mutation.type === "folder.delete"
+                ? Effect.fail(
+                    new ThreadFolderError({ message: "Could not save.", cause: new Error("disk") }),
+                  )
+                : Effect.sync(() => {
+                    mutations.push(mutation);
+                    return { folders: [] };
+                  }),
           }),
         ),
       ),

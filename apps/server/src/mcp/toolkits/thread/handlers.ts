@@ -2,6 +2,7 @@ import {
   type CommandId,
   type ProjectIconOverride,
   type RuntimeRequestId,
+  type ThreadFolderError,
   ThreadFolderId,
   type ThreadFolderMutation,
   ThreadId,
@@ -91,8 +92,10 @@ const required = <A>(value: A | undefined, name: string) =>
         }),
       )
     : Effect.succeed(value);
-const folderFailure = (error: { readonly message: string }) =>
-  new OrchestratorMcpFailure({ code: "invalid_request", message: error.message });
+const folderFailure = (error: ThreadFolderError) =>
+  error.cause === undefined
+    ? new OrchestratorMcpFailure({ code: "invalid_request", message: error.message })
+    : unavailable();
 
 const listFolders = Effect.fn("mcp.listThreadFolders")(function* () {
   yield* readCaller();
