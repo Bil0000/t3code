@@ -212,7 +212,9 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
         }
         retargetScratchDraft(project);
       })
-      .finally(() => setSettledAutoScratchKey(requestKey));
+      .finally(() => {
+        if (autoScratchRequest.isCurrent(token)) setSettledAutoScratchKey(requestKey);
+      });
   }, [
     autoScratchPlan,
     autoScratchRequestKey,

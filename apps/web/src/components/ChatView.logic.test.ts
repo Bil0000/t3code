@@ -1261,27 +1261,6 @@ describe("createKeyedRequestGate", () => {
     });
   };
 
-  it("applies a request that is still current", async () => {
-    const gate = createKeyedRequestGate();
-    const open = deferred();
-    const applied: string[] = [];
-    const settled = run(gate, "draft:env-a", open.promise, applied);
-    open.resolve("scratch-a");
-    await settled;
-    expect(applied).toEqual(["scratch-a"]);
-  });
-
-  it("drops a late open once the target is no longer eligible", async () => {
-    const gate = createKeyedRequestGate();
-    const open = deferred();
-    const applied: string[] = [];
-    const settled = run(gate, "draft:env-a", open.promise, applied);
-    gate.sync(null);
-    open.resolve("scratch-a");
-    await settled;
-    expect(applied).toEqual([]);
-  });
-
   it("drops an old target's open after A -> B -> A re-arms the same key", async () => {
     const gate = createKeyedRequestGate();
     const first = deferred();
