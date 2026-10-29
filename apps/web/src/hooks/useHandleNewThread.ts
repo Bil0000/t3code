@@ -51,7 +51,9 @@ import { environmentPresentations, environmentSummaries } from "../state/present
 import { environmentServerConfigsAtom } from "../state/server";
 import { resolveThreadRouteTarget } from "../threadRoutes";
 import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
-import { getClientSettings } from "./useSettings";
+import { getClientSettings, mergeEnvironmentSettings } from "./useSettings";
+import { getAppModelOptionsForInstance } from "../modelSelection";
+import { resolveSelectableModel } from "@t3tools/shared/model";
 import { useThreadRouteTarget } from "./useThreadRouteTarget";
 import { readUnloadedThreadCount } from "../state/olderSettledShelf";
 import { resolveProjectDefaultProviderModelSelection } from "../providerInstances";
@@ -195,7 +197,7 @@ export function createNewThreadHandler(router: AnyRouter) {
         destinationDraftId,
       });
     // A picker-carried selection applies only when the destination machine's
-    // catalog still offers that exact instance; otherwise the ordinary
+    // catalog still offers that exact instance and model; otherwise the ordinary
     // project-default/carry resolution decides.
     const pickerModelSelection = (() => {
       const requested = options?.modelSelection ?? null;
@@ -209,8 +211,14 @@ export function createNewThreadHandler(router: AnyRouter) {
         targetServerSettings,
         project?.id ?? null,
       );
-      return resolveSelectableProviderInstanceEntry(entries, requested.instanceId)?.instanceId ===
-        requested.instanceId
+      const entry = resolveSelectableProviderInstanceEntry(entries, requested.instanceId);
+      if (entry?.instanceId !== requested.instanceId) return null;
+      const modelOptions = getAppModelOptionsForInstance(
+        mergeEnvironmentSettings(targetServerSettings, getClientSettings()),
+        entry,
+      );
+      return resolveSelectableModel(entry.driverKind, requested.model, modelOptions) ===
+        requested.model
         ? requested
         : null;
     })();

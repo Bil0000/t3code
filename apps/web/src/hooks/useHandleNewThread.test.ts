@@ -292,7 +292,17 @@ vi.mock("../uiStateStore", () => ({
   legacyProjectCwdPreferenceKey: () => "remote-project",
   useUiStateStore: () => [],
 }));
-vi.mock("./useSettings", () => ({ getClientSettings: () => ({}) }));
+vi.mock("@t3tools/shared/model", () => ({
+  resolveSelectableModel: (_: unknown, model: string, options: Array<{ slug: string }>) =>
+    options.find((option) => option.slug === model)?.slug ?? null,
+}));
+vi.mock("../modelSelection", () => ({
+  getAppModelOptionsForInstance: (_: unknown, entry: { models: unknown[] }) => entry.models,
+}));
+vi.mock("./useSettings", () => ({
+  getClientSettings: () => ({}),
+  mergeEnvironmentSettings: (server: object, client: object) => ({ ...client, ...server }),
+}));
 
 import { useNewThreadHandler } from "./useHandleNewThread";
 
@@ -380,7 +390,7 @@ describe("useNewThreadHandler picker-carried model selection", () => {
     installed: true,
     status: "ready",
     availability: "available",
-    models: [],
+    models: [{ slug: "gpt-5.4-codex", name: "GPT-5.4 Codex", isCustom: false }],
   };
 
   it.each([
@@ -421,22 +431,28 @@ describe("useNewThreadHandler picker-carried model selection", () => {
     },
   );
 
-  it("falls back to ordinary resolution when the destination machine lacks the provider", async () => {
-    testState.reset(null);
-    testState.setProviders([["environment-ssh", []]]);
-    const openThread = useNewThreadHandler();
+  it.each([
+    ["provider", []],
+    ["model", [{ ...selectableCodexProvider, models: [] }]],
+  ] as const)(
+    "falls back to ordinary resolution when the destination machine lacks the %s",
+    async (_, providers) => {
+      testState.reset(null);
+      testState.setProviders([["environment-ssh", providers]]);
+      const openThread = useNewThreadHandler();
 
-    const pendingOpen = openThread(projectRef, { modelSelection: pickerSelection });
-    testState.completeProjectFileRead(null);
-    const opened = await pendingOpen;
+      const pendingOpen = openThread(projectRef, { modelSelection: pickerSelection });
+      testState.completeProjectFileRead(null);
+      const opened = await pendingOpen;
 
-    expect(opened).not.toBeNull();
-    expect(testState.draftStore.setModelSelection).not.toHaveBeenCalledWith(
-      "draft-delayed",
-      pickerSelection,
-      expect.anything(),
-    );
-  });
+      expect(opened).not.toBeNull();
+      expect(testState.draftStore.setModelSelection).not.toHaveBeenCalledWith(
+        "draft-delayed",
+        pickerSelection,
+        expect.anything(),
+      );
+    },
+  );
 
   it("falls back to ordinary resolution when project settings disable the provider", async () => {
     testState.reset(null);
