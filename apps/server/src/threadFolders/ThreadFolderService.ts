@@ -175,7 +175,7 @@ const make = Effect.gen(function* () {
         }
         yield* requireLiveThreads(mutation.threadIds ?? []);
         // Retrying a create with the same id is a no-op, so client retries are safe.
-        yield* sql`
+        const created = yield* sql`
           INSERT INTO thread_folders (folder_id, name, icon_json, created_at, updated_at)
           VALUES (
             ${mutation.folderId},
@@ -185,7 +185,9 @@ const make = Effect.gen(function* () {
             ${now}
           )
           ON CONFLICT (folder_id) DO NOTHING
+          RETURNING folder_id
         `;
+        if (created.length === 0) return;
         return yield* placeThreads(mutation.threadIds ?? [], mutation.folderId, now);
       }
       case "folder.update": {

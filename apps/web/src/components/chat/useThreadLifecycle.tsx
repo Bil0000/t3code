@@ -598,6 +598,7 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
     "thread.folder": () => {
       if (!readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)) return false;
       if (
+        !activeThreadShell ||
         !activeThreadRef ||
         !readEnvironmentSupportsThreadFolders(activeThreadRef.environmentId)
       ) {

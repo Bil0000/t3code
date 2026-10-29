@@ -71,10 +71,16 @@ it.layer(layer)("ThreadFolderService", (it) => {
         threadIds: [live, other],
       });
       yield* folders.mutate({ type: "folder.create", folderId: fixes, name: "Fixes" });
-      const moved = yield* folders.mutate({
+      yield* folders.mutate({
         type: "folder.move",
         threadIds: [other],
         folderId: fixes,
+      });
+      const moved = yield* folders.mutate({
+        type: "folder.create",
+        folderId: reviews,
+        name: "Reviews",
+        threadIds: [live, other],
       });
       assert.deepStrictEqual(
         moved.folders.map((folder) => [folder.id, folder.threadIds]),
