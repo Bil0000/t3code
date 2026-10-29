@@ -1821,13 +1821,17 @@ describe("thread folders", () => {
     expect(
       buildThreadListV2ListItems({ ...settledFolder, pendingTasks: [] })
         .map((item) => (item.type === "v2-thread" ? item.item.thread.id : item.type))
-        .slice(-3),
-    ).toEqual(["v2-settled-shelf", "v2-folder-header", settled.id]);
+        .slice(-2),
+    ).toEqual(["v2-settled-shelf", "v2-folder-header"]);
+    expect(
+      settledFolder.items.filter((item) => item.folderKey).map((item) => item.thread.id),
+    ).toEqual([]);
     for (const threads of [[settled], [working, settled]]) {
       const layout = buildThreadListV2Items({
         ...input,
         threads,
         folders: [{ ...folder, threadIds: [settled.id] }],
+        collapsedFolderKeys: new Set([environmentId + ":folder"]),
       });
       expect(
         buildThreadListV2ListItems({ ...layout, pendingTasks: [] }).map((item) =>

@@ -1,5 +1,8 @@
 import { ThreadFolderId, type ThreadFolderMutation } from "@t3tools/contracts";
-import type { EnvironmentThreadFolder } from "@t3tools/client-runtime/state/thread-folders";
+import {
+  type EnvironmentThreadFolder,
+  resolveFolderReorder,
+} from "@t3tools/client-runtime/state/thread-folders";
 import { uuidv4 } from "../../lib/uuid";
 import { serverEnvironment, threadFoldersAtom } from "../../state/server";
 import type { ThreadMoveDestination } from "../threads/threadOrder";
@@ -206,6 +209,7 @@ export function useThreadListActions(): {
   readonly moveFolder: (
     folder: EnvironmentThreadFolder,
     direction: "up" | "down",
+    shown: ReadonlyArray<EnvironmentThreadFolder>,
   ) => Promise<boolean>;
   readonly setFolderAutoFile: (
     folder: EnvironmentThreadFolder,
@@ -252,25 +256,37 @@ export function useThreadListActions(): {
     Dialog.alert("Could not change folder", error instanceof Error ? error.message : "Try again.");
     return false;
   };
-  const moveFolder = (folder: EnvironmentThreadFolder, direction: "up" | "down") => {
-    const folders = appAtomRegistry
+  // `shown` is the folder's own section (open or settled), in screen order.
+  const moveFolder = (
+    folder: EnvironmentThreadFolder,
+    direction: "up" | "down",
+    shown: ReadonlyArray<EnvironmentThreadFolder>,
+  ) => {
+    const order = appAtomRegistry
       .get(threadFoldersAtom)
-      .filter((candidate) => candidate.environmentId === folder.environmentId);
-    const index = folders.findIndex((candidate) => candidate.id === folder.id);
-    if (index < 0 || (direction === "up" ? index === 0 : index === folders.length - 1)) {
+      .filter((candidate) => candidate.environmentId === folder.environmentId)
+      .map((candidate) => candidate.id);
+    const ids = shown.map((candidate) => candidate.id);
+    const index = ids.indexOf(folder.id);
+    const move = resolveFolderReorder(
+      order,
+      ids,
+      folder.id,
+      direction === "up" ? index - 1 : index + 2,
+    );
+    if (index < 0 || index === (direction === "up" ? 0 : ids.length - 1) || move === null) {
       return Promise.resolve(false);
     }
-    return mutateFolder(folder, {
-      type: "folder.reorder",
-      folderId: folder.id,
-      beforeFolderId:
-        direction === "up" ? folders[index - 1]!.id : (folders[index + 2]?.id ?? null),
-    });
+    return mutateFolder(folder, { type: "folder.reorder", folderId: folder.id, ...move });
   };
+  // With no rule, opting in files by the folder's name.
   const setFolderAutoFile = (folder: EnvironmentThreadFolder, autoFile: boolean) =>
-    folder.rule
-      ? mutateFolder(folder, { type: "folder.update", folderId: folder.id, autoFile })
-      : Promise.resolve(false);
+    mutateFolder(folder, {
+      type: "folder.update",
+      folderId: folder.id,
+      autoFile,
+      ...(autoFile && folder.rule === null ? { rule: { smart: true } } : {}),
+    });
   const applyFolderRule = (folder: EnvironmentThreadFolder) =>
     folder.rule
       ? mutateFolder(folder, { type: "folder.applyRule", folderId: folder.id })

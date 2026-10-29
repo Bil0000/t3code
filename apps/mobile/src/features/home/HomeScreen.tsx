@@ -546,7 +546,6 @@ export function HomeScreen(props: HomeScreenProps) {
         <ThreadListV2FolderHeader
           item={item}
           onToggle={toggleFolder}
-          folders={folders}
           onMove={props.onMoveFolder}
           onAutoFile={props.onFolderAutoFile}
           onApplyRule={props.onApplyFolderRule}

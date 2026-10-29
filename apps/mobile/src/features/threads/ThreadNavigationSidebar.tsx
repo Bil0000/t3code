@@ -638,7 +638,6 @@ function ThreadNavigationSidebarPane(
             item={item}
             pane="sidebar"
             onToggle={toggleFolder}
-            folders={folders}
             onMove={moveFolder}
             onAutoFile={setFolderAutoFile}
             onApplyRule={applyFolderRule}

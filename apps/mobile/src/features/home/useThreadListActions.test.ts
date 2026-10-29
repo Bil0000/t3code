@@ -521,11 +521,12 @@ describe("folder actions", () => {
     const third = { ...folder, id: ThreadFolderId.make("third") };
     state.folders = [folder, { ...folder, environmentId: otherEnvironmentId }, second, third];
     const actions = useThreadListActions();
-    expect(await actions.moveFolder(folder, "up")).toBe(false);
-    expect(await actions.moveFolder(third, "down")).toBe(false);
-    expect(await actions.moveFolder(second, "up")).toBe(true);
-    expect(await actions.moveFolder(folder, "down")).toBe(true);
-    expect(await actions.moveFolder(second, "down")).toBe(true);
+    const shown = [folder, second, third];
+    expect(await actions.moveFolder(folder, "up", shown)).toBe(false);
+    expect(await actions.moveFolder(third, "down", shown)).toBe(false);
+    expect(await actions.moveFolder(second, "up", shown)).toBe(true);
+    expect(await actions.moveFolder(folder, "down", shown)).toBe(true);
+    expect(await actions.moveFolder(second, "down", shown)).toBe(true);
     expect(state.folderRequests).toEqual([
       {
         environmentId: primaryEnvironmentId,
@@ -546,10 +547,16 @@ describe("folder actions", () => {
       { type: "folder.update", folderId: folder.id, autoFile: true },
       { type: "folder.update", folderId: folder.id, autoFile: false },
     ]);
-    expect(await actions.setFolderAutoFile({ ...folder, rule: null }, true)).toBe(false);
+    expect(await actions.setFolderAutoFile({ ...folder, rule: null }, true)).toBe(true);
+    expect(state.folderRequests.at(-1)?.input).toEqual({
+      type: "folder.update",
+      folderId: folder.id,
+      autoFile: true,
+      rule: { smart: true },
+    });
     state.scopes.get(primaryEnvironmentId)!.clear();
-    expect(await actions.moveFolder(second, "up")).toBe(false);
+    expect(await actions.moveFolder(second, "up", shown)).toBe(false);
     expect(await actions.setFolderAutoFile(folder, true)).toBe(false);
-    expect(state.folderRequests).toHaveLength(5);
+    expect(state.folderRequests).toHaveLength(6);
   });
 });

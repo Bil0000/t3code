@@ -303,14 +303,20 @@ export const ThreadListV2FolderHeader = memo(function ThreadListV2FolderHeader(p
   readonly onToggle: (key: string) => void;
   readonly onRename: (folder: EnvironmentThreadFolder) => void;
   readonly onDelete: (folder: EnvironmentThreadFolder) => void;
-  readonly folders: ReadonlyArray<EnvironmentThreadFolder>;
-  readonly onMove: (folder: EnvironmentThreadFolder, direction: "up" | "down") => Promise<boolean>;
+  readonly onMove: (
+    folder: EnvironmentThreadFolder,
+    direction: "up" | "down",
+    shown: ReadonlyArray<EnvironmentThreadFolder>,
+  ) => Promise<boolean>;
   readonly onAutoFile: (folder: EnvironmentThreadFolder, autoFile: boolean) => Promise<boolean>;
   readonly onApplyRule: (folder: EnvironmentThreadFolder) => Promise<boolean>;
   readonly onSettle: (folder: EnvironmentThreadFolder, settled: boolean) => Promise<boolean>;
 }) {
   const { item } = props;
-  const folders = props.folders.filter((folder) => folder.environmentId === item.environmentId);
+  const folders = item.sectionFolders.filter(
+    (folder) => folder.environmentId === item.environmentId,
+  );
+  const autoFileOn = item.folder.rule !== null && item.folder.autoFile;
   const folderIndex = folders.findIndex((folder) => folder.id === item.folder.id);
   const icon = item.folder.icon;
   const colors = projectIconColorClassNames(icon && "color" in icon ? icon.color : "blue");
@@ -323,28 +329,26 @@ export const ThreadListV2FolderHeader = memo(function ThreadListV2FolderHeader(p
         ...(folderIndex >= 0 && folderIndex < folders.length - 1
           ? [{ id: "move-down", title: "Move down", image: "arrow.down" }]
           : []),
-        ...(item.folder.rule
-          ? [
-              {
-                id: "auto-file",
-                title: "Auto-file behavior",
-                image: "tray.and.arrow.down",
-                subactions: [
-                  {
-                    id: "auto-file:enabled",
-                    title: "Enabled",
-                    state: item.folder.autoFile ? ("on" as const) : ("off" as const),
-                  },
-                  {
-                    id: "auto-file:disabled",
-                    title: "Disabled",
-                    state: item.folder.autoFile ? ("off" as const) : ("on" as const),
-                  },
-                  { id: "apply-rule", title: "File matching threads now" },
-                ],
-              },
-            ]
-          : []),
+        {
+          id: "auto-file",
+          title: "Auto-file behavior",
+          image: "tray.and.arrow.down",
+          subactions: [
+            {
+              id: "auto-file:enabled",
+              title: "Enabled",
+              state: autoFileOn ? ("on" as const) : ("off" as const),
+            },
+            {
+              id: "auto-file:disabled",
+              title: "Disabled",
+              state: autoFileOn ? ("off" as const) : ("on" as const),
+            },
+            ...(item.folder.rule
+              ? [{ id: "apply-rule", title: "File matching unsettled threads now" }]
+              : []),
+          ],
+        },
         item.settled
           ? { id: "unsettle", title: "Un-settle folder", image: "arrow.uturn.backward" }
           : { id: "settle", title: "Settle folder", image: "checkmark.circle" },
@@ -353,12 +357,12 @@ export const ThreadListV2FolderHeader = memo(function ThreadListV2FolderHeader(p
       onPressAction={({ nativeEvent }) => {
         if (nativeEvent.event === "rename") props.onRename(item.folder);
         if (nativeEvent.event === "delete") props.onDelete(item.folder);
-        if (nativeEvent.event === "move-up") void props.onMove(item.folder, "up");
-        if (nativeEvent.event === "move-down") void props.onMove(item.folder, "down");
+        if (nativeEvent.event === "move-up") void props.onMove(item.folder, "up", folders);
+        if (nativeEvent.event === "move-down") void props.onMove(item.folder, "down", folders);
         if (nativeEvent.event === "apply-rule") void props.onApplyRule(item.folder);
-        if (nativeEvent.event === "auto-file:enabled" && !item.folder.autoFile)
+        if (nativeEvent.event === "auto-file:enabled" && !autoFileOn)
           void props.onAutoFile(item.folder, true);
-        if (nativeEvent.event === "auto-file:disabled" && item.folder.autoFile)
+        if (nativeEvent.event === "auto-file:disabled" && autoFileOn)
           void props.onAutoFile(item.folder, false);
         if (nativeEvent.event === "settle") void props.onSettle(item.folder, true);
         if (nativeEvent.event === "unsettle") void props.onSettle(item.folder, false);

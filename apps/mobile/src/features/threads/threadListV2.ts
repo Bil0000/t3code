@@ -384,6 +384,8 @@ export interface ThreadListV2SettledShelfListItem {
 export interface ThreadListV2FolderHeaderListItem {
   readonly type: "v2-folder-header";
   readonly settled: boolean;
+  /** The folders of this header's section (open or settled), in screen order, for Move up/down. */
+  readonly sectionFolders: ReadonlyArray<EnvironmentThreadFolder>;
   readonly key: string;
   readonly folderKey: string;
   readonly environmentId: EnvironmentId;
@@ -427,6 +429,7 @@ export function threadListV2ListItemsAreEqual(
         previous.folder === item.folder &&
         previous.count === item.count &&
         previous.settled === item.settled &&
+        previous.sectionFolders === item.sectionFolders &&
         previous.expanded === item.expanded &&
         previous.disabled === item.disabled
       );
@@ -900,8 +903,18 @@ export function buildThreadListV2Items(input: {
   // A folder whose every member is settled sits on the Settled shelf.
   const isSettledFolder = (block: (typeof folderLayout.blocks)[number]) =>
     block.threads.length > 0 && block.threads.every((thread) => settledThreads.has(thread));
+  const openFolderList = folderLayout.blocks
+    .filter((block) => !isSettledFolder(block))
+    .map((block) => block.folder);
+  const settledFolderList = folderLayout.blocks
+    .filter(isSettledFolder)
+    .map((block) => block.folder);
   const pushFolder = (block: (typeof folderLayout.blocks)[number]) => {
-    const expanded = !input.collapsedFolderKeys?.has(block.key);
+    const settled = isSettledFolder(block);
+    // Settled folders start collapsed, and fold away with a closed Settled shelf.
+    const expanded =
+      (input.collapsedFolderKeys?.has(block.key) ?? false) === settled &&
+      !(settled && input.settledShelfExpanded === false);
     folderHeaders.push({
       type: "v2-folder-header",
       key: `v2-folder:${block.key}`,
@@ -909,7 +922,8 @@ export function buildThreadListV2Items(input: {
       environmentId: block.folder.environmentId,
       folder: block.folder,
       count: block.threads.length,
-      settled: isSettledFolder(block),
+      settled,
+      sectionFolders: settled ? settledFolderList : openFolderList,
       expanded,
       disabled: false,
       index: items.length,
