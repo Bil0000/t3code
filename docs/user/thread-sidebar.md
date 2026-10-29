@@ -160,17 +160,27 @@ is off. Each device keeps its own choice.
 Folders group threads from one environment. They show above **Pinned** and work the same on
 every device connected to that environment.
 
-To make a folder, open a thread's menu and choose **Move to folder → New folder…**, or press
-`mod+g` on the open thread. To start one from several threads, select them and right-click →
-**New folder from selection**. Type the name right away, or double-click a folder later to rename
-it. Press `mod+g` again, or choose **Remove from folder**, to take a thread out.
+To make a folder, right-click empty space in the sidebar and choose **New folder**, open a
+thread's menu and choose **Move to folder → New folder…**, or press `mod+g` on the open thread.
+To start one from several threads, select them and right-click → **New folder from selection**.
+Type the name right away, or double-click a folder later to rename it. Drag a thread onto a folder
+to file it, or drag it onto a loose thread to take it out. Press `mod+g` again, or choose
+**Remove from folder**, to do the same from the keyboard or menu. Drag a folder to reorder it.
 
-A folder can have its own icon and color. Click it to collapse it. Its menu can settle every
-thread in it, or delete the folder; deleting a folder never deletes its threads.
+A folder holds all of its threads, including pinned, snoozed, and settled ones, so they collapse
+with it. Choose **Customize…** in its menu to set an icon (any Lucide icon, an emoji, or letters)
+and a color. **Settle folder** settles every thread in it. When every thread in a folder is
+settled, the folder moves to **Settled**, still holding its threads; **Un-settle folder** brings it
+back. Deleting a folder never deletes its threads.
 
-Agents connected through T3 Code can create folders and file threads for you. For example, ask
-for "put the review threads in a Reviews folder". Pinned, snoozed, and settled threads stay in
-their own sections.
+To keep a folder filled for you, choose **Auto-file behavior → Set rule…** and set a rule: branch or worktree
+patterns (`*` matches anything), title words, projects, providers, or whether the thread has a pull
+request. New threads that match go into the first matching folder, top to bottom. **File matching
+threads now** moves existing threads that match. Use **Auto-file behavior → Disabled** to stop. A
+thread you move by hand is never filed automatically again.
+
+Agents connected through T3 Code can create folders, set rules, and file threads for you. For
+example, ask for "put the review threads in a Reviews folder".
 
 ## Settle finished work
 

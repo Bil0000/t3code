@@ -3,7 +3,7 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/model
 import type { EnvironmentThreadFolder } from "@t3tools/client-runtime/state/thread-folders";
 import { resolveThreadCurrentPullRequestLink } from "@t3tools/client-runtime/thread-pull-requests";
 import { AuthOrchestrationOperateScope, type ProjectIconOverride } from "@t3tools/contracts";
-import { ChevronDownIcon, FolderClosedIcon, FolderOpenIcon } from "lucide-react";
+import { ChevronDownIcon, FolderClosedIcon, FolderOpenIcon, SparklesIcon } from "lucide-react";
 import {
   memo,
   useRef,
@@ -112,6 +112,12 @@ export const SidebarThreadFolderHeader = memo(function SidebarThreadFolderHeader
   collapsed: boolean;
   threads: readonly EnvironmentThreadShell[];
   hiddenThreads: readonly EnvironmentThreadShell[];
+  hiddenLiveThreads: readonly EnvironmentThreadShell[];
+  isDropTarget: boolean;
+  isDragging: boolean;
+  /** Where a dragged folder would land relative to this one. */
+  reorderMark: "before" | "after" | null;
+  onDragStart: (folder: EnvironmentThreadFolder, event: PointerEvent) => void;
   onToggle: (folderKey: string) => void;
   onRename: (folder: EnvironmentThreadFolder, name: string) => void;
   onContextMenu: (folder: EnvironmentThreadFolder, position: { x: number; y: number }) => void;
@@ -126,7 +132,7 @@ export const SidebarThreadFolderHeader = memo(function SidebarThreadFolderHeader
   const pullRequestCount = collapsed ? threads.filter(hasVisiblePullRequest).length : 0;
   const dot = collapsed
     ? resolveSidebarFolderDot(
-        hiddenThreads.map((thread) => ({
+        props.hiddenLiveThreads.map((thread) => ({
           ...thread,
           lastVisitedAt: resolveThreadLastVisitedAt(
             thread.lastVisitedAt,
@@ -181,12 +187,25 @@ export const SidebarThreadFolderHeader = memo(function SidebarThreadFolderHeader
     <li
       data-thread-selection-safe
       data-testid="sidebar-thread-folder"
+      data-thread-folder-drop={folderKey}
       className={cn(
         "group/thread-folder list-none mt-2 first:mt-0",
         collapsed || threads.length === 0 ? "rounded-lg" : "rounded-t-lg",
         threadFolderTintClassName(icon),
+        props.isDropTarget && "ring-2 ring-inset ring-primary/70",
+        props.isDragging && "opacity-60",
+        props.reorderMark !== null && "relative",
       )}
     >
+      {props.reorderMark !== null ? (
+        <span
+          aria-hidden
+          className={cn(
+            "pointer-events-none absolute inset-x-1 h-0.5 rounded-full bg-primary",
+            props.reorderMark === "before" ? "-top-1.5" : "-bottom-1.5",
+          )}
+        />
+      ) : null}
       <div
         role={isRenaming ? undefined : "treeitem"}
         tabIndex={-1}
@@ -195,6 +214,9 @@ export const SidebarThreadFolderHeader = memo(function SidebarThreadFolderHeader
         aria-label={isRenaming ? undefined : `${label}${dot ? FOLDER_DOT_LABEL[dot] : ""}`}
         className="mx-0.5 flex h-9 cursor-pointer items-center gap-2 rounded-md px-2 text-left outline-none select-none hover:bg-sidebar-row-hover/70 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
         onClick={handleClick}
+        onPointerDown={(event) => {
+          if (!isRenaming && canOperate) props.onDragStart(folder, event.nativeEvent);
+        }}
         onDoubleClick={handleDoubleClick}
         onKeyDown={handleKeyDown}
         onContextMenu={(event) => {
@@ -233,6 +255,12 @@ export const SidebarThreadFolderHeader = memo(function SidebarThreadFolderHeader
             {folder.name}
           </span>
         )}
+        {folder.rule !== null && folder.autoFile ? (
+          <SparklesIcon
+            aria-label="Auto-files new threads"
+            className="size-3 shrink-0 text-sidebar-muted-foreground"
+          />
+        ) : null}
         {pullRequestCount > 0 ? (
           <span
             aria-hidden
@@ -275,6 +303,7 @@ export const SidebarThreadFolderEmptyRow = memo(function SidebarThreadFolderEmpt
     <li
       aria-hidden
       data-thread-selection-safe
+      data-thread-folder-drop={props.folderKey}
       className={cn(
         "list-none rounded-b-lg pb-2 ps-9 text-xs text-sidebar-muted-foreground",
         threadFolderTintClassName(props.folder.icon),

@@ -42,33 +42,80 @@ import { deadlineAfter, deadlineStore } from "@t3tools/client-runtime/clock";
 import { useDeadlinePassed } from "../hooks/useDeadline";
 import { legacyProjectCwdPreferenceKey } from "../uiStateStore";
 
+export type SidebarFolderSection = "pinned" | "active" | "snoozed" | "settled";
+
+/**
+ * Folders own every member, whatever its shelf: rows leave the shared sections and
+ * render inside the folder as pinned, active (working first), snoozed, then settled.
+ * A collapsed folder still shows the open thread.
+ */
 export function foldSidebarThreadFolders<T extends EnvironmentThreadShell>(input: {
+  readonly pinnedThreads: readonly T[];
   readonly activeThreads: readonly T[];
   readonly workingThreads: readonly T[];
+  readonly snoozedThreads: readonly T[];
+  readonly settledThreads: readonly T[];
   readonly folders: readonly EnvironmentThreadFolder[];
   readonly collapsedKeys: ReadonlySet<string>;
   readonly routeThreadKey: string | null;
 }) {
+  const ordered: Array<{ readonly thread: T; readonly section: SidebarFolderSection }> = [
+    ...input.pinnedThreads.map((thread) => ({ thread, section: "pinned" as const })),
+    ...sortActiveThreadsByOrderKey([...input.workingThreads, ...input.activeThreads]).map(
+      (thread) => ({ thread, section: "active" as const }),
+    ),
+    ...input.snoozedThreads.map((thread) => ({ thread, section: "snoozed" as const })),
+    ...input.settledThreads.map((thread) => ({ thread, section: "settled" as const })),
+  ];
   const layout = layoutThreadFolders({
-    threads: sortActiveThreadsByOrderKey([...input.activeThreads, ...input.workingThreads]),
+    threads: ordered.map(({ thread }) => thread),
     folders: input.folders,
   });
   const unfiled = new Set(layout.unfiled);
+  const sectionOf = new Map(ordered.map(({ thread, section }) => [thread, section]));
+  const isRoute = (thread: T) => `${thread.environmentId}:${thread.id}` === input.routeThreadKey;
   return {
+    pinnedThreads: input.pinnedThreads.filter((thread) => unfiled.has(thread)),
     activeThreads: input.activeThreads.filter((thread) => unfiled.has(thread)),
     workingThreads: input.workingThreads.filter((thread) => unfiled.has(thread)),
+    snoozedThreads: input.snoozedThreads.filter((thread) => unfiled.has(thread)),
+    settledThreads: input.settledThreads.filter((thread) => unfiled.has(thread)),
     blocks: layout.blocks.map((block) => {
       const collapsed = input.collapsedKeys.has(block.key);
-      const isRoute = (thread: T) =>
-        `${thread.environmentId}:${thread.id}` === input.routeThreadKey;
+      const rows = block.threads.map((thread) => ({ thread, section: sectionOf.get(thread)! }));
+      const hidden = collapsed ? rows.filter((row) => !isRoute(row.thread)) : [];
       return {
         ...block,
         collapsed,
-        visibleThreads: collapsed ? block.threads.filter(isRoute) : block.threads,
-        hiddenThreads: collapsed ? block.threads.filter((thread) => !isRoute(thread)) : [],
+        // A folder whose every member is settled moves to the Settled shelf, card and all.
+        settled: rows.length > 0 && rows.every((row) => row.section === "settled"),
+        rows: collapsed ? rows.filter((row) => isRoute(row.thread)) : rows,
+        hiddenThreads: hidden.map((row) => row.thread),
+        // Parked members never light the folder's status dot.
+        hiddenLiveThreads: hidden
+          .filter((row) => row.section === "pinned" || row.section === "active")
+          .map((row) => row.thread),
       };
     }),
   };
+}
+
+/**
+ * Where a folder lands when dropped at `index` among `shown`, the folders of its section in
+ * screen order, as the server's `beforeFolderId` over the stored `order`.
+ */
+export function resolveFolderReorder<Id>(
+  order: readonly Id[],
+  shown: readonly Id[],
+  folderId: Id,
+  index: number,
+): { readonly beforeFolderId: Id | null } | null {
+  const from = shown.indexOf(folderId);
+  if (from === -1 || index === from || index === from + 1) return null;
+  const before = shown[index];
+  if (before !== undefined) return { beforeFolderId: before };
+  const rest = order.filter((id) => id !== folderId);
+  return { beforeFolderId: rest[rest.indexOf(shown.at(-1)!) + 1] ?? null };
 }
 
 export function shouldNavigateAfterThreadPark(input: {

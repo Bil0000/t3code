@@ -546,6 +546,8 @@ type SidebarThreadRowProps = {
   // Thread folder members carry the folder's tint; the last one closes the card.
   folderTintClassName?: string | undefined;
   folderCardEnd?: boolean | undefined;
+  /** The thread folder whose card this row closes; the row is part of that folder's drop zone. */
+  folderDropKey?: string | undefined;
   dropVerb: SidebarDropVerb | null;
   dragOverPinned: boolean;
   sweepAction: SidebarSweepAction | null;
@@ -1202,6 +1204,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     return (
       <li
         data-thread-item={threadKey}
+        data-thread-folder-drop={props.folderDropKey}
         {...sortableRootProps}
         {...(fileDropHandlers ?? {})}
         className={cn(
@@ -1391,6 +1394,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   return (
     <li
       data-thread-item={threadKey}
+      data-thread-folder-drop={props.folderDropKey}
       {...sortableRootProps}
       {...(fileDropHandlers ?? {})}
       className={cn(
