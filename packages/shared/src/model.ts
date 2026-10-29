@@ -209,11 +209,15 @@ export function withLegacyUltracodeEffort(
   ) {
     return selections;
   }
-  const ultracode = getRawSelectionValueById(selections, "ultracode");
   return [
-    ...(selections ?? []).filter(({ id }) => id !== "effort" && id !== "ultracode"),
-    { id: "effort", value: "xhigh" },
-    { id: "ultracode", value: typeof ultracode === "boolean" ? ultracode : true },
+    ...(selections ?? []).map((selection) =>
+      selection.id === "effort" && selection.value === "ultracode"
+        ? { id: "effort", value: "xhigh" }
+        : selection,
+    ),
+    ...(getRawSelectionValueById(selections, "ultracode") === undefined
+      ? [{ id: "ultracode", value: true }]
+      : []),
   ];
 }
 

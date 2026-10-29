@@ -82,6 +82,12 @@ describe("descriptor helpers", () => {
         selections: [...selections, { id: "ultracode", value: false }],
       }).find(({ id }) => id === "ultracode")?.currentValue,
     ).toBe(false);
+    expect(
+      getProviderOptionDescriptors({
+        caps,
+        selections: [...selections, { id: "ultracode", value: "false" }],
+      }).find(({ id }) => id === "ultracode")?.currentValue,
+    ).toBeUndefined();
   });
 
   it("compares complete model selections independent of option ordering", () => {

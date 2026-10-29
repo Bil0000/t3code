@@ -2538,8 +2538,26 @@ describe("OrchestratorMcpService provider resolution", () => {
               ],
             },
           },
+          {
+            name: "effort override on an old Ultracode parent",
+            parent: {
+              instanceId: codexInstanceId,
+              model: "ultracode-model",
+              options: [{ id: "effort", value: "ultracode" }],
+            },
+            target: { options: { effort: "high" } },
+            expected: {
+              instanceId: codexInstanceId,
+              model: "ultracode-model",
+              options: [
+                { id: "effort", value: "high" },
+                { id: "ultracode", value: true },
+              ],
+            },
+          },
         ] as const;
         for (const testCase of cases) {
+          const parent = "parent" in testCase ? testCase.parent : inherited;
           const commands: Array<unknown> = [];
           const task = {
             id: taskId,
@@ -2559,7 +2577,7 @@ describe("OrchestratorMcpService provider resolution", () => {
               getThreadRecords: (threadId) =>
                 Effect.succeed(
                   threadId === parentThreadId
-                    ? parentProjection(commands.length > 0 ? [task] : [], inherited)
+                    ? parentProjection(commands.length > 0 ? [task] : [], parent)
                     : childProjection,
                 ),
               dispatch: (command) =>
@@ -2596,7 +2614,10 @@ describe("OrchestratorMcpService provider resolution", () => {
                           id: "effort",
                           label: "Reasoning",
                           type: "select",
-                          options: [{ id: "xhigh", label: "Extra High" }],
+                          options: [
+                            { id: "high", label: "High" },
+                            { id: "xhigh", label: "Extra High" },
+                          ],
                         },
                         { id: "ultracode", label: "Ultracode", type: "boolean" },
                       ],
@@ -2615,7 +2636,7 @@ describe("OrchestratorMcpService provider resolution", () => {
           yield* Effect.gen(function* () {
             const service = yield* OrchestratorMcpService.OrchestratorMcpService;
             const capabilities = yield* service.capabilities(scope);
-            assert.deepEqual(capabilities.inheritedOptions, inherited.options);
+            assert.deepEqual(capabilities.inheritedOptions, parent.options);
             yield* service.delegateTask(scope, {
               task: "Review the change.",
               target: yield* decodeTarget(testCase.target),
