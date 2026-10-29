@@ -2,6 +2,8 @@ import { ThreadFolderId, type ThreadFolderMutation } from "@t3tools/contracts";
 import {
   type EnvironmentThreadFolder,
   resolveFolderReorder,
+  type ThreadFolderCollect,
+  threadFolderCollectUpdate,
 } from "@t3tools/client-runtime/state/thread-folders";
 import { uuidv4 } from "../../lib/uuid";
 import { serverEnvironment, threadFoldersAtom } from "../../state/server";
@@ -211,9 +213,9 @@ export function useThreadListActions(): {
     direction: "up" | "down",
     shown: ReadonlyArray<EnvironmentThreadFolder>,
   ) => Promise<boolean>;
-  readonly setFolderAutoFile: (
+  readonly setFolderCollect: (
     folder: EnvironmentThreadFolder,
-    autoFile: boolean,
+    choice: Exclude<ThreadFolderCollect, { readonly by: "custom" }>,
   ) => Promise<boolean>;
   readonly applyFolderRule: (folder: EnvironmentThreadFolder) => Promise<boolean>;
   readonly settleFolder: (folder: EnvironmentThreadFolder, settled: boolean) => Promise<boolean>;
@@ -279,14 +281,13 @@ export function useThreadListActions(): {
     }
     return mutateFolder(folder, { type: "folder.reorder", folderId: folder.id, ...move });
   };
-  // With no rule, opting in files by the folder's name.
-  const setFolderAutoFile = (folder: EnvironmentThreadFolder, autoFile: boolean) =>
-    mutateFolder(folder, {
-      type: "folder.update",
-      folderId: folder.id,
-      autoFile,
-      ...(autoFile && folder.rule === null ? { rule: { smart: true } } : {}),
-    });
+  const setFolderCollect = (
+    folder: EnvironmentThreadFolder,
+    choice: Exclude<ThreadFolderCollect, { readonly by: "custom" }>,
+  ) => {
+    const update = threadFolderCollectUpdate(folder, choice);
+    return update ? mutateFolder(folder, update) : Promise.resolve(false);
+  };
   const applyFolderRule = (folder: EnvironmentThreadFolder) =>
     folder.rule
       ? mutateFolder(folder, { type: "folder.applyRule", folderId: folder.id })
@@ -857,7 +858,7 @@ export function useThreadListActions(): {
     renameFolder,
     deleteFolder,
     moveFolder,
-    setFolderAutoFile,
+    setFolderCollect,
     applyFolderRule,
     settleFolder,
     archiveThread,

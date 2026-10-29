@@ -129,7 +129,7 @@ interface HomeScreenProps {
   readonly onRenameFolder: ReturnType<typeof useThreadListActions>["renameFolder"];
   readonly onDeleteFolder: ReturnType<typeof useThreadListActions>["deleteFolder"];
   readonly onMoveFolder: ReturnType<typeof useThreadListActions>["moveFolder"];
-  readonly onFolderAutoFile: ReturnType<typeof useThreadListActions>["setFolderAutoFile"];
+  readonly onFolderCollect: ReturnType<typeof useThreadListActions>["setFolderCollect"];
   readonly onApplyFolderRule: ReturnType<typeof useThreadListActions>["applyFolderRule"];
   readonly onSettleFolder: ReturnType<typeof useThreadListActions>["settleFolder"];
   readonly onMoveThread: (
@@ -547,7 +547,7 @@ export function HomeScreen(props: HomeScreenProps) {
           item={item}
           onToggle={toggleFolder}
           onMove={props.onMoveFolder}
-          onAutoFile={props.onFolderAutoFile}
+          onCollect={props.onFolderCollect}
           onApplyRule={props.onApplyFolderRule}
           onSettle={props.onSettleFolder}
           onRename={props.onRenameFolder}

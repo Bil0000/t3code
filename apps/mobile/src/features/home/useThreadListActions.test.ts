@@ -541,22 +541,16 @@ describe("folder actions", () => {
         input: { type: "folder.reorder", folderId: second.id, beforeFolderId: null },
       },
     ]);
-    expect(await actions.setFolderAutoFile(folder, true)).toBe(true);
-    expect(await actions.setFolderAutoFile({ ...folder, autoFile: true }, false)).toBe(true);
-    expect(state.folderRequests.slice(-2).map((request) => request.input)).toEqual([
-      { type: "folder.update", folderId: folder.id, autoFile: true },
-      { type: "folder.update", folderId: folder.id, autoFile: false },
-    ]);
-    expect(await actions.setFolderAutoFile({ ...folder, rule: null }, true)).toBe(true);
+    expect(await actions.setFolderCollect(folder, { by: "topic" })).toBe(true);
     expect(state.folderRequests.at(-1)?.input).toEqual({
       type: "folder.update",
       folderId: folder.id,
-      autoFile: true,
       rule: { smart: true },
+      autoFile: true,
     });
     state.scopes.get(primaryEnvironmentId)!.clear();
     expect(await actions.moveFolder(second, "up", shown)).toBe(false);
-    expect(await actions.setFolderAutoFile(folder, true)).toBe(false);
-    expect(state.folderRequests).toHaveLength(6);
+    expect(await actions.setFolderCollect(folder, { by: "topic" })).toBe(false);
+    expect(state.folderRequests).toHaveLength(4);
   });
 });

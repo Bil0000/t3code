@@ -3,6 +3,7 @@ import {
   scopedThreadFolderKey,
   findThreadFolder,
   type EnvironmentThreadFolder,
+  threadFolderCollectChoices,
 } from "@t3tools/client-runtime/state/thread-folders";
 import {
   canSnooze,
@@ -390,6 +391,8 @@ export interface ThreadListV2FolderHeaderListItem {
   readonly folderKey: string;
   readonly environmentId: EnvironmentId;
   readonly folder: EnvironmentThreadFolder;
+  /** Branches and worktrees the Collect menu offers. */
+  readonly collectChoices: ReturnType<typeof threadFolderCollectChoices>;
   readonly count: number;
   readonly expanded: boolean;
   readonly disabled: boolean;
@@ -427,6 +430,7 @@ export function threadListV2ListItemsAreEqual(
         previous.type === item.type &&
         previous.key === item.key &&
         previous.folder === item.folder &&
+        JSON.stringify(previous.collectChoices) === JSON.stringify(item.collectChoices) &&
         previous.count === item.count &&
         previous.settled === item.settled &&
         previous.sectionFolders === item.sectionFolders &&
@@ -921,6 +925,7 @@ export function buildThreadListV2Items(input: {
       folderKey: block.key,
       environmentId: block.folder.environmentId,
       folder: block.folder,
+      collectChoices: threadFolderCollectChoices(block.folder, input.threads),
       count: block.threads.length,
       settled,
       sectionFolders: settled ? settledFolderList : openFolderList,

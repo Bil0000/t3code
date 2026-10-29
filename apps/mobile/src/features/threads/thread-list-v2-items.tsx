@@ -1,6 +1,8 @@
 import {
   findThreadFolder,
   type EnvironmentThreadFolder,
+  type ThreadFolderCollect,
+  threadFolderCollect,
 } from "@t3tools/client-runtime/state/thread-folders";
 import { ThreadFolderId } from "@t3tools/contracts";
 import type { ReactNode } from "react";
@@ -308,7 +310,10 @@ export const ThreadListV2FolderHeader = memo(function ThreadListV2FolderHeader(p
     direction: "up" | "down",
     shown: ReadonlyArray<EnvironmentThreadFolder>,
   ) => Promise<boolean>;
-  readonly onAutoFile: (folder: EnvironmentThreadFolder, autoFile: boolean) => Promise<boolean>;
+  readonly onCollect: (
+    folder: EnvironmentThreadFolder,
+    choice: Exclude<ThreadFolderCollect, { readonly by: "custom" }>,
+  ) => Promise<boolean>;
   readonly onApplyRule: (folder: EnvironmentThreadFolder) => Promise<boolean>;
   readonly onSettle: (folder: EnvironmentThreadFolder, settled: boolean) => Promise<boolean>;
 }) {
@@ -316,7 +321,15 @@ export const ThreadListV2FolderHeader = memo(function ThreadListV2FolderHeader(p
   const folders = item.sectionFolders.filter(
     (folder) => folder.environmentId === item.environmentId,
   );
-  const autoFileOn = item.folder.rule !== null && item.folder.autoFile;
+  const collect = threadFolderCollect(item.folder);
+  const choiceActions = (by: "branch" | "worktree", values: ReadonlyArray<string>) =>
+    values.length === 0
+      ? [{ id: `collect:${by}:none`, title: "None yet", attributes: { disabled: true } }]
+      : values.map((value) => ({
+          id: `collect:${by}:${value}`,
+          title: value,
+          state: collect.by === by && collect.value === value ? ("on" as const) : ("off" as const),
+        }));
   const folderIndex = folders.findIndex((folder) => folder.id === item.folder.id);
   const icon = item.folder.icon;
   const colors = projectIconColorClassNames(icon && "color" in icon ? icon.color : "blue");
@@ -330,22 +343,42 @@ export const ThreadListV2FolderHeader = memo(function ThreadListV2FolderHeader(p
           ? [{ id: "move-down", title: "Move down", image: "arrow.down" }]
           : []),
         {
-          id: "auto-file",
-          title: "Auto-file behavior",
+          id: "collect",
+          title: "Collect new threads",
           image: "tray.and.arrow.down",
           subactions: [
             {
-              id: "auto-file:enabled",
-              title: "Enabled",
-              state: autoFileOn ? ("on" as const) : ("off" as const),
+              id: "collect:off",
+              title: "Off",
+              state: collect.by === "off" ? ("on" as const) : ("off" as const),
             },
             {
-              id: "auto-file:disabled",
-              title: "Disabled",
-              state: autoFileOn ? ("off" as const) : ("on" as const),
+              id: "collect:topic",
+              title: "By topic",
+              state: collect.by === "topic" ? ("on" as const) : ("off" as const),
             },
+            {
+              id: "collect:branch",
+              title: collect.by === "branch" ? `By branch: ${collect.value}` : "By branch",
+              subactions: choiceActions("branch", item.collectChoices.branches),
+            },
+            {
+              id: "collect:worktree",
+              title: collect.by === "worktree" ? `By worktree: ${collect.value}` : "By worktree",
+              subactions: choiceActions("worktree", item.collectChoices.worktrees),
+            },
+            ...(collect.by === "custom"
+              ? [
+                  {
+                    id: "collect:custom",
+                    title: "Set by an agent",
+                    state: "on" as const,
+                    attributes: { disabled: true },
+                  },
+                ]
+              : []),
             ...(item.folder.rule
-              ? [{ id: "apply-rule", title: "File matching unsettled threads now" }]
+              ? [{ id: "apply-rule", title: "Collect existing threads now" }]
               : []),
           ],
         },
@@ -360,10 +393,12 @@ export const ThreadListV2FolderHeader = memo(function ThreadListV2FolderHeader(p
         if (nativeEvent.event === "move-up") void props.onMove(item.folder, "up", folders);
         if (nativeEvent.event === "move-down") void props.onMove(item.folder, "down", folders);
         if (nativeEvent.event === "apply-rule") void props.onApplyRule(item.folder);
-        if (nativeEvent.event === "auto-file:enabled" && !autoFileOn)
-          void props.onAutoFile(item.folder, true);
-        if (nativeEvent.event === "auto-file:disabled" && autoFileOn)
-          void props.onAutoFile(item.folder, false);
+        const [, by, ...value] = nativeEvent.event.split(":");
+        if (nativeEvent.event.startsWith("collect:")) {
+          if (by === "off" || by === "topic") void props.onCollect(item.folder, { by });
+          if ((by === "branch" || by === "worktree") && value.length > 0)
+            void props.onCollect(item.folder, { by, value: value.join(":") });
+        }
         if (nativeEvent.event === "settle") void props.onSettle(item.folder, true);
         if (nativeEvent.event === "unsettle") void props.onSettle(item.folder, false);
       }}
@@ -380,7 +415,7 @@ export const ThreadListV2FolderHeader = memo(function ThreadListV2FolderHeader(p
               tintColorClassName={
                 props.pane === "sidebar" ? "accent-drawer-foreground-muted" : "accent-icon-muted"
               }
-              accessibilityLabel="Auto-files new threads"
+              accessibilityLabel="Collects new threads"
             />
           ) : null
         }

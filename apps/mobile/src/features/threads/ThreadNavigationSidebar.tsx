@@ -161,7 +161,7 @@ function ThreadNavigationSidebarPane(
     renameFolder,
     deleteFolder,
     moveFolder,
-    setFolderAutoFile,
+    setFolderCollect,
     applyFolderRule,
     settleFolder,
     archiveThread,
@@ -639,7 +639,7 @@ function ThreadNavigationSidebarPane(
             pane="sidebar"
             onToggle={toggleFolder}
             onMove={moveFolder}
-            onAutoFile={setFolderAutoFile}
+            onCollect={setFolderCollect}
             onApplyRule={applyFolderRule}
             onSettle={settleFolder}
             onRename={renameFolder}
