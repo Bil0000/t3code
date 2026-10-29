@@ -146,6 +146,12 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
       ? `${draftId}:${autoScratchPlan.environmentId}`
       : null;
   const [settledAutoScratchKey, setSettledAutoScratchKey] = useState<string | null>(null);
+  // A new target cancels the old open, so a return to an earlier target opens it again.
+  const [seenAutoScratchKey, setSeenAutoScratchKey] = useState(autoScratchRequestKey);
+  if (seenAutoScratchKey !== autoScratchRequestKey) {
+    setSeenAutoScratchKey(autoScratchRequestKey);
+    setSettledAutoScratchKey(null);
+  }
   const isEnvironmentChanging =
     isManualEnvironmentChanging ||
     (autoScratchRequestKey !== null && settledAutoScratchKey !== autoScratchRequestKey);

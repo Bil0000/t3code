@@ -108,7 +108,7 @@ const scratchProject = (environmentId: EnvironmentId) => ({
 });
 
 describe("useDraftEnvironmentRouting", () => {
-  it("ignores a late scratch open for an old Auto pick and retries when Auto is re-armed", async () => {
+  it("shows Preparing machine only while the current Auto scratch open runs", async () => {
     balancer.setup(machineA);
     scratchOpens.setup();
     useComposerDraftStore
@@ -120,27 +120,35 @@ describe("useDraftEnvironmentRouting", () => {
         { environmentSelection: "auto" },
       );
     await using screen = await render(<Harness />);
+    const opened = () => scratchOpens.opens.map((open) => open.environmentId);
     await expect.element(screen.getByText("Preparing machine")).toBeInTheDocument();
 
+    // A late open for an old pick neither moves the draft nor leaves it preparing.
     await act(() => balancer.set(machineB));
-    expect(scratchOpens.opens.map((open) => open.environmentId)).toEqual([machineA, machineB]);
     await act(() => scratchOpens.opens[1]!.resolve(null));
     await act(() => scratchOpens.opens[0]!.resolve(scratchProject(machineA)));
     await expect.element(screen.getByText("Ready")).toBeInTheDocument();
     expect(useComposerDraftStore.getState().getDraftSession(draftId)?.environmentId).toBe(local);
-    expect(scratchOpens.opens).toHaveLength(2);
+    expect(opened()).toEqual([machineA, machineB]);
 
+    // Re-arming Auto retries the failed open.
     await userEvent.click(screen.getByRole("button"));
-    expect(scratchOpens.opens.map((open) => open.environmentId)).toEqual([
-      machineA,
-      machineB,
-      machineB,
-    ]);
-    await act(() => scratchOpens.opens[2]!.resolve(scratchProject(machineB)));
+    expect(opened()).toEqual([machineA, machineB, machineB]);
+    await act(() => scratchOpens.opens[2]!.resolve(null));
+
+    // Returning to a target whose open failed opens it again, and shows it.
+    await act(() => balancer.set(machineA));
+    await act(() => scratchOpens.opens[3]!.resolve(null));
+    await expect.element(screen.getByText("Ready")).toBeInTheDocument();
+    await act(() => balancer.set(machineB));
+    await act(() => balancer.set(machineA));
+    expect(opened()).toEqual([machineA, machineB, machineB, machineA, machineB, machineA]);
+    await expect.element(screen.getByText("Preparing machine")).toBeInTheDocument();
+    await act(() => scratchOpens.opens[5]!.resolve(scratchProject(machineA)));
     await expect.element(screen.getByText("Ready")).toBeInTheDocument();
     expect(useComposerDraftStore.getState().getDraftSession(draftId)).toMatchObject({
-      environmentId: machineB,
-      loadBalancedEnvironmentId: machineB,
+      environmentId: machineA,
+      loadBalancedEnvironmentId: machineA,
     });
   });
 });
