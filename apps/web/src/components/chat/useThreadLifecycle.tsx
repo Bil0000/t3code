@@ -595,7 +595,7 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
         ),
       );
     },
-    "thread.folder": () => {
+    "thread.folder": ({ event }) => {
       if (!readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)) return false;
       if (
         !activeThreadShell ||
@@ -604,6 +604,7 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
       ) {
         return false;
       }
+      if (event.repeat) return;
       const { threadId } = activeThreadRef;
       if (readThreadFolder(activeThreadRef) !== null) {
         void moveThreadsToFolder({ environmentId, threadIds: [threadId], folderId: null });
