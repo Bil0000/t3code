@@ -264,7 +264,10 @@ const make = Effect.gen(function* () {
   const apply = Effect.fn("ThreadFolderService.apply")(function* (
     mutation: ThreadFolderMutation,
     now: string,
-    smartMatches?: ReadonlySet<string>,
+    smart?: {
+      readonly matches: ReadonlySet<string>;
+      readonly folder: Pick<ThreadFolder, "name" | "ruleSetAt">;
+    },
   ) {
     switch (mutation.type) {
       case "folder.create": {
@@ -362,21 +365,26 @@ const make = Effect.gen(function* () {
       }
       case "folder.applyRule": {
         yield* requireFolder(mutation.folderId);
-        const folders = yield* readFolders;
-        const rule = folders.find((folder) => folder.id === mutation.folderId)!.rule;
+        const folder = (yield* readFolders).find((entry) => entry.id === mutation.folderId)!;
+        const rule = folder.rule;
         if (rule === null) {
           return yield* folderError("This folder has no rule to apply.", {
             folderId: mutation.folderId,
           });
         }
+        if (
+          rule.smart &&
+          (smart === undefined ||
+            smart.folder.name !== folder.name ||
+            smart.folder.ruleSetAt !== folder.ruleSetAt)
+        ) {
+          return yield* folderError("The folder changed while threads were sorted. Try again.", {
+            folderId: mutation.folderId,
+          });
+        }
         const matching = rule.smart
-          ? (yield* batchCandidates(
-              folders.find((folder) => folder.id === mutation.folderId)!,
-            )).filter((shell) => smartMatches?.has(shell.id))
-          : (yield* batchCandidates(
-              folders.find((folder) => folder.id === mutation.folderId)!,
-              false,
-            )).filter((shell) =>
+          ? (yield* batchCandidates(folder)).filter((shell) => smart?.matches.has(shell.id))
+          : (yield* batchCandidates(folder, false)).filter((shell) =>
               threadMatchesFolderRule(rule, {
                 ...shell,
                 hasPullRequest: visibleThreadPullRequests(shell.pullRequests ?? []).length > 0,
@@ -406,7 +414,7 @@ const make = Effect.gen(function* () {
 
   const mutate: ThreadFolderService["Service"]["mutate"] = Effect.fn("ThreadFolderService.mutate")(
     function* (mutation) {
-      let smartMatches: ReadonlySet<string> | undefined;
+      let smart: Parameters<typeof apply>[2];
       if (mutation.type === "folder.applyRule") {
         const folder = (yield* list()).folders.find((entry) => entry.id === mutation.folderId);
         if (folder?.rule?.smart) {
@@ -449,12 +457,15 @@ const make = Effect.gen(function* () {
                 ),
             { concurrency: 4 },
           );
-          smartMatches = new Set(results.flatMap((result) => result.threadIds));
+          smart = {
+            matches: new Set(results.flatMap((result) => result.threadIds)),
+            folder: { name: folder.name, ruleSetAt: folder.ruleSetAt },
+          };
         }
       }
       const now = DateTime.formatIso(yield* DateTime.now);
       yield* writes.withPermit(
-        sql.withTransaction(apply(mutation, now, smartMatches)).pipe(
+        sql.withTransaction(apply(mutation, now, smart)).pipe(
           Effect.catchTags({
             SqlError: (cause) =>
               Effect.fail(folderError("Could not save the thread folder.", { cause })),

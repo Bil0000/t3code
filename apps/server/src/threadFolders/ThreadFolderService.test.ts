@@ -114,16 +114,27 @@ const suggestionLayer = Layer.mergeAll(
   }),
   ServerSettings.layerTest(),
   Layer.mock(ServerConfig.ServerConfig)({ cwd: "/srv" } as never),
-  Layer.mock(TextGeneration.TextGeneration)({
-    classifyThreadFolder: (input) =>
-      Effect.succeed({
-        threadIds: [
-          ...input.threads.map((thread) => thread.id),
-          ...input.examples.map((title) => `example:${title}`),
-          "thread:invalid",
-        ],
-      }),
-  }),
+  Layer.unwrap(
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      return Layer.mock(TextGeneration.TextGeneration)({
+        // A folder named "Racing" is renamed while the model runs.
+        classifyThreadFolder: (input) =>
+          (input.folderName === "Racing"
+            ? sql`UPDATE thread_folders SET name = 'Renamed'`.pipe(Effect.orDie)
+            : Effect.void
+          ).pipe(
+            Effect.as({
+              threadIds: [
+                ...input.threads.map((thread) => thread.id),
+                ...input.examples.map((title) => `example:${title}`),
+                "thread:invalid",
+              ],
+            }),
+          ),
+      });
+    }),
+  ),
 );
 
 const layer = ThreadFolderService.layer.pipe(
@@ -593,5 +604,13 @@ it.effect("files validated title picks and batches only eligible smart threads",
     }
     yield* folders.mutate({ type: "folder.applyRule", folderId: reviews });
     assert.strictEqual((yield* folders.list()).folders[0]!.threadIds.length, 102);
+    yield* folders.mutate({ type: "folder.update", folderId: reviews, name: "Racing" });
+    yield* folders.mutate({ type: "folder.move", threadIds: [other], folderId: null });
+    yield* sql`DELETE FROM thread_folder_explicit_moves WHERE thread_id = ${other}`;
+    const stale = yield* folders
+      .mutate({ type: "folder.applyRule", folderId: reviews })
+      .pipe(Effect.flip);
+    assert.match(stale.message, /changed while threads were sorted/);
+    assert.notInclude((yield* folders.list()).folders[0]!.threadIds, other);
   }).pipe(Effect.provide(layer)),
 );
