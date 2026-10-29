@@ -100,6 +100,8 @@ export function createNewThreadHandler(router: AnyRouter) {
       modelSelection?: ModelSelection;
       /** Composer text for the draft, set before it shows. A draft with user text keeps it. */
       prompt?: string;
+      /** "manual" keeps a draft tied to machine-local resources off Auto balance. */
+      environmentSelection?: "manual";
     },
   ): Promise<{ draftId: DraftId; threadId: ThreadId } | null> => {
     const projects = readProjects();
@@ -231,6 +233,9 @@ export function createNewThreadHandler(router: AnyRouter) {
     const hasWorktreePathOption = options?.worktreePath !== undefined;
     const hasEnvModeOption = options?.envMode !== undefined;
     const hasStartFromOriginOption = options?.startFromOrigin !== undefined;
+    const environmentSelectionOption = options?.environmentSelection
+      ? { environmentSelection: options.environmentSelection }
+      : {};
     const storedDraftThread = getDraftSessionByLogicalProjectKey(logicalProjectKey);
     const storedDraftThreadRef = storedDraftThread
       ? scopeThreadRef(storedDraftThread.environmentId, storedDraftThread.threadId)
@@ -330,6 +335,7 @@ export function createNewThreadHandler(router: AnyRouter) {
           {
             threadId: emptyStoredDraftThread.threadId,
             ...workspaceContext,
+            ...environmentSelectionOption,
             ...(!isDraftAlreadyOpen ? { runtimeMode: defaultRuntimeMode } : {}),
             ...(carryInteractionMode ? { interactionMode: carryInteractionMode } : {}),
           },
@@ -376,6 +382,7 @@ export function createNewThreadHandler(router: AnyRouter) {
         runtimeMode: latestActiveDraftThread.runtimeMode,
         interactionMode: latestActiveDraftThread.interactionMode,
         ...pickExplicitWorkspaceOptions(options),
+        ...environmentSelectionOption,
       });
       seedPrompt(currentRouteTarget.draftId);
       return Promise.resolve({
@@ -405,6 +412,7 @@ export function createNewThreadHandler(router: AnyRouter) {
           runtimeMode: racedDraft.runtimeMode,
           interactionMode: racedDraft.interactionMode,
           ...pickExplicitWorkspaceOptions(options),
+          ...environmentSelectionOption,
         });
         seedPrompt(racedDraft.draftId);
         await router.navigate({
@@ -428,6 +436,7 @@ export function createNewThreadHandler(router: AnyRouter) {
           }),
         runtimeMode: defaultRuntimeMode,
         ...(carryInteractionMode ? { interactionMode: carryInteractionMode } : {}),
+        ...environmentSelectionOption,
       });
       applyStickyState(draftId);
       const modelSelectionOverride = pickerModelSelection ?? resolveModelSelectionOverride(draftId);

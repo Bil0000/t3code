@@ -1109,10 +1109,9 @@ describe("planLoadBalancedDraftRetarget", () => {
     needsLoadBalancing: true,
     loadBalancingPending: false,
     draftId: "draft-1",
-    sendInFlight: false,
   };
 
-  it("stays idle while balancing is unresolved or a send is in flight", () => {
+  it("stays idle while balancing is unresolved", () => {
     const target = { environmentId: remoteEnvironmentId, projectId };
     expect(planLoadBalancedDraftRetarget({ ...baseInput, target })).toEqual({
       kind: "retarget",
@@ -1126,7 +1125,6 @@ describe("planLoadBalancedDraftRetarget", () => {
       planLoadBalancedDraftRetarget({ ...baseInput, needsLoadBalancing: false, target }),
     ).toBeNull();
     expect(planLoadBalancedDraftRetarget({ ...baseInput, draftId: null, target })).toBeNull();
-    expect(planLoadBalancedDraftRetarget({ ...baseInput, sendInFlight: true, target })).toBeNull();
     expect(planLoadBalancedDraftRetarget({ ...baseInput, target: null })).toBeNull();
     expect(planLoadBalancedDraftRetarget({ ...baseInput, target: undefined })).toBeNull();
   });

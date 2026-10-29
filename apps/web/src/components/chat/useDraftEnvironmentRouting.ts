@@ -116,6 +116,16 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
     loadBalancingCandidates,
     loadBalancingSettings.loadBalancingWeights,
   );
+  // A change in flight belongs to the draft and project it started on.
+  const environmentChangeScope = `${draftId ?? ""}:${activeProjectKey ?? ""}`;
+  // The busy state belongs to the request that set it, so an older request settling late
+  // (abandoned, or superseded by a newer switch) can never clear a newer one's.
+  const [busyEnvironmentChange, setBusyEnvironmentChange] = useState<{
+    readonly environmentId: EnvironmentId;
+    readonly scope: string;
+  } | null>(null);
+  const isManualEnvironmentChanging = busyEnvironmentChange?.scope === environmentChangeScope;
+
   // At most one automatic scratch-project open per `${draftId}:${environmentId}`. A
   // settled (even failed) key stays active so it is not retried until the target
   // changes or the user re-arms Auto; any other target cancels it.
@@ -129,13 +139,16 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
     needsLoadBalancing,
     loadBalancingPending: loadBalancing.pending,
     draftId,
-    sendInFlight: false,
     target: autoScratchTarget,
   });
   const autoScratchRequestKey =
     activeProjectIsScratch && draftId && autoScratchPlan?.kind === "open-scratch"
       ? `${draftId}:${autoScratchPlan.environmentId}`
       : null;
+  const [settledAutoScratchKey, setSettledAutoScratchKey] = useState<string | null>(null);
+  const isEnvironmentChanging =
+    isManualEnvironmentChanging ||
+    (autoScratchRequestKey !== null && settledAutoScratchKey !== autoScratchRequestKey);
   // Invalidate before passive effects, without mutating request state during render.
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- cancels a scratch open whose target the routing moved away from
   useLayoutEffect(
@@ -144,7 +157,8 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
   );
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- writes the resolved load-balanced environment into the draft store once the async pick settles
   useEffect(() => {
-    const plan = sendInFlightRef.current ? null : autoScratchPlan;
+    // A manual machine pick still opening its scratch project wins over Auto.
+    const plan = sendInFlightRef.current || isManualEnvironmentChanging ? null : autoScratchPlan;
     if (!plan || !draftId) return;
     // A scratch draft moves its logical-project mapping with the machine: each
     // environment's scratch project is its own logical project.
@@ -181,25 +195,29 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
     if (!snapshot || snapshot.promotedTo) return;
     const token = autoScratchRequest.begin(autoScratchRequestKey);
     if (token === null) return;
-    void openScratchProject(plan.environmentId, "Could not switch machine").then((project) => {
-      if (
-        !project ||
-        !autoScratchRequest.isCurrent(token) ||
-        !isDraftEnvironmentRetargetApplicable({
-          snapshot,
-          current: getDraftSession(draftId),
-          sendInFlight: sendInFlightRef.current,
-          requireUnresolvedAuto: true,
-        })
-      ) {
-        return;
-      }
-      retargetScratchDraft(project);
-    });
+    const requestKey = autoScratchRequestKey;
+    void openScratchProject(plan.environmentId, "Could not prepare machine")
+      .then((project) => {
+        if (
+          !project ||
+          !autoScratchRequest.isCurrent(token) ||
+          !isDraftEnvironmentRetargetApplicable({
+            snapshot,
+            current: getDraftSession(draftId),
+            sendInFlight: sendInFlightRef.current,
+            requireUnresolvedAuto: true,
+          })
+        ) {
+          return;
+        }
+        retargetScratchDraft(project);
+      })
+      .finally(() => setSettledAutoScratchKey(requestKey));
   }, [
     autoScratchPlan,
     autoScratchRequestKey,
     autoScratchRequest,
+    isManualEnvironmentChanging,
     draftId,
     activeProjectIsScratch,
     allProjects,
@@ -224,6 +242,7 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
     }
     // Re-arming Auto retries a previously failed or superseded scratch open.
     autoScratchRequest.cancel();
+    setSettledAutoScratchKey(null);
     loadBalancing.refresh(
       logicalProjectEnvironments.map((environment) => environment.environmentId),
     );
@@ -245,8 +264,6 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
           : "Auto balance"
     : undefined;
 
-  // A change in flight belongs to the draft and project it started on.
-  const environmentChangeScope = `${draftId ?? ""}:${activeProjectKey ?? ""}`;
   const environmentChangeRef = useRef<{
     readonly environmentId: EnvironmentId;
     readonly scope: string;
@@ -270,14 +287,6 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
     const pending = environmentChangeRef.current;
     return pending !== null && pending.scope === environmentChangeScopeRef.current ? pending : null;
   };
-  // The busy state belongs to the request that set it, so an older request settling late
-  // (abandoned, or superseded by a newer switch) can never clear a newer one's.
-  const [busyEnvironmentChange, setBusyEnvironmentChange] = useState<{
-    readonly environmentId: EnvironmentId;
-    readonly scope: string;
-  } | null>(null);
-  const isEnvironmentChanging = busyEnvironmentChange?.scope === environmentChangeScope;
-
   const onEnvironmentChange = (nextEnvironmentId: EnvironmentId) => {
     if (envLocked || !draftId || sendInFlightRef.current) return;
     const originalDraft = getDraftSession(draftId);
@@ -288,6 +297,7 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
     if (!target) return;
     const request = { environmentId: target.environmentId, scope: environmentChangeScope };
     environmentChangeRef.current = request;
+    autoScratchRequest.cancel();
     setBusyEnvironmentChange(null);
     const retarget = (project: (typeof allProjects)[number]) => {
       const currentDraft = getDraftSession(draftId);

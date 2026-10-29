@@ -548,17 +548,14 @@ export type LoadBalancedDraftRetargetPlan =
   | { readonly kind: "open-scratch"; readonly environmentId: EnvironmentId };
 
 /**
- * Decides how a resolved automatic ("Auto balance") machine choice is applied to a
- * draft. A machine that already hosts the draft's project (or a scratch project, for
- * no-project drafts) retargets in place; a scratch-capable machine without a scratch
- * project must open one first, so a send can never slip out on the machine the draft
- * started on.
+ * How an Auto balance pick applies to a draft: retarget in place when the machine has
+ * the project, or open its scratch project first so a send never leaves from the
+ * machine the draft started on.
  */
 export function planLoadBalancedDraftRetarget(input: {
   readonly needsLoadBalancing: boolean;
   readonly loadBalancingPending: boolean;
   readonly draftId: string | null;
-  readonly sendInFlight: boolean;
   readonly target:
     | { readonly environmentId: EnvironmentId; readonly projectId: ProjectId | null }
     | null
@@ -568,7 +565,6 @@ export function planLoadBalancedDraftRetarget(input: {
     !input.needsLoadBalancing ||
     input.loadBalancingPending ||
     input.draftId === null ||
-    input.sendInFlight ||
     !input.target
   ) {
     return null;
