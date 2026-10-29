@@ -571,6 +571,7 @@ const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (options:
   const snapshotReads = yield* Queue.unbounded<number>();
   const candidateReads = yield* Ref.make<ReadonlyArray<string | undefined>>([]);
   const settings = yield* Ref.make(options.settings ?? DEFAULT_SERVER_SETTINGS);
+  const settingsReads = yield* Ref.make(0);
   const settingsChanges = yield* PubSub.unbounded<ContractServerSettings>();
   const mergedPullRequests = yield* PubSub.unbounded<PullRequestService.PullRequestMergeEvent>();
   const commands = yield* Ref.make<ReadonlyArray<AutoSettleCommand>>([]);
@@ -640,7 +641,9 @@ const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (options:
   const serverSettings = ServerSettings.ServerSettingsService.of({
     start: Effect.void,
     ready: Effect.void,
-    getSettings: Ref.get(settings),
+    getSettings: Ref.update(settingsReads, (count) => count + 1).pipe(
+      Effect.andThen(Ref.get(settings)),
+    ),
     updateSettings,
     updateProviderInstance: () => Effect.die("Unexpected provider mutation"),
     withSettingsSnapshot: (use) => Ref.get(settings).pipe(Effect.flatMap(use)),
@@ -712,6 +715,7 @@ const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (options:
     snapshotReadCount,
     snapshotReads,
     candidateReads,
+    settingsReads,
     commands,
     branchCalls,
     summaryCalls,
@@ -837,6 +841,41 @@ describe("ThreadSettlementServiceV2 worker", () => {
           yield* startHarness(service, fixture.activation, fixture.snapshotReads);
           const commands = yield* Ref.get(fixture.commands);
           expect(commands.map((command) => command.threadId)).toEqual([thread.id]);
+          // Settings carry secrets read from disk; a thread that does not settle reads none.
+          expect(yield* Ref.get(fixture.settingsReads)).toBe(3);
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+    ),
+  );
+
+  it.effect("stops settling when settlement is turned off during a sweep", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(NOW));
+        const threads = Array.from({ length: 9 }, (_, index) => makeThread(`idle-${index}`));
+        const dispatched = yield* Ref.make(0);
+        const firstBatchPaused = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const fixture = yield* makeHarness({
+          snapshot: makeSnapshot(threads),
+          settings: { ...DEFAULT_SERVER_SETTINGS, sidebarAutoSettleAfterDays: 3 },
+          onDispatch: () =>
+            Ref.updateAndGet(dispatched, (count) => count + 1).pipe(
+              Effect.tap((count) =>
+                count === 8 ? Deferred.succeed(firstBatchPaused, undefined) : Effect.void,
+              ),
+              Effect.andThen(Deferred.await(release)),
+            ),
+        });
+        yield* Effect.gen(function* () {
+          const reactor = yield* ThreadSettlementService.ThreadSettlementServiceV2;
+          yield* reactor.start();
+          yield* Deferred.succeed(fixture.activation, undefined);
+          yield* Deferred.await(firstBatchPaused);
+          yield* fixture.updateSettings({ sidebarAutoSettleAfterDays: null });
+          yield* Deferred.succeed(release, undefined);
+          yield* reactor.drain;
+          expect(yield* Ref.get(fixture.commands)).toHaveLength(8);
         }).pipe(Effect.provide(fixture.layer));
       }),
     ),

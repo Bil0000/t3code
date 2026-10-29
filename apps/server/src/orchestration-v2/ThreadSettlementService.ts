@@ -323,19 +323,22 @@ export const make = Effect.gen(function* () {
 
     const settleThread = Effect.fn("ThreadSettlementServiceV2.settleThread")(
       function* (thread: (typeof candidates)[number], pullRequest: SettlementPullRequest | null) {
-        const currentSettings = resolveProjectSettings(
-          yield* settingsService.getSettings,
-          thread.projectId,
-        ).settings;
-        const decisionNow = yield* DateTime.now;
-        const settledAt = resolveAutoSettlementAt({
-          thread,
-          pullRequest,
-          nowMs: DateTime.toEpochMillis(decisionNow),
-          autoSettleAfterDays: currentSettings.sidebarAutoSettleAfterDays,
-          autoSettleOnMerge: currentSettings.sidebarAutoSettleOnMerge,
-          autoSettleKeepPullRequests: currentSettings.sidebarAutoSettleKeepPullRequests,
-        });
+        const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
+        const decide = (serverSettings: import("@t3tools/contracts").ServerSettings) => {
+          const currentSettings = resolveProjectSettings(serverSettings, thread.projectId).settings;
+          return resolveAutoSettlementAt({
+            thread,
+            pullRequest,
+            nowMs,
+            autoSettleAfterDays: currentSettings.sidebarAutoSettleAfterDays,
+            autoSettleOnMerge: currentSettings.sidebarAutoSettleOnMerge,
+            autoSettleKeepPullRequests: currentSettings.sidebarAutoSettleKeepPullRequests,
+          });
+        };
+        // getSettings rereads secret files, so only a settling decision reads fresh settings.
+        // An opt-in during the sweep needs no reread: the settings watcher starts a full sweep.
+        if (decide(settings) === null) return thread;
+        const settledAt = decide(yield* settingsService.getSettings);
         if (settledAt === null) return thread;
         const uuid = yield* crypto.randomUUIDv4();
         yield* orchestrator.dispatch({
