@@ -1146,10 +1146,11 @@ export const make = Effect.gen(function* () {
           });
           const left = decodeActionReply(reply);
           if (Option.isNone(left)) return;
-          // The reply carries no line totals, so they stay absent rather than zero.
+          // The reply carries no line totals or conflict state, so they stay absent.
           const {
             additions: _additions,
             deletions: _deletions,
+            mergeability: _mergeability,
             ...summary
           } = Json.toChangeRequest(left.value, input);
           return {

@@ -140,7 +140,7 @@ describe("mobile PR list pagination", () => {
         patchPullRequestListEntry(
           pages,
           head,
-          { projectId: newer.projectId, repository: "Org/Repo", number },
+          { projectId: newer.projectId, host: "GitHub.com", repository: "Org/Repo", number },
           closed,
           5,
         ),

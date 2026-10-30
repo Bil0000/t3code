@@ -667,6 +667,7 @@ describe("GitCafePullRequestProvider", () => {
       if ("state" in reply) {
         assert.deepInclude(summary, { state: "closed", closedAt: timestamp, headSha: headOid });
         assert.notProperty(summary, "additions");
+        assert.notProperty(summary, "mergeability");
       } else {
         assert.isUndefined(summary);
       }

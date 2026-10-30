@@ -140,9 +140,8 @@ const actionReplyPatches = new WeakMap<object, ActionReplyPatch>();
 function samePullRequest(reader: PullRequestRef, acted: PullRequestRef) {
   return (
     reader.projectId === acted.projectId &&
-    (reader.host === undefined ||
-      acted.host === undefined ||
-      reader.host.toLowerCase() === acted.host.toLowerCase()) &&
+    // A missing host is not a wildcard: one project can reach the same repository on two hosts.
+    reader.host?.toLowerCase() === acted.host?.toLowerCase() &&
     reader.repository.toLowerCase() === acted.repository.toLowerCase() &&
     reader.number === acted.number &&
     reader.expectedAccountId === acted.expectedAccountId

@@ -1161,14 +1161,7 @@ it.effect("shows an action's reply in loaded readers and moves list rows without
         actionReply: (target, reply) => Effect.sync(() => replies.push({ target, reply })),
         list: (_target, value) => Effect.sync(() => listAnswers.push(value.entries)),
       });
-      const target = {
-        environmentId: TARGET.environmentId,
-        input: {
-          projectId: actionReference.projectId,
-          repository: actionReference.repository,
-          number: actionReference.number,
-        },
-      };
+      const target = { environmentId: TARGET.environmentId, input: actionReference };
       const list = (input: PullRequestListInput) =>
         atoms.list({ environmentId: target.environmentId, input });
       const readers: ReadonlyArray<Atom.Atom<AsyncResult.AsyncResult<object, unknown>>> = [
@@ -1176,10 +1169,13 @@ it.effect("shows an action's reply in loaded readers and moves list rows without
         atoms.preview(target),
         createLinkedPullRequestSummaryAtomFamily(runtime, atoms.refreshes)(target),
       ];
+      // A reader without a host can resolve to another host, so only its own read updates it.
+      const { host: _host, ...hostless } = actionReference;
+      const otherHost = atoms.detail({ ...target, input: hostless });
       const all = list({ state: "all" });
       const openDrafts = list({ state: "open", filters: { draft: "only" } });
       const merged = list({ state: "merged" });
-      for (const atom of [...readers, all, openDrafts, merged]) {
+      for (const atom of [...readers, otherHost, all, openDrafts, merged]) {
         registry.mount(atom);
         yield* Effect.promise(() => executeAtomQuery(registry, atom));
       }
@@ -1200,6 +1196,7 @@ it.effect("shows an action's reply in loaded readers and moves list rows without
       expect(Option.getOrThrow(AsyncResult.value(registry.get(all))).entries).toMatchObject([
         { state: "merged", isDraft: false, observedAt: 200 },
       ]);
+      expect(Option.getOrThrow(AsyncResult.value(registry.get(otherHost))).state).toBe("open");
       expect(Option.getOrThrow(AsyncResult.value(registry.get(openDrafts))).entries).toEqual([]);
       expect(replies).toEqual([{ target, reply: actionReply }]);
       // Snapshot writers see the patched rows the way they see an answer.

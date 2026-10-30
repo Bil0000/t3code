@@ -296,7 +296,7 @@ export function patchPullRequestListEntry(
       row.projectId !== entry.projectId ||
       row.repository.toLowerCase() !== entry.repository.toLowerCase() ||
       row.number !== entry.number ||
-      (entry.host !== undefined && row.host.toLowerCase() !== entry.host.toLowerCase()) ||
+      row.host.toLowerCase() !== entry.host?.toLowerCase() ||
       isStalePullRequestReply(row, { state: patch.state ?? row.state, ...patch, observedAt })
     )
       return row;
