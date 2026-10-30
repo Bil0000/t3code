@@ -63,8 +63,9 @@ export function threadFolderMemberClassName(
 ) {
   if (style === "cards") return threadFolderTintClassName(icon);
   // The row sets its own text color, so this color reaches only the line.
+  // Rows clip paint (content-visibility), so -mt-px closes the list gap to join the lines.
   return cn(
-    "relative ps-5 before:pointer-events-none before:absolute before:inset-y-0 before:start-2.5 before:w-0.5 before:rounded-full before:bg-current/50",
+    "relative -mt-px ps-5 before:pointer-events-none before:absolute before:inset-y-0 before:start-2.5 before:w-0.5 before:bg-current/50",
     icon && icon.kind !== "emoji"
       ? projectIconColorClassName(icon.color)
       : "text-sidebar-muted-foreground",
