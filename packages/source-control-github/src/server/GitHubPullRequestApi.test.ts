@@ -1883,6 +1883,84 @@ layer("GitHubPullRequestApi.layer", (it) => {
   });
 
   it.effect.each([
+    { queued: false, field: "mergePullRequest", state: "MERGED", autoMergeRequest: null },
+    {
+      queued: true,
+      field: "enablePullRequestAutoMerge",
+      state: "OPEN",
+      autoMergeRequest: { mergeMethod: "MERGE" },
+    },
+  ] as const)(
+    "returns the pull request from GitHub's $field reply",
+    ({ queued, field, state, autoMergeRequest }) =>
+      Effect.gen(function* () {
+        const mergedAt = state === "MERGED" ? "2026-10-27T11:59:00Z" : null;
+        route(
+          ["query PullRequestActionState", actionState({ isMergeQueueEnabled: queued })],
+          [
+            field + "(",
+            {
+              data: {
+                [field]: {
+                  pullRequest: {
+                    number: 7,
+                    title: "Pull request 7",
+                    url: "https://github.com/acme/web/pull/7",
+                    headRefName: "feat/page",
+                    baseRefName: "main",
+                    state,
+                    isDraft: false,
+                    updatedAt: "2026-10-27T12:00:00Z",
+                    mergedAt,
+                    closedAt: mergedAt,
+                    headRefOid: "response-head",
+                    author: { __typename: "User", login: "alice", avatarUrl: "", name: null },
+                    autoMergeRequest,
+                  },
+                },
+              },
+            },
+          ],
+        );
+        const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+        expect(yield* cli.runPullRequestAction({ ...pullRequestInput, action: "merge" })).toEqual({
+          number: 7,
+          title: "Pull request 7",
+          url: "https://github.com/acme/web/pull/7",
+          headBranch: "feat/page",
+          baseBranch: "main",
+          state: state.toLowerCase(),
+          isDraft: false,
+          updatedAt: "2026-10-27T12:00:00Z",
+          mergedAt,
+          closedAt: mergedAt,
+          author: { login: "alice", name: null, avatarUrl: null },
+          headSha: "response-head",
+          autoMergeEnabled: queued,
+          ...(queued ? { autoMergeMethod: "merge" } : {}),
+        });
+        expect(variablesOf(field + "(")).toHaveLength(1);
+      }),
+  );
+
+  it.effect.each([
+    { description: "no pull request", pullRequest: null },
+    { description: "an undecodable pull request", pullRequest: { state: "CLOSED" } },
+  ])("closes without a summary when GitHub replies with $description", ({ pullRequest }) =>
+    Effect.gen(function* () {
+      route(
+        [NODE_ID_QUERY, nodeIdAnswer("PR_7")],
+        ["closePullRequest(", { data: { closePullRequest: { pullRequest } } }],
+      );
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+      expect(
+        yield* cli.runPullRequestAction({ ...pullRequestInput, action: "close" }),
+      ).toBeUndefined();
+      expect(variablesOf("closePullRequest(")).toHaveLength(1);
+    }),
+  );
+
+  it.effect.each([
     {
       description: "base-only write",
       basePermission: "WRITE",

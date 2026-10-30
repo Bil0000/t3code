@@ -50,7 +50,10 @@ import * as GitHubRest from "./GitHubRest.ts";
 import * as GitHubRequestPolicy from "./GitHubRequestPolicy.ts";
 import * as GitHubGraphQlClient from "./gitHubGraphQlClient.ts";
 import { PullRequestBatchesGraphQLGroup } from "./pullRequestBatches.graphql.ts";
-import { PullRequestMutationsGraphQLGroup } from "./pullRequestMutations.graphql.ts";
+import {
+  PullRequestMutationsGraphQLGroup,
+  type PullRequestActionSummary,
+} from "./pullRequestMutations.graphql.ts";
 import { PullRequestReadsGraphQLGroup } from "./pullRequestReads.graphql.ts";
 import { PullRequestReviewsGraphQLGroup } from "./pullRequestReviews.graphql.ts";
 import * as SourceControlHost from "@t3tools/source-control-core/server/SourceControlHost";
@@ -73,6 +76,7 @@ import {
   toRepositoryAuthors,
   toRepositoryLabels,
   toPullRequestActivityPage,
+  toPullRequestActionSummary,
   toPullRequestCommitStats,
   toPullRequestCheckContextsPage,
   toPullRequestCore,
@@ -658,7 +662,7 @@ export class GitHubPullRequestApi extends Context.Service<
       readonly removeAgentCreditsOnMerge?: boolean;
       readonly mergeMethod?: PullRequestMergeMethod;
       readonly updateMethod?: PullRequestUpdateMethod;
-    }) => Effect.Effect<void, GitHubPullRequestApiError>;
+    }) => Effect.Effect<ProviderChangeRequestSummary | void, GitHubPullRequestApiError>;
 
     readonly commentOnPullRequest: (input: {
       readonly cwd: string;
@@ -1564,16 +1568,38 @@ export const make = Effect.gen(function* () {
 
   const simpleActionMutations = {
     "disable-auto-merge": (pullRequestId: string) =>
-      client.DisablePullRequestAutoMerge({ pullRequestId }).pipe(Effect.asVoid),
+      client
+        .DisablePullRequestAutoMerge({ pullRequestId })
+        .pipe(Effect.map((result) => result.disablePullRequestAutoMerge?.pullRequest)),
     ready: (pullRequestId: string) =>
-      client.MarkPullRequestReadyForReview({ pullRequestId }).pipe(Effect.asVoid),
+      client
+        .MarkPullRequestReadyForReview({ pullRequestId })
+        .pipe(Effect.map((result) => result.markPullRequestReadyForReview?.pullRequest)),
     draft: (pullRequestId: string) =>
-      client.ConvertPullRequestToDraft({ pullRequestId }).pipe(Effect.asVoid),
+      client
+        .ConvertPullRequestToDraft({ pullRequestId })
+        .pipe(Effect.map((result) => result.convertPullRequestToDraft?.pullRequest)),
     close: (pullRequestId: string) =>
-      client.ClosePullRequest({ pullRequestId }).pipe(Effect.asVoid),
+      client
+        .ClosePullRequest({ pullRequestId })
+        .pipe(Effect.map((result) => result.closePullRequest?.pullRequest)),
     reopen: (pullRequestId: string) =>
-      client.ReopenPullRequest({ pullRequestId }).pipe(Effect.asVoid),
+      client
+        .ReopenPullRequest({ pullRequestId })
+        .pipe(Effect.map((result) => result.reopenPullRequest?.pullRequest)),
   } satisfies Partial<Record<PullRequestAction, unknown>>;
+
+  /** The mutation already landed, so a reply that does not decode only loses the summary. */
+  const actionSummary = <E, R>(
+    effect: Effect.Effect<PullRequestActionSummary | null | undefined, E, R>,
+  ) =>
+    effect.pipe(
+      Effect.map(toPullRequestActionSummary),
+      Effect.catchIf(
+        (error) => isGraphQlClientError(error) && error.reason._tag === "DecodeError",
+        () => Effect.void,
+      ),
+    );
 
   /** Preserve policy errors; map not-found per lookup and other failures to read errors. */
   const batchedRead = <A, E, R>(
@@ -2484,7 +2510,9 @@ export const make = Effect.gen(function* () {
         const mutate = simpleActionMutations[action as keyof typeof simpleActionMutations];
         return pullRequestNodeId({ ...input, operation: "runPullRequestAction" }).pipe(
           Effect.flatMap((pullRequestId) =>
-            mutate(pullRequestId).pipe(graphql({ ...input, operation: "runPullRequestAction" })),
+            actionSummary(mutate(pullRequestId)).pipe(
+              graphql({ ...input, operation: "runPullRequestAction" }),
+            ),
           ),
         );
       }
@@ -2512,7 +2540,11 @@ export const make = Effect.gen(function* () {
               expectedHeadOid: state.headRefOid,
               updateMethod: input.updateMethod === "rebase" ? "REBASE" : "MERGE",
             })
-            .pipe(graphql(target), Effect.asVoid);
+            .pipe(
+              Effect.map((result) => result.updatePullRequestBranch?.pullRequest),
+              actionSummary,
+              graphql(target),
+            );
         }
         let body: string | undefined;
         let expectedHead: string | undefined;
@@ -2550,10 +2582,14 @@ export const make = Effect.gen(function* () {
           ...(expectedHead === undefined ? {} : { expectedHeadOid: expectedHead }),
           ...(body === undefined ? {} : { commitBody: body }),
         };
-        yield* (
+        return yield* actionSummary(
           auto
-            ? client.EnablePullRequestAutoMerge({ input: merge }).pipe(Effect.asVoid)
-            : client.MergePullRequest({ input: merge }).pipe(Effect.asVoid)
+            ? client
+                .EnablePullRequestAutoMerge({ input: merge })
+                .pipe(Effect.map((result) => result.enablePullRequestAutoMerge?.pullRequest))
+            : client
+                .MergePullRequest({ input: merge })
+                .pipe(Effect.map((result) => result.mergePullRequest?.pullRequest)),
         ).pipe(graphql(target));
       });
     }),
