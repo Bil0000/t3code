@@ -1154,11 +1154,14 @@ it.effect("publishes a merge for immediate settlement only after host confirmati
   ),
 );
 
-it.effect("returns the host's merged reply as a summary and trusts it without another read", () =>
+it.effect.each([
+  ["returns the host's merged reply as a summary and trusts it without another read", true],
+  ["reads the merge time a merged reply lacks from the host", false],
+] as const)("%s", ([, replyHasMergedAt]) =>
   Effect.scoped(
     Effect.gen(function* () {
       const mergedAt = "2026-09-03T02:00:00.000Z";
-      const merged = {
+      const reply = {
         number: 1,
         title: "Change request 1",
         url: "https://host/pull/1",
@@ -1171,6 +1174,8 @@ it.effect("returns the host's merged reply as a summary and trusts it without an
         headSha: "abc123",
         autoMergeEnabled: false,
       };
+      const { mergedAt: _mergedAt, ...withoutMergedAt } = reply;
+      const merged = replyHasMergedAt ? reply : withoutMergedAt;
       let summaryReads = 0;
       const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
       const service = yield* makeService({
@@ -1183,7 +1188,7 @@ it.effect("returns the host's merged reply as a summary and trusts it without an
             getChangeRequestSummary: () =>
               Effect.sync(() => {
                 summaryReads++;
-                return { ...changeRequest(1, mergedAt), state: "merged" as const };
+                return { ...changeRequest(1, mergedAt), state: "merged" as const, mergedAt };
               }),
           }),
         ],
@@ -1204,7 +1209,7 @@ it.effect("returns the host's merged reply as a summary and trusts it without an
         repository: reference.repository,
         observedAt,
       });
-      assert.strictEqual(summaryReads, 0);
+      assert.strictEqual(summaryReads, replyHasMergedAt ? 0 : 1);
       assert.deepStrictEqual(Option.getOrThrow(yield* Fiber.join(observedMerge)), {
         ...reference,
         mergedAt,

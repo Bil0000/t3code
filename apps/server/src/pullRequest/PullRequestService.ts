@@ -3555,13 +3555,15 @@ export const make = Effect.gen(function* () {
     yield* SubscriptionRef.set(pullRequestRefreshes, listingsEpoch);
     if (input.action === "merge") {
       // A successful merge action can merely enqueue the PR or enable auto-merge.
+      const merged = summary?.state === "merged" ? summary : null;
       const confirmed =
-        summary?.state === "merged"
-          ? summary
+        merged?.mergedAt != null
+          ? merged
           : yield* summaryUncached({ ...input, repository }).pipe(
+              Effect.map((reread) => (reread.state === "merged" ? reread : merged)),
               Effect.catch((error) =>
                 Effect.logWarning("failed to confirm pull request merge", { error }).pipe(
-                  Effect.as(null),
+                  Effect.as(merged),
                 ),
               ),
             );
