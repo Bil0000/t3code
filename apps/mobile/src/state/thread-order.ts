@@ -19,6 +19,9 @@ export const threadArrangementOpenAtom = Atom.make(false).pipe(Atom.keepAlive);
 
 export const threadDropBusyAtom = Atom.make(false).pipe(Atom.keepAlive);
 
+/** Scoped keys of folders whose related threads are being added. */
+export const addingRelatedThreadsAtom = Atom.make<ReadonlyArray<string>>([]).pipe(Atom.keepAlive);
+
 export const pendingThreadOrderAtom = Atom.make<PendingThreadOrder | null>(null).pipe(
   Atom.keepAlive,
 );

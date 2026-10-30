@@ -2,6 +2,7 @@ import { ThreadFolderId, type ThreadFolderMutation } from "@t3tools/contracts";
 import {
   type EnvironmentThreadFolder,
   resolveFolderReorder,
+  scopedThreadFolderKey,
   type ThreadFolderCollect,
   threadFolderCollectUpdate,
 } from "@t3tools/client-runtime/state/thread-folders";
@@ -31,6 +32,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import {
   beginPendingThreadOrder,
   getPendingThreadOrder,
+  addingRelatedThreadsAtom,
   threadDropBusyAtom,
 } from "../../state/thread-order";
 import {
@@ -288,8 +290,18 @@ export function useThreadListActions(): {
     const update = threadFolderCollectUpdate(folder, choice);
     return update ? mutateFolder(folder, update) : Promise.resolve(false);
   };
-  const applyFolderRule = (folder: EnvironmentThreadFolder) =>
-    mutateFolder(folder, { type: "folder.applyRule", folderId: folder.id });
+  const applyFolderRule = (folder: EnvironmentThreadFolder) => {
+    const key = scopedThreadFolderKey(folder);
+    const adding = appAtomRegistry.get(addingRelatedThreadsAtom);
+    if (adding.includes(key)) return Promise.resolve(false);
+    appAtomRegistry.set(addingRelatedThreadsAtom, [...adding, key]);
+    return mutateFolder(folder, { type: "folder.applyRule", folderId: folder.id }).finally(() =>
+      appAtomRegistry.set(
+        addingRelatedThreadsAtom,
+        appAtomRegistry.get(addingRelatedThreadsAtom).filter((entry) => entry !== key),
+      ),
+    );
+  };
   const settleFolder = async (folder: EnvironmentThreadFolder, settled: boolean) => {
     const members = appAtomRegistry
       .get(environmentThreadShells.threadShellsAtom)

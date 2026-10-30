@@ -4,6 +4,7 @@ import {
   type ThreadFolderCollect,
   threadFolderCollect,
 } from "@t3tools/client-runtime/state/thread-folders";
+import { useAtomValue } from "@effect/atom-react";
 import { ThreadFolderId } from "@t3tools/contracts";
 import type { ReactNode } from "react";
 import { projectIconColorClassNames } from "../../lib/projectIcon";
@@ -21,7 +22,7 @@ import {
 import { RowPressable } from "../../components/ui/RowPressable";
 import { CustomSnoozeSheet } from "./CustomSnoozeSheet";
 import { appAtomRegistry } from "../../state/atom-registry";
-import { threadArrangementOpenAtom } from "../../state/thread-order";
+import { addingRelatedThreadsAtom, threadArrangementOpenAtom } from "../../state/thread-order";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useVisibleSecondClock } from "./use-visible-second-clock";
@@ -41,7 +42,7 @@ import { canSnooze } from "@t3tools/client-runtime/state/thread-settled";
 import { threadChipCopyTarget } from "@t3tools/client-runtime/thread-reference";
 import type { MenuAction } from "@react-native-menu/menu";
 import { memo, useCallback, useMemo, useState, type ComponentProps } from "react";
-import { Pressable, type PressableProps, useWindowDimensions, View } from "react-native";
+import { Platform, Pressable, type PressableProps, useWindowDimensions, View } from "react-native";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 
 import type { ThreadListProvider } from "../../state/thread-list-environments";
@@ -179,7 +180,6 @@ const LEGACY_MENU_ACTIONS: MenuAction[] = [
 function ThreadListV2Section(props: {
   readonly label: string;
   readonly leading?: ReactNode;
-  readonly labelAccessory?: ReactNode;
   readonly pane?: "screen" | "sidebar";
   readonly tone?: "default" | "snoozed";
   readonly disclosure?: {
@@ -214,7 +214,6 @@ function ThreadListV2Section(props: {
       >
         {props.label}
       </Text>
-      {props.labelAccessory}
       <View
         className={cn(
           "h-px flex-1",
@@ -322,12 +321,13 @@ export const ThreadListV2FolderHeader = memo(function ThreadListV2FolderHeader(p
     (folder) => folder.environmentId === item.environmentId,
   );
   const collect = threadFolderCollect(item.folder);
-  const choiceActions = (by: "branch" | "worktree", values: ReadonlyArray<string>) =>
+  const addingRelated = useAtomValue(addingRelatedThreadsAtom).includes(item.folderKey);
+  const choiceActions = (by: "branch" | "worktree", values: ReadonlyArray<string>, prefix = "") =>
     values.length === 0
-      ? [{ id: `collect:${by}:none`, title: "None yet", attributes: { disabled: true } }]
+      ? [{ id: `collect:${by}:none`, title: `${prefix}None yet`, attributes: { disabled: true } }]
       : values.map((value) => ({
           id: `collect:${by}:${value}`,
-          title: value,
+          title: `${prefix}${value}`,
           state: collect.by === by && collect.value === value ? ("on" as const) : ("off" as const),
         }));
   const folderIndex = folders.findIndex((folder) => folder.id === item.folder.id);
@@ -357,16 +357,25 @@ export const ThreadListV2FolderHeader = memo(function ThreadListV2FolderHeader(p
               title: "By topic",
               state: collect.by === "topic" ? ("on" as const) : ("off" as const),
             },
-            {
-              id: "collect:branch",
-              title: collect.by === "branch" ? `By branch: ${collect.value}` : "By branch",
-              subactions: choiceActions("branch", item.collectChoices.branches),
-            },
-            {
-              id: "collect:worktree",
-              title: collect.by === "worktree" ? `By worktree: ${collect.value}` : "By worktree",
-              subactions: choiceActions("worktree", item.collectChoices.worktrees),
-            },
+            // Android menus nest one level, so branches and worktrees sit inline there.
+            ...(Platform.OS === "android"
+              ? [
+                  ...choiceActions("branch", item.collectChoices.branches, "Branch: "),
+                  ...choiceActions("worktree", item.collectChoices.worktrees, "Worktree: "),
+                ]
+              : [
+                  {
+                    id: "collect:branch",
+                    title: collect.by === "branch" ? `By branch: ${collect.value}` : "By branch",
+                    subactions: choiceActions("branch", item.collectChoices.branches),
+                  },
+                  {
+                    id: "collect:worktree",
+                    title:
+                      collect.by === "worktree" ? `By worktree: ${collect.value}` : "By worktree",
+                    subactions: choiceActions("worktree", item.collectChoices.worktrees),
+                  },
+                ]),
             ...(collect.by === "custom"
               ? [
                   {
@@ -379,7 +388,12 @@ export const ThreadListV2FolderHeader = memo(function ThreadListV2FolderHeader(p
               : []),
           ],
         },
-        { id: "apply-rule", title: "Add related threads", image: "folder.badge.plus" },
+        {
+          id: "apply-rule",
+          title: addingRelated ? "Adding related threads…" : "Add related threads",
+          image: "folder.badge.plus",
+          ...(addingRelated ? { attributes: { disabled: true } } : {}),
+        },
         item.settled
           ? { id: "unsettle", title: "Un-settle folder", image: "arrow.uturn.backward" }
           : { id: "settle", title: "Settle folder", image: "checkmark.circle" },
@@ -405,18 +419,6 @@ export const ThreadListV2FolderHeader = memo(function ThreadListV2FolderHeader(p
         pane={props.pane}
         label={`${item.folder.name} (${item.count})${props.environmentLabel ? " · " + props.environmentLabel : ""}`}
         onPress={() => props.onToggle(item.folderKey)}
-        labelAccessory={
-          item.folder.rule && item.folder.autoFile ? (
-            <SymbolView
-              name="sparkles"
-              size={10}
-              tintColorClassName={
-                props.pane === "sidebar" ? "accent-drawer-foreground-muted" : "accent-icon-muted"
-              }
-              accessibilityLabel="Collects new threads"
-            />
-          ) : null
-        }
         leading={
           <View className={cn("h-7 w-7 items-center justify-center rounded-lg", colors.background)}>
             {icon ? (

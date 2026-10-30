@@ -7,6 +7,8 @@ import {
   threadFolderCollectUpdate,
 } from "@t3tools/client-runtime/state/thread-folders";
 import {
+  addRelatedThreads,
+  isAddingRelatedThreads,
   useThreadFolders,
   mutateThreadFolders,
   moveThreadsToFolder,
@@ -1775,6 +1777,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       const index = siblings.findIndex((candidate) => candidate.id === folder.id);
       const supportsSettlement = serverConfigs.has(folder.environmentId);
       const collect = threadFolderCollect(folder);
+      const addingRelated = isAddingRelatedThreads(folder);
       const choices = threadFolderCollectChoices(folder, threads);
       const choiceItems = (by: "branch" | "worktree", values: ReadonlyArray<string>) =>
         values.length === 0
@@ -1822,9 +1825,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             },
             {
               id: "apply-rule",
-              label: "Add related threads",
+              label: addingRelated ? "Adding related threads…" : "Add related threads",
               icon: "folder-plus",
-              disabled: !canOperate,
+              disabled: !canOperate || addingRelated,
             },
             ...(siblings.length > 1
               ? [
@@ -1899,11 +1902,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           setFolderCustomizeTarget(folder);
           return;
         case "apply-rule":
-          void mutateThreadFolders(
-            folder.environmentId,
-            { type: "folder.applyRule", folderId: folder.id },
-            "Could not add related threads",
-          );
+          void addRelatedThreads(folder);
           return;
         case "move-up":
         case "move-down":

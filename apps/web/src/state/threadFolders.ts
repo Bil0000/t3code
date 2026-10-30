@@ -9,6 +9,7 @@ import {
 import {
   type EnvironmentThreadFolder,
   findThreadFolder,
+  scopedThreadFolderKey,
 } from "@t3tools/client-runtime/state/thread-folders";
 import {
   AuthOrchestrationOperateScope,
@@ -178,4 +179,32 @@ export function requestThreadFolderRename(folderKey: string | null): void {
 
 export function useThreadFolderRenameKey(): string | null {
   return useAtomValue(pendingRenameAtom);
+}
+
+/** Folders whose related threads are being added; the folder menu shows the work instead of a second run. */
+const addingRelatedAtom = Atom.make<ReadonlyArray<string>>([]).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("web-thread-folder-adding-related"),
+);
+
+export function isAddingRelatedThreads(folder: EnvironmentThreadFolder): boolean {
+  return appAtomRegistry.get(addingRelatedAtom).includes(scopedThreadFolderKey(folder));
+}
+
+export async function addRelatedThreads(folder: EnvironmentThreadFolder): Promise<void> {
+  const key = scopedThreadFolderKey(folder);
+  if (isAddingRelatedThreads(folder)) return;
+  appAtomRegistry.set(addingRelatedAtom, [...appAtomRegistry.get(addingRelatedAtom), key]);
+  try {
+    await mutateThreadFolders(
+      folder.environmentId,
+      { type: "folder.applyRule", folderId: folder.id },
+      "Could not add related threads",
+    );
+  } finally {
+    appAtomRegistry.set(
+      addingRelatedAtom,
+      appAtomRegistry.get(addingRelatedAtom).filter((entry) => entry !== key),
+    );
+  }
 }

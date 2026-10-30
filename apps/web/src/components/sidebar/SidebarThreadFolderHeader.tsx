@@ -8,7 +8,6 @@ import {
   ChevronDownIcon,
   FolderClosedIcon,
   FolderOpenIcon,
-  SparklesIcon,
   Undo2Icon,
 } from "lucide-react";
 import {
@@ -266,12 +265,6 @@ export const SidebarThreadFolderHeader = memo(function SidebarThreadFolderHeader
             {folder.name}
           </span>
         )}
-        {folder.rule !== null && folder.autoFile ? (
-          <SparklesIcon
-            aria-label="Collects new threads"
-            className="size-3 shrink-0 text-sidebar-muted-foreground"
-          />
-        ) : null}
         {pullRequestCount > 0 ? (
           <span
             aria-hidden
@@ -282,7 +275,10 @@ export const SidebarThreadFolderHeader = memo(function SidebarThreadFolderHeader
           </span>
         ) : null}
         {collapsed && hiddenThreads.length > 0 ? (
-          <span aria-hidden className="shrink-0 text-xs tabular-nums text-sidebar-muted-foreground">
+          <span
+            aria-hidden
+            className="shrink-0 text-xs tabular-nums text-sidebar-muted-foreground group-focus-within/thread-folder:hidden group-hover/thread-folder:hidden"
+          >
             {hiddenThreads.length}
           </span>
         ) : null}
@@ -307,7 +303,7 @@ export const SidebarThreadFolderHeader = memo(function SidebarThreadFolderHeader
                   }}
                   onPointerDown={(event) => event.stopPropagation()}
                   onDoubleClick={(event) => event.stopPropagation()}
-                  className="inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground opacity-0 transition-opacity hover:text-sidebar-foreground focus-visible:opacity-100 group-focus-within/thread-folder:opacity-100 group-hover/thread-folder:opacity-100 pointer-coarse:opacity-100"
+                  className="hidden size-5 shrink-0 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground hover:text-sidebar-foreground group-focus-within/thread-folder:inline-flex group-hover/thread-folder:inline-flex pointer-coarse:inline-flex"
                 />
               }
             >
@@ -326,7 +322,7 @@ export const SidebarThreadFolderHeader = memo(function SidebarThreadFolderHeader
           <ChevronDownIcon
             aria-hidden
             className={cn(
-              "size-3 shrink-0 text-sidebar-muted-foreground opacity-0 transition-transform group-focus-within/thread-folder:opacity-100 group-hover/thread-folder:opacity-100 pointer-coarse:opacity-100",
+              "hidden size-3 shrink-0 text-sidebar-muted-foreground transition-transform group-focus-within/thread-folder:block group-hover/thread-folder:block pointer-coarse:block",
               collapsed && "-rotate-90",
             )}
           />
