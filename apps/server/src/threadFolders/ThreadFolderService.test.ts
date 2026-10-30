@@ -35,6 +35,7 @@ const subagent = ThreadId.make("thread:subagent");
 const deleted = ThreadId.make("thread:deleted");
 const reviews = ThreadFolderId.make("folder:reviews");
 const fixes = ThreadFolderId.make("folder:fixes");
+const web = ThreadFolderId.make("folder:web");
 
 // Shells take their title and settled flag from the seeded row, so a test can change them with SQL.
 const projectionLayer = Layer.unwrap(
@@ -132,11 +133,15 @@ const suggestionLayer = Layer.mergeAll(
               : Effect.void
           ).pipe(
             Effect.as({
-              threadIds: [
-                ...input.threads.map((thread) => thread.id),
-                ...input.examples.map((title) => `example:${title}`),
-                "thread:invalid",
-              ],
+              // "Web" names the threads' project, so they must be filed without the model.
+              threadIds:
+                input.folderName === "Web"
+                  ? []
+                  : [
+                      ...input.threads.map((thread) => thread.id),
+                      ...input.examples.map((title) => `example:${title}`),
+                      "thread:invalid",
+                    ],
             }),
           ),
       });
@@ -525,10 +530,12 @@ it.effect(
       yield* folders.mutate({ type: "folder.move", threadIds: [other], folderId: reviews });
       assert.isNull((yield* folders.list()).folders[0]!.rule);
       yield* folders.mutate({ type: "folder.move", threadIds: [live], folderId: null });
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql`DELETE FROM thread_folder_explicit_moves WHERE thread_id = ${live}`;
       const smart = yield* folders.mutate({ type: "folder.applyRule", folderId: reviews });
       assert.deepStrictEqual(smart.folders[0]!.threadIds, [other, live]);
+      yield* folders.mutate({ type: "folder.move", threadIds: [live, other], folderId: null });
+      yield* folders.mutate({ type: "folder.create", folderId: web, name: "Web" });
+      const byName = yield* folders.mutate({ type: "folder.applyRule", folderId: web });
+      assert.deepStrictEqual(byName.folders[0]!.threadIds, [live, other]);
     }).pipe(Effect.provide(layer)),
 );
 
@@ -624,9 +631,6 @@ it.effect("files validated title picks and batches only eligible smart threads",
     assert.deepStrictEqual((yield* folders.list()).folders[0]!.threadIds, [live]);
     yield* folders.mutate({ type: "folder.move", threadIds: [other], folderId: null });
     assert.deepStrictEqual(yield* folders.smartCandidates(other), []);
-    yield* folders.mutate({ type: "folder.applyRule", folderId: reviews });
-    assert.deepStrictEqual((yield* folders.list()).folders[0]!.threadIds, [live]);
-    yield* sql`DELETE FROM thread_folder_explicit_moves WHERE thread_id = ${other}`;
     yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json = 'settled' WHERE thread_id = ${other}`;
     yield* folders.mutate({ type: "folder.applyRule", folderId: reviews });
     assert.deepStrictEqual((yield* folders.list()).folders[0]!.threadIds, [live]);

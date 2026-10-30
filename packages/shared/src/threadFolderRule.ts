@@ -87,6 +87,27 @@ export function inferThreadFolderRule(
   return worktree ? { worktrees: [worktree] } : null;
 }
 
+/** True when a thread's project, branch, worktree, or title names the folder: "Fleet" fits project "fleet". */
+export function threadNamesFolder(
+  name: string,
+  thread: Pick<ThreadFolderRuleSubject, "title" | "branch" | "worktreePath"> & {
+    readonly projectName: string | null;
+  },
+): boolean {
+  const target = slug(name);
+  if (target === "") return false;
+  const names = [
+    thread.projectName,
+    thread.branch,
+    thread.branch && lastSegment(thread.branch),
+    thread.worktreePath && lastSegment(thread.worktreePath),
+  ];
+  return (
+    names.some((value) => value && slug(value) === target) ||
+    `-${slug(thread.title)}-`.includes(`-${target}-`)
+  );
+}
+
 export const THREAD_FOLDER_ICONS: ReadonlyArray<
   readonly [words: ReadonlyArray<string>, name: string, color: ProjectIconColor]
 > = [
@@ -132,17 +153,20 @@ export function threadMatchesFolderRule(
 ): boolean {
   if (!Object.entries(rule).some(([key, value]) => key !== "smart" && value !== undefined))
     return false;
+  // Topic alone is the model's call; with branches or worktrees, those match directly.
+  if (rule.smart && rule.branches === undefined && rule.worktrees === undefined) return false;
   if (rule.projectIds && !rule.projectIds.includes(thread.projectId)) return false;
   if (rule.providerInstanceIds && !rule.providerInstanceIds.includes(thread.providerInstanceId)) {
     return false;
   }
   if (rule.pullRequest !== undefined && rule.pullRequest !== thread.hasPullRequest) return false;
-  if (rule.branches && !matchesAny(thread.branch, rule.branches)) return false;
   if (
-    rule.worktrees &&
+    (rule.branches || rule.worktrees) &&
+    !(rule.branches && matchesAny(thread.branch, rule.branches)) &&
     !(
-      matchesAny(thread.worktreePath, rule.worktrees) ||
-      matchesAny(thread.worktreePath && lastSegment(thread.worktreePath), rule.worktrees)
+      rule.worktrees &&
+      (matchesAny(thread.worktreePath, rule.worktrees) ||
+        matchesAny(thread.worktreePath && lastSegment(thread.worktreePath), rule.worktrees))
     )
   ) {
     return false;
@@ -163,10 +187,7 @@ export function pickThreadFolderForRule<
   return (
     folders.find(
       (folder) =>
-        folder.autoFile &&
-        folder.rule !== null &&
-        !folder.rule.smart &&
-        threadMatchesFolderRule(folder.rule, thread),
+        folder.autoFile && folder.rule !== null && threadMatchesFolderRule(folder.rule, thread),
     ) ?? null
   );
 }

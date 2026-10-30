@@ -4,6 +4,7 @@ import {
   scopedThreadFolderKey,
   threadFolderCollect,
   threadFolderCollectChoices,
+  threadFolderCollectLabel,
   threadFolderCollectUpdate,
 } from "@t3tools/client-runtime/state/thread-folders";
 import {
@@ -591,19 +592,19 @@ function useSidebarThreads(input: {
         });
   const folderRows = threadFolderBlocks.flatMap((block) => block.rows);
   // Keyboard order follows the screen: settled folders sit under the Settled header.
-  const folderThreads = (settled: boolean) =>
+  const members = (settled: boolean) =>
     threadFolderBlocks
       .filter((block) => block.settled === settled)
       .flatMap((block) => block.rows.map((row) => row.thread));
   const orderedThreads = [
-    ...folderThreads(false),
+    ...members(false),
     ...pinnedThreads,
     ...(projectFolders === null
       ? activeThreads
       : projectFolders.flatMap((folder) => folder.threads)),
     ...visibleWorkingThreads,
     ...visibleSnoozedThreads,
-    ...folderThreads(true),
+    ...members(true),
     ...renderedSettledThreads,
   ];
   const sectionByThreadKey = new Map<string, SidebarSection>();
@@ -1785,7 +1786,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           : values.map((value) => ({
               id: `collect:${by}:${value}`,
               label: value,
-              checked: collect.by === by && collect.value === value,
+              checked: (by === "branch" ? collect.branches : collect.worktrees).includes(value),
             }));
       const clicked = await settlePromise(() =>
         api.contextMenu.show(
@@ -1798,20 +1799,23 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               icon: "folder-tree",
               disabled: !canOperate,
               children: [
-                { id: "collect:off", label: "Off", checked: collect.by === "off" },
-                { id: "collect:topic", label: "By topic", checked: collect.by === "topic" },
+                {
+                  id: "collect:off",
+                  label: "Off",
+                  checked: !folder.autoFile || folder.rule === null,
+                },
+                { id: "collect:topic", label: "By topic", checked: collect.topic },
                 {
                   id: "collect:branch",
-                  label: collect.by === "branch" ? `By branch: ${collect.value}` : "By branch",
+                  label: threadFolderCollectLabel("By branch", collect.branches),
                   children: choiceItems("branch", choices.branches),
                 },
                 {
                   id: "collect:worktree",
-                  label:
-                    collect.by === "worktree" ? `By worktree: ${collect.value}` : "By worktree",
+                  label: threadFolderCollectLabel("By worktree", collect.worktrees),
                   children: choiceItems("worktree", choices.worktrees),
                 },
-                ...(collect.by === "custom"
+                ...(collect.custom
                   ? [
                       {
                         id: "collect:custom",
@@ -1866,12 +1870,21 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                   ]
                 : []),
             {
-              id: "delete",
+              id: "delete-menu",
               label: "Delete folder",
               icon: "trash",
               destructive: true,
               separatorBefore: true,
               disabled: !canOperate,
+              children: [
+                { id: "delete", label: "Keep its threads" },
+                {
+                  id: "delete-threads",
+                  label: `Delete its threads too (${members.length})`,
+                  destructive: true,
+                  disabled: members.length === 0,
+                },
+              ],
             },
           ],
           position,
@@ -1914,6 +1927,46 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             folderId: folder.id,
           });
           return;
+        case "delete-threads": {
+          const count = members.length;
+          if (confirmThreadDelete) {
+            const confirmed = await settlePromise(() =>
+              api.dialogs.confirm(
+                [
+                  `Delete "${folder.name}" and its ${count} thread${count === 1 ? "" : "s"}?`,
+                  "This permanently clears conversation history for these threads.",
+                ].join("\n"),
+                { variant: "destructive" },
+              ),
+            );
+            if (confirmed._tag === "Failure" || !confirmed.value) return;
+          }
+          if (!checkThreadOperations(members)) return;
+          const { firstFailure } = await deleteSelectedThreadEntries({
+            entries: members.map((thread) => ({
+              threadKey: scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+              thread,
+            })),
+            delete: ({ thread }, deletedThreadKeys) =>
+              deleteThread(scopeThreadRef(thread.environmentId, thread.id), { deletedThreadKeys }),
+          });
+          if (firstFailure !== null) {
+            const error = squashAtomCommandFailure(firstFailure);
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: "Failed to delete threads",
+                description: error instanceof Error ? error.message : "An error occurred.",
+              }),
+            );
+            return;
+          }
+          void mutateThreadFolders(folder.environmentId, {
+            type: "folder.delete",
+            folderId: folder.id,
+          });
+          return;
+        }
         case "settle":
         case "unsettle":
           handleThreadFolderSettle(folder, clicked.value);

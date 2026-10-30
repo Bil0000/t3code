@@ -7,6 +7,7 @@ import {
   pickThreadFolderForRule,
   threadFolderRuleHasConditions,
   threadMatchesFolderRule,
+  threadNamesFolder,
 } from "./threadFolderRule.ts";
 
 const thread = {
@@ -27,11 +28,14 @@ describe("threadMatchesFolderRule", () => {
     [{}, false],
     [{ smart: true }, false],
     [{ smart: true, branches: ["t3code/fix-*"] }, true],
+    [{ smart: true, pullRequest: true }, false],
     [{ branches: ["t3code/fix-*"] }, true],
     [{ branches: ["T3CODE/FIX-STATUS-DROPDOWN"] }, true],
     [{ branches: ["main"] }, false],
     [{ worktrees: ["fix-status-*"] }, true],
     [{ worktrees: ["/root/.t3/worktrees/*"] }, true],
+    [{ branches: ["main"], worktrees: ["fix-status-*"] }, true],
+    [{ branches: ["main"], worktrees: ["other"] }, false],
     [{ titleKeywords: ["review", "audit"] }, true],
     [{ titleKeywords: ["audit"] }, false],
     [{ titleKeywords: ["view"] }, false],
@@ -69,10 +73,12 @@ describe("pickThreadFolderForRule", () => {
       { id: "smart", rule: { smart: true, pullRequest: true }, autoFile: true },
       { id: "off", rule: { pullRequest: true }, autoFile: false },
       { id: "none", rule: null, autoFile: true },
+      { id: "elsewhere", rule: { smart: true, branches: ["main"] }, autoFile: true },
       { id: "reviews", rule: { titleKeywords: ["review"] }, autoFile: true },
       { id: "prs", rule: { pullRequest: true }, autoFile: true },
     ];
     expect(pickThreadFolderForRule(folders, thread)?.id).toBe("reviews");
+    expect(pickThreadFolderForRule(folders, { ...thread, branch: "main" })?.id).toBe("elsewhere");
     expect(pickThreadFolderForRule(folders, { ...thread, title: "x", hasPullRequest: false })).toBe(
       null,
     );
@@ -102,6 +108,20 @@ describe("inferThreadFolderRule", () => {
     expect(inferThreadFolderRule("Fix status dropdown", [{ ...thread, branch: "main" }])).toEqual({
       worktrees: ["fix-status-dropdown"],
     });
+  });
+});
+
+describe("threadNamesFolder", () => {
+  const subject = { ...thread, projectName: "fleet" };
+  it.each([
+    ["Fleet", true],
+    ["fix status dropdown", true],
+    ["Status dropdown", true],
+    ["Mobile changes", false],
+    ["Drop", false],
+    ["", false],
+  ])("%j: %s", (name, expected) => {
+    expect(threadNamesFolder(name, subject)).toBe(expected);
   });
 });
 

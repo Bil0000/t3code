@@ -245,7 +245,7 @@ const ScheduledTaskRunTool = Tool.make("run_scheduled_task_now", {
 
 const ThreadFolderTool = Tool.make("t3_thread_folder", {
   description:
-    'Sidebar folders that group T3 Code threads (not filesystem directories); "a folder of my X threads" means one, so find the threads with t3_thread_search or t3_thread_list. Actions: list, create (name), update/delete (folderId), reorder (folderId before beforeFolderId; null=end), move (threadIds default this thread, folderId null=out), apply_rule (folderId: add related unsettled threads now). create/update: icon (Lucide name + color; create picks one from the name), rule, autoFile (true to auto-file new threads); null clears icon/rule. Rules: group by branch = one folder per branch, branches:[branch]; {smart:true} files by folder name meaning; worktree X = {worktrees:[X]}.',
+    'Sidebar folders that group T3 Code threads (not filesystem directories); "a folder of my X threads" means one, so find the threads with t3_thread_search or t3_thread_list. Actions: list, create (name), update/delete (folderId), reorder (folderId before beforeFolderId; null=end), move (threadIds default this thread, folderId null=out), apply_rule (folderId: add related unsettled threads now). create/update: icon (Lucide name + color; create picks one from the name), rule, autoFile (true to auto-file new threads); null clears icon/rule. Rules: group by branch = one folder per branch, branches:[branch]; {smart:true} files by folder name meaning; worktree X = {worktrees:[X]}; smart, branches, and worktrees combine as any-of.',
   parameters: Schema.Struct({
     environmentId: OrchestratorMcpEnvironmentTarget,
     action: Schema.Literals([

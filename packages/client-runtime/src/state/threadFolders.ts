@@ -93,47 +93,85 @@ export function resolveFolderReorder<Id>(
   return { beforeFolderId: rest[rest.indexOf(shown.at(-1)!) + 1] ?? null };
 }
 
-/** How a folder collects new threads, in the terms the folder menu offers. */
-export type ThreadFolderCollect =
-  | { readonly by: "off" }
-  | { readonly by: "topic" }
-  | { readonly by: "branch" | "worktree"; readonly value: string }
-  | { readonly by: "custom" };
+/**
+ * How a folder collects new threads, in the terms the folder menu offers. `custom` is a rule
+ * an agent set with conditions the menu cannot show.
+ */
+export interface ThreadFolderCollect {
+  readonly topic: boolean;
+  readonly branches: ReadonlyArray<string>;
+  readonly worktrees: ReadonlyArray<string>;
+  readonly custom: boolean;
+}
+
+/** One click in the folder's Collect menu: Off, or one option to turn on or off. */
+export type ThreadFolderCollectChoice =
+  | { readonly by: "off" | "topic" }
+  | { readonly by: "branch" | "worktree"; readonly value: string };
+
+const COLLECT_OFF: ThreadFolderCollect = {
+  topic: false,
+  branches: [],
+  worktrees: [],
+  custom: false,
+};
 
 export function threadFolderCollect(
   folder: Pick<ThreadFolder, "rule" | "autoFile">,
 ): ThreadFolderCollect {
-  const rule = folder.rule;
-  if (rule === null || !folder.autoFile) return { by: "off" };
-  if (Object.values(rule).filter((value) => value !== undefined).length === 1) {
-    if (rule.smart === true) return { by: "topic" };
-    if (rule.branches?.length === 1) return { by: "branch", value: rule.branches[0]! };
-    if (rule.worktrees?.length === 1) return { by: "worktree", value: rule.worktrees[0]! };
+  if (folder.rule === null || !folder.autoFile) return COLLECT_OFF;
+  const { smart, branches, worktrees, ...rest } = folder.rule;
+  if (Object.values(rest).some((value) => value !== undefined)) {
+    return { ...COLLECT_OFF, custom: true };
   }
-  return { by: "custom" };
+  return {
+    topic: smart === true,
+    branches: branches ?? [],
+    worktrees: worktrees ?? [],
+    custom: false,
+  };
 }
 
-/** The `folder.update` that makes a folder collect by `choice`, or null when it already does. */
+/** The `folder.update` a Collect menu click makes, or null when nothing changes. */
 export function threadFolderCollectUpdate(
   folder: Pick<ThreadFolder, "id" | "rule" | "autoFile">,
-  choice: Exclude<ThreadFolderCollect, { readonly by: "custom" }>,
+  choice: ThreadFolderCollectChoice,
 ): Extract<ThreadFolderMutation, { readonly type: "folder.update" }> | null {
   if (choice.by === "off") {
     return folder.autoFile ? { type: "folder.update", folderId: folder.id, autoFile: false } : null;
   }
-  const rule: ThreadFolderRule =
-    choice.by === "topic"
-      ? { smart: true }
-      : choice.by === "branch"
-        ? { branches: [choice.value] }
-        : { worktrees: [choice.value] };
-  if (folder.autoFile && JSON.stringify(folder.rule) === JSON.stringify(rule)) return null;
+  const current = threadFolderCollect(folder);
+  const base = current.custom ? COLLECT_OFF : current;
+  const toggle = (values: ReadonlyArray<string>, by: "branch" | "worktree") =>
+    choice.by !== by
+      ? values
+      : values.includes(choice.value)
+        ? values.filter((value) => value !== choice.value)
+        : [...values, choice.value];
+  const topic = choice.by === "topic" ? !base.topic : base.topic;
+  const branches = toggle(base.branches, "branch");
+  const worktrees = toggle(base.worktrees, "worktree");
+  if (!topic && branches.length === 0 && worktrees.length === 0) {
+    return { type: "folder.update", folderId: folder.id, rule: null, autoFile: false };
+  }
+  const rule: ThreadFolderRule = {
+    ...(topic ? { smart: true } : {}),
+    ...(branches.length > 0 ? { branches } : {}),
+    ...(worktrees.length > 0 ? { worktrees } : {}),
+  };
   return { type: "folder.update", folderId: folder.id, rule, autoFile: true };
+}
+
+/** A Collect submenu label: "By branch", "By branch: main", or "By branch: main +2". */
+export function threadFolderCollectLabel(title: string, values: ReadonlyArray<string>): string {
+  const [first] = values;
+  if (first === undefined) return title;
+  return values.length === 1 ? `${title}: ${first}` : `${title}: ${first} +${values.length - 1}`;
 }
 
 /**
  * Branches and worktree names to offer, from the folder's own threads first and then the
- * environment's most recent ones, with the folder's current value always included.
+ * environment's most recent ones, with the folder's current values always included.
  */
 export function threadFolderCollectChoices(
   folder: EnvironmentThreadFolder,
@@ -174,8 +212,8 @@ export function threadFolderCollectChoices(
     const ordered = [...best]
       .sort(([, a], [, b]) => b[0] - a[0] || b[1].localeCompare(a[1]))
       .map(([value]) => value);
-    const pinned = current.by === by ? [current.value] : [];
-    return [...new Set([...pinned, ...ordered])].slice(0, limit);
+    const pinned = by === "branch" ? current.branches : current.worktrees;
+    return [...new Set([...pinned, ...ordered])].slice(0, Math.max(limit, pinned.length));
   };
   return { branches: rank("branch"), worktrees: rank("worktree") };
 }

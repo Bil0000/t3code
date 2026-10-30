@@ -1,8 +1,9 @@
 import {
   findThreadFolder,
   type EnvironmentThreadFolder,
-  type ThreadFolderCollect,
+  type ThreadFolderCollectChoice,
   threadFolderCollect,
+  threadFolderCollectLabel,
 } from "@t3tools/client-runtime/state/thread-folders";
 import { useAtomValue } from "@effect/atom-react";
 import { ThreadFolderId } from "@t3tools/contracts";
@@ -303,7 +304,7 @@ export const ThreadListV2FolderHeader = memo(function ThreadListV2FolderHeader(p
   readonly environmentLabel?: string | null;
   readonly onToggle: (key: string) => void;
   readonly onRename: (folder: EnvironmentThreadFolder) => void;
-  readonly onDelete: (folder: EnvironmentThreadFolder) => void;
+  readonly onDelete: (folder: EnvironmentThreadFolder, withThreads: boolean) => void;
   readonly onMove: (
     folder: EnvironmentThreadFolder,
     direction: "up" | "down",
@@ -311,7 +312,7 @@ export const ThreadListV2FolderHeader = memo(function ThreadListV2FolderHeader(p
   ) => Promise<boolean>;
   readonly onCollect: (
     folder: EnvironmentThreadFolder,
-    choice: Exclude<ThreadFolderCollect, { readonly by: "custom" }>,
+    choice: ThreadFolderCollectChoice,
   ) => Promise<boolean>;
   readonly onApplyRule: (folder: EnvironmentThreadFolder) => Promise<boolean>;
   readonly onSettle: (folder: EnvironmentThreadFolder, settled: boolean) => Promise<boolean>;
@@ -328,7 +329,9 @@ export const ThreadListV2FolderHeader = memo(function ThreadListV2FolderHeader(p
       : values.map((value) => ({
           id: `collect:${by}:${value}`,
           title: `${prefix}${value}`,
-          state: collect.by === by && collect.value === value ? ("on" as const) : ("off" as const),
+          state: (by === "branch" ? collect.branches : collect.worktrees).includes(value)
+            ? ("on" as const)
+            : ("off" as const),
         }));
   const folderIndex = folders.findIndex((folder) => folder.id === item.folder.id);
   const icon = item.folder.icon;
@@ -350,12 +353,15 @@ export const ThreadListV2FolderHeader = memo(function ThreadListV2FolderHeader(p
             {
               id: "collect:off",
               title: "Off",
-              state: collect.by === "off" ? ("on" as const) : ("off" as const),
+              state:
+                !item.folder.autoFile || item.folder.rule === null
+                  ? ("on" as const)
+                  : ("off" as const),
             },
             {
               id: "collect:topic",
               title: "By topic",
-              state: collect.by === "topic" ? ("on" as const) : ("off" as const),
+              state: collect.topic ? ("on" as const) : ("off" as const),
             },
             // Android menus nest one level, so branches and worktrees sit inline there.
             ...(Platform.OS === "android"
@@ -366,17 +372,16 @@ export const ThreadListV2FolderHeader = memo(function ThreadListV2FolderHeader(p
               : [
                   {
                     id: "collect:branch",
-                    title: collect.by === "branch" ? `By branch: ${collect.value}` : "By branch",
+                    title: threadFolderCollectLabel("By branch", collect.branches),
                     subactions: choiceActions("branch", item.collectChoices.branches),
                   },
                   {
                     id: "collect:worktree",
-                    title:
-                      collect.by === "worktree" ? `By worktree: ${collect.value}` : "By worktree",
+                    title: threadFolderCollectLabel("By worktree", collect.worktrees),
                     subactions: choiceActions("worktree", item.collectChoices.worktrees),
                   },
                 ]),
-            ...(collect.by === "custom"
+            ...(collect.custom
               ? [
                   {
                     id: "collect:custom",
@@ -397,11 +402,25 @@ export const ThreadListV2FolderHeader = memo(function ThreadListV2FolderHeader(p
         item.settled
           ? { id: "unsettle", title: "Un-settle folder", image: "arrow.uturn.backward" }
           : { id: "settle", title: "Settle folder", image: "checkmark.circle" },
-        { id: "delete", title: "Delete folder", image: "trash", attributes: { destructive: true } },
+        {
+          id: "delete-menu",
+          title: "Delete folder",
+          image: "trash",
+          attributes: { destructive: true },
+          subactions: [
+            { id: "delete", title: "Keep its threads" },
+            {
+              id: "delete-threads",
+              title: `Delete its threads too (${item.count})`,
+              attributes: { destructive: true, ...(item.count === 0 ? { disabled: true } : {}) },
+            },
+          ],
+        },
       ]}
       onPressAction={({ nativeEvent }) => {
         if (nativeEvent.event === "rename") props.onRename(item.folder);
-        if (nativeEvent.event === "delete") props.onDelete(item.folder);
+        if (nativeEvent.event === "delete") props.onDelete(item.folder, false);
+        if (nativeEvent.event === "delete-threads") props.onDelete(item.folder, true);
         if (nativeEvent.event === "move-up") void props.onMove(item.folder, "up", folders);
         if (nativeEvent.event === "move-down") void props.onMove(item.folder, "down", folders);
         if (nativeEvent.event === "apply-rule") void props.onApplyRule(item.folder);

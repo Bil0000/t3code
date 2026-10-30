@@ -3,7 +3,7 @@ import {
   type EnvironmentThreadFolder,
   resolveFolderReorder,
   scopedThreadFolderKey,
-  type ThreadFolderCollect,
+  type ThreadFolderCollectChoice,
   threadFolderCollectUpdate,
 } from "@t3tools/client-runtime/state/thread-folders";
 import { uuidv4 } from "../../lib/uuid";
@@ -209,7 +209,7 @@ export function useThreadListActions(): {
   ) => Promise<boolean>;
   readonly createFolder: (thread: EnvironmentThreadShell) => void;
   readonly renameFolder: (folder: EnvironmentThreadFolder) => void;
-  readonly deleteFolder: (folder: EnvironmentThreadFolder) => void;
+  readonly deleteFolder: (folder: EnvironmentThreadFolder, withThreads: boolean) => void;
   readonly moveFolder: (
     folder: EnvironmentThreadFolder,
     direction: "up" | "down",
@@ -217,7 +217,7 @@ export function useThreadListActions(): {
   ) => Promise<boolean>;
   readonly setFolderCollect: (
     folder: EnvironmentThreadFolder,
-    choice: Exclude<ThreadFolderCollect, { readonly by: "custom" }>,
+    choice: ThreadFolderCollectChoice,
   ) => Promise<boolean>;
   readonly applyFolderRule: (folder: EnvironmentThreadFolder) => Promise<boolean>;
   readonly settleFolder: (folder: EnvironmentThreadFolder, settled: boolean) => Promise<boolean>;
@@ -283,10 +283,7 @@ export function useThreadListActions(): {
     }
     return mutateFolder(folder, { type: "folder.reorder", folderId: folder.id, ...move });
   };
-  const setFolderCollect = (
-    folder: EnvironmentThreadFolder,
-    choice: Exclude<ThreadFolderCollect, { readonly by: "custom" }>,
-  ) => {
+  const setFolderCollect = (folder: EnvironmentThreadFolder, choice: ThreadFolderCollectChoice) => {
     const update = threadFolderCollectUpdate(folder, choice);
     return update ? mutateFolder(folder, update) : Promise.resolve(false);
   };
@@ -356,15 +353,32 @@ export function useThreadListActions(): {
       },
     });
   };
-  const deleteFolder = (folder: EnvironmentThreadFolder) => {
+  const deleteFolder = (folder: EnvironmentThreadFolder, withThreads: boolean) => {
     if (!checkThreadOperationPermission(folder, "Could not delete folder")) return;
+    const threads = withThreads
+      ? appAtomRegistry
+          .get(environmentThreadShells.threadShellsAtom)
+          .filter(
+            (thread) =>
+              thread.environmentId === folder.environmentId && folder.threadIds.includes(thread.id),
+          )
+      : [];
     Dialog.confirm({
-      title: "Delete folder?",
-      message: "Threads will stay in your thread list.",
+      title: withThreads
+        ? `Delete folder and ${threads.length} thread${threads.length === 1 ? "" : "s"}?`
+        : "Delete folder?",
+      message: withThreads
+        ? "The threads will be permanently deleted, including their terminal history."
+        : "Threads will stay in your thread list.",
       confirmText: "Delete",
       destructive: true,
       onConfirm: () => {
-        void mutateFolder(folder, { type: "folder.delete", folderId: folder.id });
+        void (async () => {
+          for (const thread of threads) {
+            if (!(await executeAction("delete", thread))) return;
+          }
+          await mutateFolder(folder, { type: "folder.delete", folderId: folder.id });
+        })();
       },
     });
   };

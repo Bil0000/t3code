@@ -1,4 +1,4 @@
-import { EnvironmentId, ThreadFolderId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, ThreadFolderId, ThreadId, type ThreadFolderRule } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -6,6 +6,7 @@ import {
   layoutThreadFolders,
   resolveFolderReorder,
   threadFolderCollect,
+  type ThreadFolderCollectChoice,
   threadFolderCollectChoices,
   threadFolderCollectUpdate,
 } from "./threadFolders.ts";
@@ -78,33 +79,52 @@ describe("resolveFolderReorder", () => {
 
 describe("threadFolderCollect", () => {
   const base = folder(local, "f", []);
+  const off = { topic: false, branches: [], worktrees: [], custom: false };
   it.each([
-    [null, true, { by: "off" }],
-    [{ smart: true }, false, { by: "off" }],
-    [{ smart: true }, true, { by: "topic" }],
-    [{ branches: ["feat/*"] }, true, { by: "branch", value: "feat/*" }],
-    [{ worktrees: ["t3-1"] }, true, { by: "worktree", value: "t3-1" }],
-    [{ branches: ["a", "b"] }, true, { by: "custom" }],
-    [{ smart: true, titleKeywords: ["x"] }, true, { by: "custom" }],
+    [null, true, off],
+    [{ smart: true }, false, off],
+    [{ smart: true }, true, { ...off, topic: true }],
+    [{ branches: ["a", "b"] }, true, { ...off, branches: ["a", "b"] }],
+    [
+      { smart: true, branches: ["a"], worktrees: ["t3-1"] },
+      true,
+      { topic: true, branches: ["a"], worktrees: ["t3-1"], custom: false },
+    ],
+    [{ smart: true, titleKeywords: ["x"] }, true, { ...off, custom: true }],
   ] as const)("%j autoFile=%s", (rule, autoFile, expected) => {
     expect(threadFolderCollect({ ...base, rule, autoFile })).toEqual(expected);
   });
 
-  it("builds the update for a choice and skips the current one", () => {
-    const topic = { ...base, rule: { smart: true }, autoFile: true };
-    expect(threadFolderCollectUpdate(topic, { by: "topic" })).toBeNull();
-    expect(threadFolderCollectUpdate(topic, { by: "off" })).toEqual({
+  it("toggles one option at a time and turns off when none is left", () => {
+    const update = (
+      rule: ThreadFolderRule | null,
+      autoFile: boolean,
+      choice: ThreadFolderCollectChoice,
+    ) => threadFolderCollectUpdate({ ...base, rule, autoFile }, choice);
+    expect(update({ smart: true }, true, { by: "branch", value: "main" })).toEqual({
       type: "folder.update",
       folderId: base.id,
-      autoFile: false,
-    });
-    expect(threadFolderCollectUpdate(base, { by: "off" })).toBeNull();
-    expect(threadFolderCollectUpdate(topic, { by: "branch", value: "main" })).toEqual({
-      type: "folder.update",
-      folderId: base.id,
-      rule: { branches: ["main"] },
+      rule: { smart: true, branches: ["main"] },
       autoFile: true,
     });
+    expect(update({ smart: true, branches: ["main"] }, true, { by: "topic" })).toMatchObject({
+      rule: { branches: ["main"] },
+    });
+    expect(update({ branches: ["main"] }, true, { by: "branch", value: "main" })).toEqual({
+      type: "folder.update",
+      folderId: base.id,
+      rule: null,
+      autoFile: false,
+    });
+    expect(update({ branches: ["main"] }, false, { by: "worktree", value: "t3-1" })).toMatchObject({
+      rule: { worktrees: ["t3-1"] },
+      autoFile: true,
+    });
+    expect(update({ titleKeywords: ["x"] }, true, { by: "topic" })).toMatchObject({
+      rule: { smart: true },
+    });
+    expect(update({ smart: true }, true, { by: "off" })).toMatchObject({ autoFile: false });
+    expect(update(null, false, { by: "off" })).toBeNull();
   });
 });
 

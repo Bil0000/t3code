@@ -438,10 +438,12 @@ Rules match new threads only;
 explicitly moved threads are never auto-filed again. A thread a rule filed moves on when it
 stops matching that deterministic rule. Smart-filed threads stay until moved.
 `rule: {smart:true}` files by the folder name's meaning through the existing title call.
-Other rule conditions must also match. A null rule clears it.
-`apply_rule` files existing unfiled, unsettled threads that match the rule now. A folder without a
-rule uses its name: a member's branch or worktree it is named for, else `{smart:true}`. For a smart
-rule, it classifies unfiled active threads in model calls of 100 and skips explicit moves.
+`smart`, `branches`, and `worktrees` each add threads; other rule conditions must also match.
+A null rule clears it.
+`apply_rule` files existing unfiled, unsettled threads that match the rule now, including ones
+moved out by hand. A folder without a rule uses its name: a member's branch or worktree it is named
+for, else `{smart:true}`. For a smart rule, threads whose project, branch, worktree, or title names
+the folder are filed without a model call; the rest are classified in parallel calls of 50.
 A rule-free folder whose name matches a member's branch or worktree gets that rule, with
 `autoFile` on, when it is created, renamed, or given threads.
 

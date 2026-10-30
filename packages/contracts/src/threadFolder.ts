@@ -21,8 +21,9 @@ const ThreadFolderRuleList = <S extends Schema.Top>(item: S) =>
   Schema.Array(item).check(Schema.isMinLength(1), Schema.isMaxLength(20));
 
 /**
- * Which new threads a folder files automatically. Every field present must match;
- * any entry of a list may match. Patterns are case-insensitive and `*` matches any run.
+ * Which new threads a folder files automatically. `smart`, `branches`, and `worktrees` each add
+ * threads: a thread whose work fits the folder name, or that is on any listed branch or worktree.
+ * Every other field present must also match. Patterns are case-insensitive; `*` matches any run.
  */
 export const ThreadFolderRule = Schema.Struct({
   smart: Schema.optional(Schema.Boolean),

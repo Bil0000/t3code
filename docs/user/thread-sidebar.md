@@ -171,7 +171,8 @@ A folder holds all of its threads, including pinned, snoozed, and settled ones, 
 with it. Choose **Customize…** in its menu to set an icon (any Lucide icon, an emoji, or letters)
 and a color. Hover a folder and click the check to settle every thread in it. When every thread in
 a folder is settled, the folder moves to **Settled**, collapsed, still holding its threads; click
-the undo arrow to bring it back. Deleting a folder never deletes its threads.
+the undo arrow to bring it back. **Delete folder** asks whether to keep its threads, which move
+back to your thread list, or to delete them too.
 
 A folder can also collect new threads for you. Open its menu and choose **Collect new threads**:
 
@@ -181,13 +182,17 @@ A folder can also collect new threads for you. Open its menu and choose **Collec
 - **By branch** or **By worktree** lists recent branches and worktrees to pick from.
 - **Off** stops collecting.
 
+Turn on as many as you need. A folder that collects by topic, two branches, and a worktree files
+a new thread that fits its name or is on any of them. Choose an option again to turn it off.
+
 A folder named for a branch or worktree that one of its threads uses collects that branch or
 worktree by itself. For example, a "Login" folder that holds a thread on `feature/login` collects
 new threads on `feature/login`. Choose **Off** to stop it.
 
-**Add related threads** files the unsettled threads that belong in the folder now: the ones that
-match how it collects, or, when it collects nothing, the ones that fit its name. A thread you move
-by hand is never collected automatically again.
+**Add related threads** files the unfiled, unsettled threads that belong in the folder now: the ones
+that match how it collects, or, when it collects nothing, the ones that fit its name. Threads whose
+project, branch, worktree, or title names the folder go in at once; your text model judges the rest.
+New threads you move out by hand are never collected automatically again.
 
 Agents connected through T3 Code can create folders, set rules, and file threads for you. For
 example, ask for "put the review threads in a Reviews folder".
