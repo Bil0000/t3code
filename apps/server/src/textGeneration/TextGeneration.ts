@@ -23,8 +23,6 @@ import * as SourceControlProviderRegistry from "../sourceControl/SourceControlPr
 import * as ThreadTitleLinks from "./ThreadTitleLinks.ts";
 
 export type {
-  CommitDescriptionsGenerationInput,
-  CommitDescriptionsGenerationResult,
   BranchNameGenerationInput,
   BranchNameGenerationResult,
   CommitMessageGenerationInput,
@@ -42,7 +40,6 @@ export class TextGeneration extends Context.Service<TextGeneration, ProviderText
 ) {}
 
 type TextGenerationOp =
-  | "generateCommitDescriptions"
   | "generateCommitMessage"
   | "generatePrContent"
   | "generateBranchName"
@@ -130,17 +127,6 @@ export const make = Effect.gen(function* () {
     );
   });
   return TextGeneration.of({
-    generateCommitDescriptions: Effect.fn("TextGeneration.generateCommitDescriptions")(
-      function (input) {
-        return resolveInstance(
-          registry,
-          "generateCommitDescriptions",
-          input.modelSelection.instanceId,
-        ).pipe(
-          Effect.flatMap((textGeneration) => textGeneration.generateCommitDescriptions(input)),
-        );
-      },
-    ),
     generateCommitMessage: Effect.fn("TextGeneration.generateCommitMessage")(function (input) {
       return generate("generateCommitMessage", input.modelSelection, (service, modelSelection) =>
         service.generateCommitMessage({ ...input, modelSelection }),

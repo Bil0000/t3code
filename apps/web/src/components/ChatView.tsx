@@ -126,8 +126,7 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import { AsyncResult } from "effect/reactivity";
 import { isElectron } from "../env";
-import { useCommitDescriptionWarmup } from "./diffs/useCommitDescriptionWarmup";
-import { selectThreadBranchBaseRef, useDiffPanelStore } from "../diffPanelStore";
+import { useDiffPanelStore } from "../diffPanelStore";
 import { useActiveThreadRef } from "../hooks/useActiveThreadRef";
 import { composerRequiresModifier } from "../composer-logic";
 import {
@@ -1605,28 +1604,6 @@ export default function ChatView(props: ChatViewProps) {
     mutationId: workspaceMutationId,
     refresh: gitStatusQuery.refresh,
     resourceKey: `git-status:${activeThreadKey ?? ""}:${gitStatusCwd ?? ""}`,
-  });
-  const commitDescriptionBaseRef = useDiffPanelStore((state) =>
-    selectThreadBranchBaseRef(state, routeThreadRef),
-  );
-  useCommitDescriptionWarmup({
-    environmentId: serverThread?.environmentId ?? null,
-    threadId: serverThread?.id ?? null,
-    cwd: serverThread?.worktreePath ?? activeProject?.workspaceRoot,
-    modelKey: JSON.stringify(
-      serverConfig?.settings && activeProject
-        ? resolveProjectSettings(serverConfig.settings, activeProject.id).settings
-            .textGenerationModelSelection
-        : null,
-    ),
-    enabled:
-      serverThread !== null &&
-      activeEnvironment?.connection.phase === "connected" &&
-      gitStatusQuery.data?.isRepo === true &&
-      !!serverConfig?.settings &&
-      activeProject !== null,
-    baseRef: commitDescriptionBaseRef,
-    mutationId: workspaceMutationId,
   });
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const backgroundThread = use(BackgroundThreadContext);

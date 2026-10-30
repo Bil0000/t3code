@@ -4,24 +4,15 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
-import {
-  ProjectId,
-  ProviderInstanceId,
-  TextGenerationError,
-  ThreadId,
-  type OrchestrationProjectShell,
-  type OrchestrationV2ThreadShell,
-} from "@t3tools/contracts";
+import { ProjectId } from "@t3tools/contracts";
 
 import * as ServerConfig from "../config.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
-import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as KnownWorkspaces from "../workspace/KnownWorkspaces.ts";
-import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import * as ReviewService from "./ReviewService.ts";
 
 function layer(input: {
@@ -33,11 +24,6 @@ function layer(input: {
   readonly projectRoots?: ReadonlyArray<string> | "unavailable";
   readonly threadWorktrees?: ReadonlyArray<{ worktreePath: string; deleted?: boolean }>;
   readonly gitWorktrees?: ReadonlyArray<string>;
-  readonly realGit?: boolean;
-  readonly threadCwd?: string;
-  readonly projectModel?: string;
-  readonly generationCalls?: Array<string>;
-  readonly failFirstGeneration?: boolean;
 }) {
   const projectRoots = input.projectRoots ?? [];
   return ReviewService.layer.pipe(
@@ -64,11 +50,6 @@ function layer(input: {
     ),
     Layer.provide(
       Layer.mock(ProjectStore.ProjectStoreV2)({
-        getShell: () =>
-          Effect.succeedSome({
-            id: ProjectId.make("project-0"),
-            workspaceRoot: input.workspaceRoot,
-          } as OrchestrationProjectShell),
         listShells: () =>
           projectRoots === "unavailable"
             ? Effect.fail(
@@ -88,39 +69,6 @@ function layer(input: {
       }),
     ),
     Layer.provide(
-      Layer.mock(ProjectionStore.ProjectionStoreV2)({
-        getThreadShell: () =>
-          Effect.succeed(
-            input.threadCwd
-              ? ({
-                  projectId: ProjectId.make("project-0"),
-                  worktreePath: input.threadCwd,
-                } as OrchestrationV2ThreadShell)
-              : null,
-          ),
-      }),
-    ),
-    Layer.provide(
-      Layer.mock(TextGeneration.TextGeneration)({
-        generateCommitDescriptions: (request) => {
-          input.generationCalls?.push(request.modelSelection.model);
-          return input.failFirstGeneration && input.generationCalls?.length === 1
-            ? Effect.fail(
-                new TextGenerationError({
-                  operation: "generateCommitDescriptions",
-                  detail: "model unavailable",
-                }),
-              )
-            : Effect.succeed({
-                descriptions: request.commits.map((commit) => ({
-                  sha: commit.sha,
-                  description: `${request.modelSelection.model}: ${commit.subject}`,
-                })),
-              });
-        },
-      }),
-    ),
-    Layer.provide(
       Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({
         get: () => Effect.die("unexpected VCS registry get"),
         resolve: () => Effect.die("unexpected VCS registry resolve"),
@@ -131,126 +79,23 @@ function layer(input: {
           }),
       }),
     ),
-    Layer.provideMerge(
-      input.realGit
-        ? GitVcsDriver.layer
-        : Layer.mock(GitVcsDriver.GitVcsDriver)({
-            listWorktreePaths: () => Effect.succeed([...(input.gitWorktrees ?? [])]),
-          }),
+    Layer.provide(
+      Layer.mock(GitVcsDriver.GitVcsDriver)({
+        listWorktreePaths: () => Effect.succeed([...(input.gitWorktrees ?? [])]),
+      }),
     ),
     Layer.provide(
       ServerSettings.ServerSettingsService.layerTest({
         worktreesDirectory: input.worktreesDirectory ?? "",
         previousWorktreesDirectories: [...(input.previousWorktreesDirectories ?? [])],
-        ...(input.projectModel
-          ? {
-              projectSettingsOverrides: {
-                [ProjectId.make("project-0")]: {
-                  textGenerationModelSelection: {
-                    instanceId: ProviderInstanceId.make("codex"),
-                    model: input.projectModel,
-                  },
-                },
-              },
-            }
-          : {}),
       }),
     ),
-    Layer.provideMerge(ServerConfig.layerTest(input.workspaceRoot, input.baseDir)),
+    Layer.provide(ServerConfig.layerTest(input.workspaceRoot, input.baseDir)),
     Layer.provideMerge(NodeServices.layer),
   );
 }
 
 describe("ReviewService", () => {
-  it.effect("describes commits with the project's model and asks again after a model failure", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const workspaceRoot = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-workspace-" });
-      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-base-" });
-      const generationCalls: Array<string> = [];
-
-      yield* Effect.gen(function* () {
-        const driver = yield* GitVcsDriver.GitVcsDriver;
-        const git = (...args: ReadonlyArray<string>) =>
-          driver
-            .execute({ operation: "ReviewService.test.git", cwd: workspaceRoot, args })
-            .pipe(Effect.map((result) => result.stdout.trim()));
-        yield* driver.initRepo({ cwd: workspaceRoot });
-        yield* git("config", "user.email", "test@test.com");
-        yield* git("config", "user.name", "Test");
-        yield* git("commit", "--allow-empty", "-m", "add the parser");
-        const first = yield* git("rev-parse", "HEAD");
-        yield* git("commit", "--allow-empty", "-m", "fix the lexer");
-        const second = yield* git("rev-parse", "HEAD");
-
-        const review = yield* ReviewService.ReviewService;
-        const describe = review.generateCommitDescriptions({
-          cwd: workspaceRoot,
-          threadId: ThreadId.make("thread-0"),
-          shas: [second, first],
-        });
-        assert.instanceOf(yield* Effect.flip(describe), TextGenerationError);
-        for (let attempt = 0; attempt < 2; attempt++) {
-          const result = yield* describe;
-          assert.strictEqual(result.modelSelection.model, "project-model");
-          assert.deepStrictEqual(result.descriptions, [
-            { sha: second, description: "project-model: fix the lexer" },
-            { sha: first, description: "project-model: add the parser" },
-          ]);
-        }
-        assert.deepStrictEqual(generationCalls, ["project-model", "project-model"]);
-      }).pipe(
-        Effect.provide(
-          layer({
-            workspaceRoot,
-            baseDir,
-            realGit: true,
-            threadCwd: workspaceRoot,
-            projectModel: "project-model",
-            generationCalls,
-            failFirstGeneration: true,
-          }),
-        ),
-      );
-    }).pipe(Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("refuses to describe commits outside the thread's workspace", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const workspaceRoot = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-workspace-" });
-      const threadWorktree = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-thread-" });
-      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-base-" });
-      const generationCalls: Array<string> = [];
-
-      yield* Effect.gen(function* () {
-        const driver = yield* GitVcsDriver.GitVcsDriver;
-        yield* driver.initRepo({ cwd: workspaceRoot });
-        const review = yield* ReviewService.ReviewService;
-        const error = yield* Effect.flip(
-          review.generateCommitDescriptions({
-            cwd: workspaceRoot,
-            threadId: ThreadId.make("thread-0"),
-            shas: ["a".repeat(40)],
-          }),
-        );
-        assert.include(error.message, "does not own this workspace");
-        assert.deepStrictEqual(generationCalls, []);
-      }).pipe(
-        Effect.provide(
-          layer({
-            workspaceRoot,
-            baseDir,
-            realGit: true,
-            threadCwd: threadWorktree,
-            projectModel: "project-model",
-            generationCalls,
-          }),
-        ),
-      );
-    }).pipe(Effect.provide(NodeServices.layer)),
-  );
-
   it.effect("rejects diff preview cwd outside the configured workspace roots", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

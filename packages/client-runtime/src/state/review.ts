@@ -51,10 +51,6 @@ export function createReviewEnvironmentAtoms<R, E>(
     });
   });
   return {
-    commitDescriptions: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:review:commit-descriptions",
-      tag: WS_METHODS.reviewGenerateCommitDescriptions,
-    }),
     branchCommits: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:review:branch-commits",
       tag: WS_METHODS.reviewGetBranchCommits,

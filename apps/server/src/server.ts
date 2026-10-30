@@ -408,8 +408,6 @@ const layerKnownWorkspaces = KnownWorkspaces.layer.pipe(
 );
 
 const layerReview = ReviewService.layer.pipe(
-  Layer.provideMerge(Layer.merge(ProjectionStoreV2.layer, ProjectStore.layer)),
-  Layer.provideMerge(TextGeneration.layer.pipe(Layer.provide(layerSourceControlProviderRegistry))),
   Layer.provideMerge(layerKnownWorkspaces),
   Layer.provideMerge(GitVcsDriver.layer),
   Layer.provideMerge(layerVcsDriverRegistry),

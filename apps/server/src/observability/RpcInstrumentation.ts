@@ -180,7 +180,6 @@ const RPC_AGGREGATES = {
   [WS_METHODS.vcsSwitchRef]: "vcs",
   [WS_METHODS.vcsInit]: "vcs",
   [WS_METHODS.reviewGetBranchCommits]: "review",
-  [WS_METHODS.reviewGenerateCommitDescriptions]: "review",
   [WS_METHODS.reviewGetDiffPreview]: "review",
   [WS_METHODS.reviewGetDiffFileContents]: "review",
   [WS_METHODS.terminalOpen]: "terminal",

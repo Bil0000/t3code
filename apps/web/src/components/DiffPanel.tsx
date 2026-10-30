@@ -102,13 +102,11 @@ import { buildBaseRefChoices, filterBaseRefChoices } from "../lib/baseRefChoices
 import { createGitDiffFileContentsLoader } from "../lib/diffFileContents";
 
 import { useReviewFilePatches } from "./diffs/useReviewFilePatches";
-import { useCommitDescriptions } from "./diffs/useCommitDescriptions";
 import { DiffFileLoadingBoundary } from "./diffs/DiffFileLoadingBoundary";
 import { DiffFileStatus } from "./diffs/DiffFileStatus";
 import { useThreadRouteRef } from "../hooks/useThreadRouteTarget";
 import { projectCommitUrl } from "@t3tools/client-runtime/change-request-links";
 import { useOpenLink } from "../browser/useOpenLink";
-import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 
 type DiffThemeType = "light" | "dark";
 const AUTOMATIC_BASE_REF = "__automatic_base_ref__";
@@ -443,18 +441,6 @@ export default function DiffPanel({
     event.preventDefault();
     void openLink(url, { event });
   };
-  const commitDescriptions = useCommitDescriptions({
-    environmentId: activeThread?.environmentId ?? null,
-    threadId: activeThreadId,
-    cwd: activeCwd,
-    modelKey: JSON.stringify(
-      serverConfig?.settings && activeProjectId
-        ? resolveProjectSettings(serverConfig.settings, activeProjectId).settings
-            .textGenerationModelSelection
-        : null,
-    ),
-    shas: branchCommits?.commits.map((commit) => commit.sha) ?? [],
-  });
   const refreshPreviewQuery = branchDiffPreview.refresh;
   const refreshDiffFromUserAction = refreshPreviewQuery;
 
@@ -872,7 +858,6 @@ export default function DiffPanel({
               onOpenChange={(open) => {
                 setOpenCommitMenu(open ? (branchCommitsQuery.data ?? null) : null);
                 if (!open) return;
-                commitDescriptions.loadFirst();
                 // The menu keeps the list it opened with; the refreshed one shows next time.
                 branchCommitsQuery.refresh();
               }}
@@ -883,8 +868,7 @@ export default function DiffPanel({
                   value={selectedCommitValue}
                   onValueChange={selectScopeValue}
                 >
-                  {branchCommits?.commits.map((commit, index) => {
-                    const description = commitDescriptions.descriptions.get(commit.sha);
+                  {branchCommits?.commits.map((commit) => {
                     const commitUrl = projectCommitUrl(
                       activeProject?.repositoryIdentity,
                       commit.sha,
@@ -899,7 +883,6 @@ export default function DiffPanel({
                       >
                         <Tooltip>
                           <TooltipTrigger
-                            ref={commitDescriptions.observeRow(index)}
                             render={
                               <DropdownMenuRadioItem
                                 className="min-w-0 flex-1"
@@ -909,17 +892,9 @@ export default function DiffPanel({
                             }
                           >
                             <span className="block truncate">{commit.subject}</span>
-                            {description ? (
-                              <span className="block truncate text-xs text-muted-foreground">
-                                {description}
-                              </span>
-                            ) : null}
                           </TooltipTrigger>
                           <TooltipPopup side="right" className="max-w-80">
                             {commit.subject}
-                            {description ? (
-                              <span className="block text-muted-foreground">{description}</span>
-                            ) : null}
                           </TooltipPopup>
                         </Tooltip>
                         <div className="flex shrink-0 flex-col items-end">

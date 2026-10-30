@@ -11,9 +11,8 @@ committed it, or fixed a conflict in it. Use the branch comparison to review eve
 against your base branch. Restore still returns the complete saved workspace.
 
 On web and desktop, open the Diff pane source picker and choose **Commits** to review one local
-commit at a time. The list shows the newest 100 commits in the branch comparison and may show short
-descriptions written by your text generation model. A merge commit shows its changes against its
-first parent.
+commit at a time. The list shows the newest 100 commits in the branch comparison. A merge commit
+shows its changes against its first parent.
 
 A commit link from a supported code host opens in the Diff pane when the commit is on the current
 thread's checked-out branch. Otherwise a pull request commit link opens the pull request. Other
