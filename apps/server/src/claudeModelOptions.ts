@@ -46,9 +46,7 @@ export function compileClaudeModelSelection(
   const settings = {
     ...(typeof thinking === "boolean" ? { alwaysThinkingEnabled: thinking } : {}),
     ...(typeof fastMode === "boolean" ? { fastMode } : {}),
-    ...(descriptors.some(
-      (descriptor) => descriptor.id === "ultracode" && descriptor.currentValue === true,
-    )
+    ...(descriptors.find((descriptor) => descriptor.id === "ultracode")?.currentValue === true
       ? { ultracode: true }
       : {}),
   };

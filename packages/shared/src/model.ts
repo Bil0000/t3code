@@ -197,13 +197,15 @@ function withDescriptorCurrentValue(
 }
 
 // Ultracode was a Claude effort level before it became its own toggle; that level ran at xhigh.
-export function withLegacyUltracodeEffort(
-  descriptors: ReadonlyArray<ProviderOptionDescriptor>,
-  selections: ReadonlyArray<ProviderOptionSelection> | null | undefined,
-): ReadonlyArray<ProviderOptionSelection> | null | undefined {
+export function withLegacyUltracodeEffort<
+  Selections extends ReadonlyArray<ProviderOptionSelection> | null | undefined,
+>(
+  descriptors: ReadonlyArray<ProviderOptionDescriptor> | null | undefined,
+  selections: Selections,
+): Selections | Array<ProviderOptionSelection> {
   if (
     getRawSelectionValueById(selections, "effort") !== "ultracode" ||
-    !descriptors.some(
+    !descriptors?.some(
       (descriptor) => descriptor.id === "ultracode" && descriptor.type === "boolean",
     )
   ) {
@@ -339,7 +341,7 @@ export function buildExplicitProviderOptionSelectionsFromDescriptors(
     return undefined;
   }
   const explicitIds = new Set(
-    (withLegacyUltracodeEffort(descriptors ?? [], selections) ?? []).map(({ id }) => id),
+    withLegacyUltracodeEffort(descriptors, selections).map(({ id }) => id),
   );
   const normalized = buildProviderOptionSelectionsFromDescriptors(descriptors)?.filter(
     (selection) => explicitIds.has(selection.id),
