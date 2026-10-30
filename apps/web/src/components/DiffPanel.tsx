@@ -877,7 +877,7 @@ export default function DiffPanel({
                       <div
                         key={commit.sha}
                         className={cn(
-                          "flex items-stretch rounded-sm hover:bg-accent has-data-highlighted:bg-accent has-focus-visible:bg-accent [&_[data-checked]]:bg-transparent [&_[data-highlighted]]:bg-transparent",
+                          "flex items-center rounded-sm hover:bg-accent has-data-highlighted:bg-accent has-focus-visible:bg-accent [&_[data-checked]]:bg-transparent [&_[data-highlighted]]:bg-transparent",
                           selectedCommitSha === commit.sha && "bg-foreground/[0.08]",
                         )}
                       >
@@ -891,39 +891,39 @@ export default function DiffPanel({
                               />
                             }
                           >
-                            <span className="block truncate">{commit.subject}</span>
+                            <span className="flex items-center gap-3">
+                              <span className="min-w-0 flex-1 truncate">{commit.subject}</span>
+                              <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+                                {formatRelativeTimeLabel(commit.committedAt)}
+                              </span>
+                            </span>
                           </TooltipTrigger>
                           <TooltipPopup side="right" className="max-w-80">
                             {commit.subject}
                           </TooltipPopup>
                         </Tooltip>
-                        <div className="flex shrink-0 flex-col items-end">
-                          {commitUrl ? (
-                            <DropdownMenuItem
-                              className="shrink-0"
-                              render={
-                                <a
-                                  href={commitUrl}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  aria-label={`Open commit ${commit.sha.slice(0, 7)}`}
-                                />
-                              }
-                              onClick={(event) => openCommitUrl(event, commitUrl)}
-                            >
-                              <span className="font-mono text-xs text-muted-foreground underline underline-offset-4">
-                                {commit.sha.slice(0, 7)}
-                              </span>
-                            </DropdownMenuItem>
-                          ) : (
-                            <span className="shrink-0 px-2 py-1 font-mono text-xs text-muted-foreground">
+                        {commitUrl ? (
+                          <DropdownMenuItem
+                            className="shrink-0"
+                            render={
+                              <a
+                                href={commitUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                aria-label={`Open commit ${commit.sha.slice(0, 7)}`}
+                              />
+                            }
+                            onClick={(event) => openCommitUrl(event, commitUrl)}
+                          >
+                            <span className="font-mono text-xs text-muted-foreground underline underline-offset-4">
                               {commit.sha.slice(0, 7)}
                             </span>
-                          )}
-                          <span className="px-2 pb-1 text-xs tabular-nums text-muted-foreground">
-                            {formatRelativeTimeLabel(commit.committedAt)}
+                          </DropdownMenuItem>
+                        ) : (
+                          <span className="shrink-0 px-2 font-mono text-xs text-muted-foreground">
+                            {commit.sha.slice(0, 7)}
                           </span>
-                        </div>
+                        )}
                       </div>
                     );
                   })}
