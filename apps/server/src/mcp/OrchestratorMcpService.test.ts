@@ -2596,7 +2596,10 @@ describe("OrchestratorMcpService provider resolution", () => {
           yield* Effect.gen(function* () {
             const service = yield* OrchestratorMcpService.OrchestratorMcpService;
             const capabilities = yield* service.capabilities(scope);
-            assert.deepEqual(capabilities.inheritedOptions, parent.options);
+            assert.deepEqual(
+              capabilities.inheritedOptions,
+              "inherited" in testCase ? testCase.expected.options : parent.options,
+            );
             yield* service.delegateTask(scope, {
               task: "Review the change.",
               target: yield* decodeTarget(testCase.target),

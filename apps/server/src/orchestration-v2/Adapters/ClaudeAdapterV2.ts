@@ -4520,30 +4520,31 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
     },
   );
 
-  // Discovery walks every skill root, so skip it for the common prompt that names no skill.
-  // Attachment paths join the dispatched text, so those messages still discover.
   const userInvocableSkills = (
     cwd: string | null,
     message: ProviderAdapter.ProviderAdapterV2TurnMessage,
-  ) =>
-    message.attachments.length === 0 && !hasClaudeSkillMention(message.text)
-      ? Effect.succeed(new Map<string, ClaudeSkillTarget>())
-      : discoverClaudeSkills(
-          adapterOptions.settings,
-          cwd ?? undefined,
-          adapterOptions.environment,
-        ).pipe(
-          Effect.map(
-            (skills) =>
-              new Map(
-                skills
-                  .filter((skill) => skill.enabled && skill.userInvocable !== false)
-                  .map((skill) => [skill.name, skill]),
-              ),
+  ) => {
+    // Attachment paths join the dispatched text and may contain skill mentions.
+    if (message.attachments.length === 0 && !hasClaudeSkillMention(message.text)) {
+      return Effect.succeed(new Map<string, ClaudeSkillTarget>());
+    }
+    return discoverClaudeSkills(
+      adapterOptions.settings,
+      cwd ?? undefined,
+      adapterOptions.environment,
+    ).pipe(
+      Effect.map(
+        (skills) =>
+          new Map(
+            skills
+              .filter((skill) => skill.enabled && skill.userInvocable !== false)
+              .map((skill) => [skill.name, skill]),
           ),
-          Effect.provideService(FileSystem.FileSystem, fileSystem),
-          Effect.provideService(Path.Path, path),
-        );
+      ),
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(Path.Path, path),
+    );
+  };
 
   return ProviderAdapter.ProviderAdapterV2.of({
     instanceId: adapterOptions.instanceId,
