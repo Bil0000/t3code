@@ -172,7 +172,8 @@ with it. Choose **Customize…** in its menu to set an icon (any Lucide icon, an
 and a color. Hover a folder and click the check to settle every thread in it. When every thread in
 a folder is settled, the folder moves to **Settled**, collapsed, still holding its threads; click
 the undo arrow to bring it back. **Delete folder** asks whether to keep its threads, which move
-back to your thread list, or to delete them too.
+back to your thread list, or to delete them too. To show folders as tab groups, with a colored
+name and a line beside their threads, set **Settings → General → Folder style** to **Tab groups**.
 
 A folder can also collect new threads for you. Open its menu and choose **Collect new threads**:
 

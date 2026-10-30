@@ -26,7 +26,7 @@ import {
   SidebarThreadFolderHeader,
   SidebarThreadFolderEmptyRow,
   sidebarThreadFolderRowId,
-  threadFolderTintClassName,
+  threadFolderMemberClassName,
 } from "./sidebar/SidebarThreadFolderHeader";
 import { attachSidebarTree, SIDEBAR_TREE_PROPS } from "../lib/sidebarTree";
 import { type EnvironmentId, type ScopedProjectRef } from "@t3tools/contracts";
@@ -1063,6 +1063,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   });
   const boringSidebarEnabled = useBoringSidebarEnabled();
   const folderRowsMultiline = useClientSettings((settings) => settings.boringSidebarMultilineRows);
+  const threadFolderStyle = useClientSettings((settings) => settings.sidebarThreadFolderStyle);
   const newThreadContext = useHandleNewThread();
   // Row callbacks capture only the handler; the rest of the context changes with the route.
   const { handleNewThread } = newThreadContext;
@@ -3933,6 +3934,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                               key={sidebarThreadFolderRowId(block.key)}
                               folder={block.folder}
                               folderKey={block.key}
+                              style={threadFolderStyle}
                               collapsed={block.collapsed}
                               threads={block.threads}
                               hiddenThreads={block.hiddenThreads}
@@ -3964,7 +3966,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                               renderThreadRow(row.thread, row.section, undefined, {
                                 dropKey: block.key,
                                 parent: sidebarThreadFolderRowId(block.key),
-                                tintClassName: threadFolderTintClassName(block.folder.icon),
+                                tintClassName: threadFolderMemberClassName(
+                                  block.folder.icon,
+                                  threadFolderStyle,
+                                ),
                                 isLast: index === block.rows.length - 1,
                               }),
                             );
@@ -3975,6 +3980,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                 key={`empty:${block.key}`}
                                 folder={block.folder}
                                 folderKey={block.key}
+                                style={threadFolderStyle}
                               />,
                             );
                           }
