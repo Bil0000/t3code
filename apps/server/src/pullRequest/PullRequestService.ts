@@ -1613,6 +1613,7 @@ export const make = Effect.gen(function* () {
     project: SupportedProject,
     changeRequest: ProviderChangeRequestSummary | ProviderChangeRequestDetail,
     observedAt: number,
+    reply = false,
   ): PullRequestSummary => ({
     provider: project.api.kind,
     projectId: project.project.id,
@@ -1623,8 +1624,13 @@ export const make = Effect.gen(function* () {
     state: changeRequest.state,
     headBranch: changeRequest.headBranch,
     baseBranch: changeRequest.baseBranch,
-    closedAt: changeRequest.closedAt ?? null,
-    mergedAt: changeRequest.mergedAt ?? null,
+    // An action reply may not carry these, and null would erase a time a client already holds.
+    ...(changeRequest.closedAt === undefined && reply
+      ? {}
+      : { closedAt: changeRequest.closedAt ?? null }),
+    ...(changeRequest.mergedAt === undefined && reply
+      ? {}
+      : { mergedAt: changeRequest.mergedAt ?? null }),
     updatedAt: changeRequest.updatedAt,
     observedAt,
     ...(changeRequest.isDraft === undefined ? {} : { isDraft: changeRequest.isDraft }),
@@ -2090,7 +2096,7 @@ export const make = Effect.gen(function* () {
                       summary:
                         value === undefined || input.stackNumber !== undefined
                           ? undefined
-                          : toSummary(project, value, observedAt),
+                          : toSummary(project, value, observedAt, true),
                     })),
                   ),
               ),
@@ -3564,7 +3570,7 @@ export const make = Effect.gen(function* () {
           projectId: input.projectId,
           repository,
           number: input.number,
-          mergedAt: summary?.mergedAt ?? DateTime.formatIso(yield* DateTime.now),
+          mergedAt: confirmed.mergedAt ?? DateTime.formatIso(yield* DateTime.now),
         });
       }
     }

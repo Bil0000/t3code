@@ -1118,7 +1118,7 @@ it.effect("publishes a merge for immediate settlement only after host confirmati
                       detail: "HTTP 504",
                     }),
                   )
-                : Effect.succeed({ ...changeRequest(1, mergedAt), state }),
+                : Effect.succeed({ ...changeRequest(1, mergedAt), state, mergedAt }),
           }),
         ],
       });
@@ -1137,7 +1137,8 @@ it.effect("publishes a merge for immediate settlement only after host confirmati
       );
       confirmationFails = false;
       state = "merged";
-      yield* TestClock.setTime(Date.parse(mergedAt));
+      // The event carries the host's merge time, not the moment the confirmation ran.
+      yield* TestClock.setTime(Date.parse(mergedAt) + 60_000);
       yield* service.runAction({
         ...reference,
         repository: " ACME/WEB ",
@@ -1167,7 +1168,6 @@ it.effect("returns the host's merged reply as a summary and trusts it without an
         isDraft: false,
         updatedAt: mergedAt,
         mergedAt,
-        closedAt: mergedAt,
         headSha: "abc123",
         autoMergeEnabled: false,
       };

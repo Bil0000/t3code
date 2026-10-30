@@ -795,6 +795,7 @@ export interface PullRequestListOverride {
   readonly token: number;
   readonly at: number;
   /** Set when the host reported this state, so a newer row can outrank it. */
+  readonly fromReply?: true;
   readonly observedAt?: number;
 }
 
@@ -812,6 +813,7 @@ export function pullRequestOverrideAfterAction(
       ...(isDraft === undefined ? {} : { isDraft }),
       updatedAt,
       ...(observedAt === undefined ? {} : { observedAt }),
+      fromReply: true,
       token,
       at: now.getTime(),
     };
@@ -844,7 +846,7 @@ export function applyPullRequestOverrides<Entry extends PullRequestListEntry>(
   for (const entry of entries) {
     const held = overrides.get(keyOf(entry));
     const override =
-      held?.observedAt !== undefined && isStalePullRequestReply(entry, held) ? undefined : held;
+      held?.fromReply === true && isStalePullRequestReply(entry, held) ? undefined : held;
     if (state !== "all" && (override?.state ?? entry.state) !== state) continue;
     out.push(override === undefined ? entry : { ...entry, ...override });
   }
