@@ -43,12 +43,11 @@ export function compileClaudeModelSelection(
   const thinking = supportsBoolean("thinking")
     ? getModelSelectionBooleanOptionValue(selection, "thinking")
     : undefined;
+  const ultracode = descriptors.find((descriptor) => descriptor.id === "ultracode")?.currentValue;
   const settings = {
     ...(typeof thinking === "boolean" ? { alwaysThinkingEnabled: thinking } : {}),
     ...(typeof fastMode === "boolean" ? { fastMode } : {}),
-    ...(descriptors.find((descriptor) => descriptor.id === "ultracode")?.currentValue === true
-      ? { ultracode: true }
-      : {}),
+    ...(typeof ultracode === "boolean" ? { ultracode } : {}),
   };
   const apiModelId = resolveClaudeCatalogApiModelId(catalog, selection);
   const promptEffort = resolvePromptInjectedEffort(capabilities, rawEffort) ?? undefined;
