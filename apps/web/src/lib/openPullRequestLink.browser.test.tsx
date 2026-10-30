@@ -1,5 +1,5 @@
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { AsyncResult } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
 import { page } from "vite-plus/test/browser";
@@ -73,7 +73,11 @@ function setup() {
     pullRequestLinksOpenInApp: true,
     browserLinkTarget: "system",
   });
-  useDiffPanelStore.setState({ byThreadKey: {}, branchBaseRefByThreadKey: {} });
+  useDiffPanelStore.setState({
+    byThreadKey: {},
+    branchBaseRefByThreadKey: {},
+    keepSelectionOnOpenThreadKey: null,
+  });
   useRightPanelStore.setState({ byThreadKey: {}, userActionRevisionByThreadKey: {} });
 }
 
@@ -133,3 +137,24 @@ it.each(["system", "app"] as const)(
     expect(state.openLink).not.toHaveBeenCalled();
   },
 );
+
+it("opens an available commit in the closed Diff pane without the pane resetting it", async () => {
+  setup();
+  const sha = "a".repeat(40);
+  state.preview.mockResolvedValue(
+    AsyncResult.success({ sources: [{ kind: "commit", headRef: sha }] }),
+  );
+  await using screen = await render(
+    <AppAtomRegistryProvider>
+      <CommitLink />
+    </AppAtomRegistryProvider>,
+  );
+  await screen.getByRole("link", { name: "Commit" }).click();
+  await vi.waitFor(() =>
+    expect(useDiffPanelStore.getState().byThreadKey).toEqual({
+      [scopedThreadKey(threadRef)]: { kind: "commit", sha, baseRef: null },
+    }),
+  );
+  // ChatView resets a pane opened without an explicit request to Changes unless this is set.
+  expect(useDiffPanelStore.getState().consumeKeepSelectionOnOpen(threadRef)).toBe(true);
+});

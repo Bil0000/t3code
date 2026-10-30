@@ -25,11 +25,14 @@ const DEFAULT_SELECTION: DiffPanelSelection = { kind: "branch", baseRef: null };
 interface DiffPanelStoreState {
   byThreadKey: Record<string, DiffPanelSelection>;
   branchBaseRefByThreadKey: Record<string, string | null>;
+  /** A link that selected a commit before opening the closed pane; opening keeps that selection. */
+  keepSelectionOnOpenThreadKey: string | null;
   selectGitScope: (ref: ScopedThreadRef, scope: "branch" | "unstaged") => void;
   selectBranchBaseRef: (ref: ScopedThreadRef, baseRef: string | null) => void;
   selectToolCall: (ref: ScopedThreadRef, target: ToolCallDiffTarget) => void;
   selectTurn: (ref: ScopedThreadRef, turnId: RunId, filePath?: string) => void;
-  selectCommit: (ref: ScopedThreadRef, sha: string) => void;
+  selectCommit: (ref: ScopedThreadRef, sha: string, keepOnOpen?: boolean) => void;
+  consumeKeepSelectionOnOpen: (ref: ScopedThreadRef) => boolean;
   reconcileTurnSelection: (ref: ScopedThreadRef, availableTurnIds: ReadonlyArray<RunId>) => void;
   removeThread: (ref: ScopedThreadRef) => void;
 }
@@ -51,9 +54,10 @@ function branchBaseRef(
 
 export const useDiffPanelStore = create<DiffPanelStoreState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       byThreadKey: {},
       branchBaseRefByThreadKey: {},
+      keepSelectionOnOpenThreadKey: null,
       selectGitScope: (ref, scope) =>
         set((state) => {
           const threadKey = scopedThreadKey(ref);
@@ -111,7 +115,7 @@ export const useDiffPanelStore = create<DiffPanelStoreState>()(
             },
           };
         }),
-      selectCommit: (ref, sha) =>
+      selectCommit: (ref, sha, keepOnOpen = false) =>
         set((state) => {
           const threadKey = scopedThreadKey(ref);
           const baseRef = branchBaseRef(state, threadKey);
@@ -121,8 +125,16 @@ export const useDiffPanelStore = create<DiffPanelStoreState>()(
               [threadKey]: { kind: "commit", sha, baseRef },
             },
             branchBaseRefByThreadKey: { ...state.branchBaseRefByThreadKey, [threadKey]: baseRef },
+            keepSelectionOnOpenThreadKey: keepOnOpen
+              ? threadKey
+              : state.keepSelectionOnOpenThreadKey,
           };
         }),
+      consumeKeepSelectionOnOpen: (ref) => {
+        if (get().keepSelectionOnOpenThreadKey !== scopedThreadKey(ref)) return false;
+        set({ keepSelectionOnOpenThreadKey: null });
+        return true;
+      },
       reconcileTurnSelection: (ref, availableTurnIds) =>
         set((state) => {
           const threadKey = scopedThreadKey(ref);
