@@ -3134,13 +3134,13 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(sha)) {
       return yield* reviewCommitError(cwd, "Selected commit is invalid or no longer available.");
     }
-    const reachable = yield* executeGit(
-      "GitVcsDriver.reviewCommit.reachable",
+    const present = yield* executeGit(
+      "GitVcsDriver.reviewCommit.present",
       cwd,
-      ["merge-base", "--is-ancestor", sha, "HEAD"],
-      { allowNonZeroExit: true },
+      ["cat-file", "-e", `${sha}^{commit}`],
+      { allowNonZeroExit: true, env: { GIT_NO_LAZY_FETCH: "1" } },
     );
-    if (reachable.exitCode !== 0) {
+    if (present.exitCode !== 0) {
       return yield* reviewCommitError(cwd, "Selected commit is invalid or no longer available.");
     }
     // The raw object keeps the parents a shallow clone grafts away, so a boundary is not a root.
