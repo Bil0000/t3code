@@ -277,7 +277,7 @@ export const SidebarThreadFolderHeader = memo(function SidebarThreadFolderHeader
         {collapsed && hiddenThreads.length > 0 ? (
           <span
             aria-hidden
-            className="shrink-0 text-xs tabular-nums text-sidebar-muted-foreground group-focus-within/thread-folder:hidden group-hover/thread-folder:hidden"
+            className="shrink-0 text-xs tabular-nums text-sidebar-muted-foreground group-has-focus-visible/thread-folder:hidden group-hover/thread-folder:hidden"
           >
             {hiddenThreads.length}
           </span>
@@ -303,7 +303,7 @@ export const SidebarThreadFolderHeader = memo(function SidebarThreadFolderHeader
                   }}
                   onPointerDown={(event) => event.stopPropagation()}
                   onDoubleClick={(event) => event.stopPropagation()}
-                  className="hidden size-5 shrink-0 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground hover:text-sidebar-foreground group-focus-within/thread-folder:inline-flex group-hover/thread-folder:inline-flex pointer-coarse:inline-flex"
+                  className="hidden size-5 shrink-0 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground hover:text-sidebar-foreground group-has-focus-visible/thread-folder:inline-flex group-hover/thread-folder:inline-flex pointer-coarse:inline-flex"
                 />
               }
             >
@@ -322,7 +322,7 @@ export const SidebarThreadFolderHeader = memo(function SidebarThreadFolderHeader
           <ChevronDownIcon
             aria-hidden
             className={cn(
-              "hidden size-3 shrink-0 text-sidebar-muted-foreground transition-transform group-focus-within/thread-folder:block group-hover/thread-folder:block pointer-coarse:block",
+              "hidden size-3 shrink-0 text-sidebar-muted-foreground transition-transform group-has-focus-visible/thread-folder:block group-hover/thread-folder:block pointer-coarse:block",
               collapsed && "-rotate-90",
             )}
           />
