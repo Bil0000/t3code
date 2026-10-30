@@ -4,7 +4,6 @@ import { ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts";
 import { resolveProviderCatalog, type ModelManifestData } from "./ModelManifest.ts";
 import {
   formatClaudeVersionUpgradeMessage,
-  getClaudeCatalogModelCapabilities,
   normalizeClaudeCatalogEffort,
   resolveClaudeCatalogApiModelId,
   resolveClaudeCatalogContextWindowTokens,
@@ -186,7 +185,6 @@ describe("Claude model catalog", () => {
               options: [
                 { id: "gentle", label: "Gentle", isDefault: true },
                 { id: "brutal", label: "Brutal" },
-                { id: "ultracode", label: "Ultracode" },
               ],
             },
           ],
@@ -206,12 +204,6 @@ describe("Claude model catalog", () => {
     assert.strictEqual(
       resolveClaudeCatalogEffort(catalog, "claude-custom-tuned", "bogus"),
       "gentle",
-    );
-    assert.deepStrictEqual(
-      getClaudeCatalogModelCapabilities(catalog, "claude-custom-tuned").optionDescriptors?.map(
-        ({ id, type }) => `${id}:${type}`,
-      ),
-      ["effort:select", "ultracode:boolean"],
     );
     assert.strictEqual(
       normalizeClaudeCatalogEffort(catalog, "brutal", "claude-custom-tuned"),

@@ -126,7 +126,7 @@ export function scopeClaudeModelCatalog(
         slug: entry.slug,
         name: entry.name,
         isCustom: true,
-        capabilities: withUltracodeToggle(entry.capabilities),
+        capabilities: entry.capabilities,
       },
       runtime: {},
       compatibility: {},
