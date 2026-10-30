@@ -377,11 +377,9 @@ export const ThreadListV2FolderHeader = memo(function ThreadListV2FolderHeader(p
                   },
                 ]
               : []),
-            ...(item.folder.rule
-              ? [{ id: "apply-rule", title: "Collect existing threads now" }]
-              : []),
           ],
         },
+        { id: "apply-rule", title: "Add related threads", image: "folder.badge.plus" },
         item.settled
           ? { id: "unsettle", title: "Un-settle folder", image: "arrow.uturn.backward" }
           : { id: "settle", title: "Settle folder", image: "checkmark.circle" },

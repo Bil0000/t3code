@@ -91,7 +91,7 @@ export const ThreadFolderMutation = Schema.Union([
     beforeFolderId: Schema.NullOr(ThreadFolderId),
   }),
   Schema.Struct({
-    // Moves every unfiled thread that matches the folder's rule into it.
+    // Moves every unfiled thread related to the folder into it: its rule, or else its name.
     type: Schema.Literal("folder.applyRule"),
     folderId: ThreadFolderId,
   }),

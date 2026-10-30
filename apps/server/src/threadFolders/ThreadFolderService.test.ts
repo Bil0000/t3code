@@ -47,7 +47,7 @@ const projectionLayer = Layer.unwrap(
       `.pipe(
         Effect.orDie,
         Effect.map((rows) => ({
-          ...shell,
+          ...onBranch(shell),
           title: rows[0]?.title ?? shell.title,
           settledOverride: rows[0]?.payload_json === "settled" ? ("settled" as const) : null,
         })),
@@ -107,6 +107,8 @@ const projectionLayer = Layer.unwrap(
 );
 
 const project = liveThreadShell(live).projectId;
+const onBranch = (shell: OrchestrationV2ThreadShell) =>
+  shell.id === live || shell.id === other ? { ...shell, branch: "feature/login" } : shell;
 // Echoes the samples it was given so tests can assert on them.
 const suggestionLayer = Layer.mergeAll(
   Layer.mock(ProjectStore.ProjectStoreV2)({
@@ -462,10 +464,6 @@ it.effect("applies a folder rule to existing unfiled threads", () =>
       name: "Fixes",
       threadIds: [live],
     });
-    const noRule = yield* folders
-      .mutate({ type: "folder.applyRule", folderId: fixes })
-      .pipe(Effect.flip);
-    assert.isUndefined(noRule.cause);
     yield* folders.mutate({
       type: "folder.create",
       folderId: reviews,
@@ -482,6 +480,37 @@ it.effect("applies a folder rule to existing unfiled threads", () =>
       ],
     );
   }).pipe(Effect.provide(layer)),
+);
+
+it.effect(
+  "collects the branch a folder is named for, and adds related threads without a rule",
+  () =>
+    Effect.gen(function* () {
+      yield* seedThreads;
+      const folders = yield* ThreadFolderService.ThreadFolderService;
+      yield* folders.mutate({
+        type: "folder.create",
+        folderId: fixes,
+        name: "Fixes",
+        threadIds: [live],
+      });
+      assert.isNull((yield* folders.list()).folders[0]!.rule);
+      yield* folders.mutate({ type: "folder.update", folderId: fixes, name: "Login" });
+      const named = (yield* folders.list()).folders[0]!;
+      assert.deepStrictEqual([named.rule, named.autoFile], [{ branches: ["feature/login"] }, true]);
+      yield* folders.mutate({ type: "folder.update", folderId: fixes, autoFile: false });
+      const added = yield* folders.mutate({ type: "folder.applyRule", folderId: fixes });
+      assert.deepStrictEqual(added.folders[0]!.threadIds, [live, other]);
+      assert.isFalse(added.folders[0]!.autoFile);
+      yield* folders.mutate({ type: "folder.create", folderId: reviews, name: "Reviews" });
+      yield* folders.mutate({ type: "folder.move", threadIds: [other], folderId: reviews });
+      assert.isNull((yield* folders.list()).folders[0]!.rule);
+      yield* folders.mutate({ type: "folder.move", threadIds: [live], folderId: null });
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`DELETE FROM thread_folder_explicit_moves WHERE thread_id = ${live}`;
+      const smart = yield* folders.mutate({ type: "folder.applyRule", folderId: reviews });
+      assert.deepStrictEqual(smart.folders[0]!.threadIds, [other, live]);
+    }).pipe(Effect.provide(layer)),
 );
 
 it.effect("re-files an auto-filed thread when it stops matching, never a hand-moved one", () =>

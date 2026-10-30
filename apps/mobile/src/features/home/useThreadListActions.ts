@@ -289,9 +289,7 @@ export function useThreadListActions(): {
     return update ? mutateFolder(folder, update) : Promise.resolve(false);
   };
   const applyFolderRule = (folder: EnvironmentThreadFolder) =>
-    folder.rule
-      ? mutateFolder(folder, { type: "folder.applyRule", folderId: folder.id })
-      : Promise.resolve(false);
+    mutateFolder(folder, { type: "folder.applyRule", folderId: folder.id });
   const settleFolder = async (folder: EnvironmentThreadFolder, settled: boolean) => {
     const members = appAtomRegistry
       .get(environmentThreadShells.threadShellsAtom)

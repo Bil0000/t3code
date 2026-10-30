@@ -47,6 +47,33 @@ const lastSegment = (path: string) =>
     .split(/[\\/]/)
     .at(-1) ?? path;
 
+const slug = (value: string) =>
+  value
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "-")
+    .replace(/^-|-$/g, "");
+
+/**
+ * The branch or worktree rule a folder's name points at, when one of its threads is on it:
+ * "Fix status dropdown" holding a thread on `t3code/fix-status-dropdown` collects that branch.
+ */
+export function inferThreadFolderRule(
+  name: string,
+  members: ReadonlyArray<Pick<ThreadFolderRuleSubject, "branch" | "worktreePath">>,
+): ThreadFolderRule | null {
+  const target = slug(name);
+  if (target === "") return null;
+  const branch = members.find(
+    ({ branch }) =>
+      branch !== null && [branch, lastSegment(branch)].some((v) => slug(v) === target),
+  )?.branch;
+  if (branch) return { branches: [branch] };
+  const worktree = members
+    .map(({ worktreePath }) => worktreePath && lastSegment(worktreePath))
+    .find((segment) => segment && slug(segment) === target);
+  return worktree ? { worktrees: [worktree] } : null;
+}
+
 /** True when a rule has at least one condition, so an empty rule never files every thread. */
 export function threadFolderRuleHasConditions(rule: ThreadFolderRule): boolean {
   return Object.entries(rule).some(([key, value]) =>

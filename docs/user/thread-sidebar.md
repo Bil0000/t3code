@@ -179,10 +179,15 @@ A folder can also collect new threads for you. Open its menu and choose **Collec
   while it titles the thread, so it costs no extra call. Threads you filed there by hand teach it
   what the folder means.
 - **By branch** or **By worktree** lists recent branches and worktrees to pick from.
-- **Off** stops collecting. It is off for every new folder.
+- **Off** stops collecting.
 
-**Collect existing threads now** files unsettled threads that already match. A thread you move by
-hand is never collected automatically again.
+A folder named for a branch or worktree that one of its threads uses collects that branch or
+worktree by itself. For example, a "Login" folder that holds a thread on `feature/login` collects
+new threads on `feature/login`. Choose **Off** to stop it.
+
+**Add related threads** files the unsettled threads that belong in the folder now: the ones that
+match how it collects, or, when it collects nothing, the ones that fit its name. A thread you move
+by hand is never collected automatically again.
 
 Agents connected through T3 Code can create folders, set rules, and file threads for you. For
 example, ask for "put the review threads in a Reviews folder".

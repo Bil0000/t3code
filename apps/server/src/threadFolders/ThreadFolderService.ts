@@ -12,6 +12,7 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import {
+  inferThreadFolderRule,
   pickThreadFolderForRule,
   threadFolderRuleHasConditions,
   threadMatchesFolderRule,
@@ -235,8 +236,42 @@ const make = Effect.gen(function* () {
     return rows.map((row) => row.title);
   });
 
-  const batchCandidates = Effect.fn("ThreadFolderService.batchCandidates")(function* (
+  const relatedRule = Effect.fn("ThreadFolderService.relatedRule")(function* (
     folder: ThreadFolder,
+  ) {
+    if (folder.rule !== null) return folder.rule;
+    const members = yield* Effect.forEach(folder.threadIds, (threadId) =>
+      threads
+        .getThreadShell(threadId)
+        .pipe(
+          Effect.mapError((cause) => folderError(`Could not read thread ${threadId}.`, { cause })),
+        ),
+    );
+    return (
+      inferThreadFolderRule(
+        folder.name,
+        members.filter((shell) => shell !== null),
+      ) ?? { smart: true }
+    );
+  });
+
+  const adoptNamedRule = Effect.fn("ThreadFolderService.adoptNamedRule")(function* (
+    folderId: ThreadFolderId,
+    now: string,
+  ) {
+    const folder = (yield* readFolders).find((entry) => entry.id === folderId);
+    if (folder === undefined || folder.rule !== null) return;
+    const rule = yield* relatedRule(folder);
+    if (rule.smart) return;
+    yield* sql`
+      UPDATE thread_folders
+      SET rule_json = ${encodeRule(rule)}, auto_file = 1, rule_set_at = ${now}, updated_at = ${now}
+      WHERE folder_id = ${folderId}
+    `;
+  });
+
+  const batchCandidates = Effect.fn("ThreadFolderService.batchCandidates")(function* (
+    rule: ThreadFolderRule,
     smart = true,
   ) {
     const folders = yield* readFolders;
@@ -256,8 +291,7 @@ const make = Effect.gen(function* () {
         shell.archivedAt === null &&
         shell.settledOverride !== "settled" &&
         shell.lineage.relationshipToParent !== "subagent" &&
-        folder.rule !== null &&
-        matchesSmartConditions(folder.rule, shell),
+        matchesSmartConditions(rule, shell),
     );
   });
 
@@ -309,7 +343,8 @@ const make = Effect.gen(function* () {
             ${now}
           )
         `;
-        return yield* placeThreads(mutation.threadIds ?? [], mutation.folderId, now);
+        yield* placeThreads(mutation.threadIds ?? [], mutation.folderId, now);
+        return yield* adoptNamedRule(mutation.folderId, now);
       }
       case "folder.update": {
         yield* requireFolder(mutation.folderId);
@@ -347,6 +382,7 @@ const make = Effect.gen(function* () {
             WHERE folder_id = ${mutation.folderId}
           `;
         }
+        if (mutation.name !== undefined) yield* adoptNamedRule(mutation.folderId, now);
         return;
       }
       case "folder.reorder": {
@@ -365,13 +401,9 @@ const make = Effect.gen(function* () {
       }
       case "folder.applyRule": {
         yield* requireFolder(mutation.folderId);
+        yield* adoptNamedRule(mutation.folderId, now);
         const folder = (yield* readFolders).find((entry) => entry.id === mutation.folderId)!;
-        const rule = folder.rule;
-        if (rule === null) {
-          return yield* folderError("This folder has no rule to apply.", {
-            folderId: mutation.folderId,
-          });
-        }
+        const rule = yield* relatedRule(folder);
         if (
           (rule.smart && smart === undefined) ||
           (smart !== undefined &&
@@ -382,8 +414,8 @@ const make = Effect.gen(function* () {
           });
         }
         const matching = rule.smart
-          ? (yield* batchCandidates(folder)).filter((shell) => smart?.matches.has(shell.id))
-          : (yield* batchCandidates(folder, false)).filter((shell) =>
+          ? (yield* batchCandidates(rule)).filter((shell) => smart?.matches.has(shell.id))
+          : (yield* batchCandidates(rule, false)).filter((shell) =>
               threadMatchesFolderRule(rule, {
                 ...shell,
                 hasPullRequest: visibleThreadPullRequests(shell.pullRequests ?? []).length > 0,
@@ -407,7 +439,9 @@ const make = Effect.gen(function* () {
       case "folder.move":
         if (mutation.folderId !== null) yield* requireFolder(mutation.folderId);
         yield* requireLiveThreads(mutation.threadIds);
-        return yield* placeThreads(mutation.threadIds, mutation.folderId, now);
+        yield* placeThreads(mutation.threadIds, mutation.folderId, now);
+        if (mutation.folderId !== null) yield* adoptNamedRule(mutation.folderId, now);
+        return;
     }
   });
 
@@ -416,8 +450,9 @@ const make = Effect.gen(function* () {
       let smart: Parameters<typeof apply>[2];
       if (mutation.type === "folder.applyRule") {
         const folder = (yield* list()).folders.find((entry) => entry.id === mutation.folderId);
-        if (folder?.rule?.smart) {
-          const samples = yield* batchCandidates(folder).pipe(
+        const rule = folder === undefined ? null : yield* relatedRule(folder);
+        if (folder !== undefined && rule?.smart) {
+          const samples = yield* batchCandidates(rule).pipe(
             Effect.mapError((cause) => folderError("Could not read threads.", { cause })),
           );
           const projectNames = new Map(

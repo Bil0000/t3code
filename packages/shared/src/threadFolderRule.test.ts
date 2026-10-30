@@ -2,6 +2,7 @@ import { ProjectId, ProviderInstanceId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  inferThreadFolderRule,
   pickThreadFolderForRule,
   threadFolderRuleHasConditions,
   threadMatchesFolderRule,
@@ -74,5 +75,22 @@ describe("pickThreadFolderForRule", () => {
     expect(pickThreadFolderForRule(folders, { ...thread, title: "x", hasPullRequest: false })).toBe(
       null,
     );
+  });
+});
+
+describe("inferThreadFolderRule", () => {
+  it.each([
+    ["Fix status dropdown", { branches: ["t3code/fix-status-dropdown"] }],
+    ["t3code/fix-status-dropdown", { branches: ["t3code/fix-status-dropdown"] }],
+    ["Fix status", null],
+    ["Reviews", null],
+  ])("%s collects %j", (name, expected) => {
+    expect(inferThreadFolderRule(name, [thread])).toEqual(expected);
+  });
+
+  it("falls back to a worktree name", () => {
+    expect(inferThreadFolderRule("Fix status dropdown", [{ ...thread, branch: "main" }])).toEqual({
+      worktrees: ["fix-status-dropdown"],
+    });
   });
 });

@@ -1818,16 +1818,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                       },
                     ]
                   : []),
-                ...(folder.rule
-                  ? [
-                      {
-                        id: "apply-rule",
-                        label: "Collect existing threads now",
-                        separatorBefore: true,
-                      },
-                    ]
-                  : []),
               ],
+            },
+            {
+              id: "apply-rule",
+              label: "Add related threads",
+              icon: "folder-plus",
+              disabled: !canOperate,
             },
             ...(siblings.length > 1
               ? [
@@ -1905,7 +1902,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           void mutateThreadFolders(
             folder.environmentId,
             { type: "folder.applyRule", folderId: folder.id },
-            "Could not collect threads",
+            "Could not add related threads",
           );
           return;
         case "move-up":
