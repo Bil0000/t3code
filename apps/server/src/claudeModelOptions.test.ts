@@ -44,10 +44,14 @@ describe("compileClaudeModelSelection", () => {
         selection("claude-opus-5-5", [{ id: "effort", value: "ultracode" }]),
       ),
     ).toMatchObject({ effort: "xhigh", settings: { ultracode: true } });
-    expect(
-      compileClaudeModelSelection(selection("claude-opus-5-5", [{ id: "effort", value: "high" }]))
-        .settings,
-    ).not.toHaveProperty("ultracode");
+    const legacyTurnedOff = compileClaudeModelSelection(
+      selection("claude-opus-5-5", [
+        { id: "effort", value: "ultracode" },
+        { id: "ultracode", value: false },
+      ]),
+    );
+    expect(legacyTurnedOff.effort).toBe("xhigh");
+    expect(legacyTurnedOff.settings).not.toHaveProperty("ultracode");
   });
 
   it("uses the model default SDK effort alongside prompt-injected effort", () => {

@@ -50,46 +50,6 @@ describe("descriptor helpers", () => {
     ).toEqual([{ id: "fastMode", value: true }]);
   });
 
-  it("reads the old Ultracode effort level as xhigh with the Ultracode toggle on", () => {
-    const caps = createModelCapabilities({
-      optionDescriptors: [
-        {
-          id: "effort",
-          label: "Reasoning",
-          type: "select",
-          options: [
-            { id: "high", label: "High", isDefault: true },
-            { id: "xhigh", label: "Extra High" },
-          ],
-        },
-        { id: "ultracode", label: "Ultracode", type: "boolean" },
-      ],
-    });
-    const selections = [{ id: "effort", value: "ultracode" }];
-
-    expect(
-      buildExplicitProviderOptionSelectionsFromDescriptors(
-        getProviderOptionDescriptors({ caps, selections }),
-        selections,
-      ),
-    ).toEqual([
-      { id: "effort", value: "xhigh" },
-      { id: "ultracode", value: true },
-    ]);
-    expect(
-      getProviderOptionDescriptors({
-        caps,
-        selections: [...selections, { id: "ultracode", value: false }],
-      }).find(({ id }) => id === "ultracode")?.currentValue,
-    ).toBe(false);
-    expect(
-      getProviderOptionDescriptors({
-        caps,
-        selections: [...selections, { id: "ultracode", value: "false" }],
-      }).find(({ id }) => id === "ultracode")?.currentValue,
-    ).toBeUndefined();
-  });
-
   it("compares complete model selections independent of option ordering", () => {
     const left = createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.4", [
       { id: "reasoningEffort", value: "high" },
