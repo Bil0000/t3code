@@ -88,8 +88,11 @@ function forgejoActionSummary(stdout: string): ProviderChangeRequestSummary | un
   const decoded = decodePullRequest(stdout);
   if (Result.isFailure(decoded)) return undefined;
   const pr = decoded.success;
+  // A state PATCH does not recompute conflicts, so "unknown" there would hide a known conflict.
+  const { mergeability, ...summary } = forgejoChangeRequest(pr);
   return {
-    ...forgejoChangeRequest(pr),
+    ...summary,
+    ...(mergeability === "unknown" ? {} : { mergeability }),
     additions: pr.additions ?? undefined,
     deletions: pr.deletions ?? undefined,
     ...(pr.head.sha.trim() === "" ? {} : { headSha: pr.head.sha }),

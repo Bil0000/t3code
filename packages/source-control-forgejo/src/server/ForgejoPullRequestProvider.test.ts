@@ -110,5 +110,6 @@ it.effect.each([
       headSha: "abc123",
       additions: undefined,
     });
+    assert.notProperty(summary, "mergeability");
   }),
 );
