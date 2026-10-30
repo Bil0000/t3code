@@ -13,6 +13,7 @@ import {
 } from "@t3tools/contracts";
 import {
   inferThreadFolderRule,
+  threadFolderIcon,
   pickThreadFolderForRule,
   threadFolderRuleHasConditions,
   threadMatchesFolderRule,
@@ -43,8 +44,10 @@ export class ThreadFolderService extends Context.Service<
     readonly autoFile: (threadId: ThreadId) => Effect.Effect<void, ThreadFolderError>;
     readonly list: () => Effect.Effect<ThreadFolderListResult, ThreadFolderError>;
     readonly subscribeList: () => Stream.Stream<ThreadFolderListResult, ThreadFolderError>;
+    /** `inferRules: false` keeps a folder's name from turning on a rule, for callers that may not set one. */
     readonly mutate: (
       mutation: ThreadFolderMutation,
+      options?: { readonly inferRules?: boolean },
     ) => Effect.Effect<ThreadFolderMutationResult, ThreadFolderError>;
     readonly smartCandidates: (
       threadId: ThreadId,
@@ -302,7 +305,10 @@ const make = Effect.gen(function* () {
       readonly matches: ReadonlySet<string>;
       readonly folder: Pick<ThreadFolder, "name" | "ruleSetAt">;
     },
+    inferRules = true,
   ) {
+    const adopt = (folderId: ThreadFolderId) =>
+      inferRules ? adoptNamedRule(folderId, now) : Effect.void;
     switch (mutation.type) {
       case "folder.create": {
         // Retrying a create with the same id is a no-op, so client retries are safe.
@@ -334,7 +340,7 @@ const make = Effect.gen(function* () {
           VALUES (
             ${mutation.folderId},
             ${mutation.name},
-            ${mutation.icon == null ? null : encodeIcon(mutation.icon)},
+            ${mutation.icon === null ? null : encodeIcon(mutation.icon ?? threadFolderIcon(mutation.name))},
             ${positions[0]!.position},
             ${rule === null ? null : encodeRule(rule)},
             ${Number(mutation.autoFile ?? false)},
@@ -344,7 +350,8 @@ const make = Effect.gen(function* () {
           )
         `;
         yield* placeThreads(mutation.threadIds ?? [], mutation.folderId, now);
-        return yield* adoptNamedRule(mutation.folderId, now);
+        if (mutation.autoFile !== false) yield* adopt(mutation.folderId);
+        return;
       }
       case "folder.update": {
         yield* requireFolder(mutation.folderId);
@@ -373,6 +380,17 @@ const make = Effect.gen(function* () {
             UPDATE thread_folders SET name = ${mutation.name}, updated_at = ${now}
             WHERE folder_id = ${mutation.folderId}
           `;
+          // An icon still picked from the old name follows the new one.
+          if (
+            mutation.icon === undefined &&
+            current.icon !== null &&
+            encodeIcon(current.icon) === encodeIcon(threadFolderIcon(current.name))
+          ) {
+            yield* sql`
+              UPDATE thread_folders SET icon_json = ${encodeIcon(threadFolderIcon(mutation.name))}
+              WHERE folder_id = ${mutation.folderId}
+            `;
+          }
         }
         if (mutation.icon !== undefined) {
           yield* sql`
@@ -382,7 +400,12 @@ const make = Effect.gen(function* () {
             WHERE folder_id = ${mutation.folderId}
           `;
         }
-        if (mutation.name !== undefined) yield* adoptNamedRule(mutation.folderId, now);
+        if (
+          mutation.name !== undefined &&
+          mutation.rule === undefined &&
+          mutation.autoFile !== false
+        )
+          yield* adopt(mutation.folderId);
         return;
       }
       case "folder.reorder": {
@@ -401,7 +424,7 @@ const make = Effect.gen(function* () {
       }
       case "folder.applyRule": {
         yield* requireFolder(mutation.folderId);
-        yield* adoptNamedRule(mutation.folderId, now);
+        yield* adopt(mutation.folderId);
         const folder = (yield* readFolders).find((entry) => entry.id === mutation.folderId)!;
         const rule = yield* relatedRule(folder);
         if (
@@ -440,13 +463,13 @@ const make = Effect.gen(function* () {
         if (mutation.folderId !== null) yield* requireFolder(mutation.folderId);
         yield* requireLiveThreads(mutation.threadIds);
         yield* placeThreads(mutation.threadIds, mutation.folderId, now);
-        if (mutation.folderId !== null) yield* adoptNamedRule(mutation.folderId, now);
+        if (mutation.folderId !== null) yield* adopt(mutation.folderId);
         return;
     }
   });
 
   const mutate: ThreadFolderService["Service"]["mutate"] = Effect.fn("ThreadFolderService.mutate")(
-    function* (mutation) {
+    function* (mutation, options) {
       let smart: Parameters<typeof apply>[2];
       if (mutation.type === "folder.applyRule") {
         const folder = (yield* list()).folders.find((entry) => entry.id === mutation.folderId);
@@ -499,7 +522,7 @@ const make = Effect.gen(function* () {
       }
       const now = DateTime.formatIso(yield* DateTime.now);
       yield* writes.withPermit(
-        sql.withTransaction(apply(mutation, now, smart)).pipe(
+        sql.withTransaction(apply(mutation, now, smart, options?.inferRules)).pipe(
           Effect.catchTags({
             SqlError: (cause) =>
               Effect.fail(folderError("Could not save the thread folder.", { cause })),

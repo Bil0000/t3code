@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   inferThreadFolderRule,
+  threadFolderIcon,
   pickThreadFolderForRule,
   threadFolderRuleHasConditions,
   threadMatchesFolderRule,
@@ -88,9 +89,30 @@ describe("inferThreadFolderRule", () => {
     expect(inferThreadFolderRule(name, [thread])).toEqual(expected);
   });
 
+  it("needs every thread on the branch, so a feature folder spanning branches stays by topic", () => {
+    expect(
+      inferThreadFolderRule("Fix status dropdown", [
+        thread,
+        { ...thread, branch: "main", worktreePath: null },
+      ]),
+    ).toBeNull();
+  });
+
   it("falls back to a worktree name", () => {
     expect(inferThreadFolderRule("Fix status dropdown", [{ ...thread, branch: "main" }])).toEqual({
       worktrees: ["fix-status-dropdown"],
     });
+  });
+});
+
+describe("threadFolderIcon", () => {
+  it.each([
+    ["T3 Code mobile changes", "smartphone", "blue"],
+    ["Fleet agents", "bot", "green"],
+    ["Bug fixes", "bug", "red"],
+    ["Design fixes", "palette", "pink"],
+    ["Previews", "folder", "gray"],
+  ])("%s gets %s in %s", (name, icon, color) => {
+    expect(threadFolderIcon(name)).toEqual({ kind: "lucide", name: icon, color });
   });
 });

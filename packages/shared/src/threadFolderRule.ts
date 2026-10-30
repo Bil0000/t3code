@@ -1,4 +1,10 @@
-import type { ProjectId, ProviderInstanceId, ThreadFolderRule } from "@t3tools/contracts";
+import type {
+  ProjectIconColor,
+  ProjectIconOverride,
+  ProjectId,
+  ProviderInstanceId,
+  ThreadFolderRule,
+} from "@t3tools/contracts";
 
 export interface ThreadFolderRuleSubject {
   readonly projectId: ProjectId;
@@ -54,24 +60,63 @@ const slug = (value: string) =>
     .replace(/^-|-$/g, "");
 
 /**
- * The branch or worktree rule a folder's name points at, when one of its threads is on it:
- * "Fix status dropdown" holding a thread on `t3code/fix-status-dropdown` collects that branch.
+ * The branch or worktree rule a folder's name points at, when all of its threads are on it:
+ * "Fix status dropdown" holding threads on `t3code/fix-status-dropdown` collects that branch.
  */
 export function inferThreadFolderRule(
   name: string,
   members: ReadonlyArray<Pick<ThreadFolderRuleSubject, "branch" | "worktreePath">>,
 ): ThreadFolderRule | null {
   const target = slug(name);
-  if (target === "") return null;
-  const branch = members.find(
-    ({ branch }) =>
-      branch !== null && [branch, lastSegment(branch)].some((v) => slug(v) === target),
-  )?.branch;
+  const shared = (values: ReadonlyArray<string | null>, names: (value: string) => string[]) => {
+    const [value] = values;
+    return value && values.every((v) => v === value) && names(value).some((v) => slug(v) === target)
+      ? value
+      : null;
+  };
+  if (target === "" || members.length === 0) return null;
+  const branch = shared(
+    members.map((member) => member.branch),
+    (value) => [value, lastSegment(value)],
+  );
   if (branch) return { branches: [branch] };
-  const worktree = members
-    .map(({ worktreePath }) => worktreePath && lastSegment(worktreePath))
-    .find((segment) => segment && slug(segment) === target);
+  const worktree = shared(
+    members.map((member) => member.worktreePath && lastSegment(member.worktreePath)),
+    (value) => [value],
+  );
   return worktree ? { worktrees: [worktree] } : null;
+}
+
+export const THREAD_FOLDER_ICONS: ReadonlyArray<
+  readonly [words: ReadonlyArray<string>, name: string, color: ProjectIconColor]
+> = [
+  [["mobile", "ios", "android", "phone", "app"], "smartphone", "blue"],
+  [["review", "audit"], "eye", "violet"],
+  [["pr", "prs", "pull", "merge"], "git-pull-request", "violet"],
+  [["bug", "bugs", "fix", "fixes", "hotfix", "issue", "issues"], "bug", "red"],
+  [["test", "tests", "qa", "eval", "evals"], "flask-conical", "amber"],
+  [["doc", "docs", "documentation", "guide"], "book-open", "sky"],
+  [["design", "ui", "ux", "style"], "palette", "pink"],
+  [["server", "backend", "api", "infra"], "server", "teal"],
+  [["web", "frontend", "site", "browser"], "globe", "cyan"],
+  [["desktop", "electron"], "monitor", "indigo"],
+  [["release", "deploy", "ship", "launch"], "rocket", "orange"],
+  [["research", "explore", "investigate", "spike"], "search", "lime"],
+  [["idea", "ideas", "plan", "plans"], "lightbulb", "yellow"],
+  [["security", "auth"], "shield-check", "emerald"],
+  [["data", "database", "db", "migration", "migrations"], "database", "cyan"],
+  [["perf", "performance", "speed"], "gauge", "orange"],
+  [["agent", "agents", "ai", "bot", "fleet"], "bot", "green"],
+  [["tool", "tools", "tooling", "chore", "chores", "setup"], "wrench", "gray"],
+];
+
+/** An icon and color that suit a folder's name, so a new folder looks right without customizing. */
+export function threadFolderIcon(name: string): ProjectIconOverride {
+  const words = name.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+  const match = words
+    .map((word) => THREAD_FOLDER_ICONS.find(([keys]) => keys.includes(word)))
+    .find((entry) => entry !== undefined);
+  return { kind: "lucide", name: match?.[1] ?? "folder", color: match?.[2] ?? "gray" };
 }
 
 /** True when a rule has at least one condition, so an empty rule never files every thread. */

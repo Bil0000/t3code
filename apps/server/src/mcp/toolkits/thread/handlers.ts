@@ -113,6 +113,7 @@ const writeFolders = Effect.fn("mcp.writeThreadFolders")(function* (input: {
   readonly name?: string | undefined;
   readonly icon?: ProjectIconOverride | null | undefined;
   readonly threadIds?: ReadonlyArray<ThreadId> | undefined;
+  readonly inferRules?: boolean;
 }) {
   const { caller } = yield* readCaller();
   const folders = yield* ThreadFolders.ThreadFolderService;
@@ -183,7 +184,9 @@ const writeFolders = Effect.fn("mcp.writeThreadFolders")(function* (input: {
       break;
     }
   }
-  const result = yield* folders.mutate(mutation).pipe(Effect.mapError(folderFailure));
+  const result = yield* folders
+    .mutate(mutation, { inferRules: input.inferRules ?? true })
+    .pipe(Effect.mapError(folderFailure));
   return mutation.type === "folder.create"
     ? { folderId: mutation.folderId, folders: result.folders }
     : { folders: result.folders };
@@ -438,7 +441,13 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
       (input) => input.action === "move" || (input.action === "create" && input.rule == null),
       McpToolAccess.writesThreads(
         (input) => input.threadIds ?? [undefined],
-        (input) => writeFolders({ ...input, action: input.action === "move" ? "move" : "create" }),
+        // A rule a folder's name implies still reaches unnamed threads, so these writes infer none.
+        (input) =>
+          writeFolders({
+            ...input,
+            action: input.action === "move" ? "move" : "create",
+            inferRules: false,
+          }),
       ),
       McpToolAccess.writes(
         (input) =>

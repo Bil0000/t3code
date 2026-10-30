@@ -494,10 +494,29 @@ it.effect(
         name: "Fixes",
         threadIds: [live],
       });
+      assert.deepStrictEqual((yield* folders.list()).folders[0]!.icon, {
+        kind: "lucide",
+        name: "bug",
+        color: "red",
+      });
+      assert.isNull((yield* folders.list()).folders[0]!.rule);
+      yield* folders.mutate(
+        { type: "folder.update", folderId: fixes, name: "Login" },
+        { inferRules: false },
+      );
+      yield* folders.mutate({
+        type: "folder.update",
+        folderId: fixes,
+        name: "Login",
+        autoFile: false,
+      });
       assert.isNull((yield* folders.list()).folders[0]!.rule);
       yield* folders.mutate({ type: "folder.update", folderId: fixes, name: "Login" });
       const named = (yield* folders.list()).folders[0]!;
-      assert.deepStrictEqual([named.rule, named.autoFile], [{ branches: ["feature/login"] }, true]);
+      assert.deepStrictEqual(
+        [named.rule, named.autoFile, named.icon],
+        [{ branches: ["feature/login"] }, true, { kind: "lucide", name: "folder", color: "gray" }],
+      );
       yield* folders.mutate({ type: "folder.update", folderId: fixes, autoFile: false });
       const added = yield* folders.mutate({ type: "folder.applyRule", folderId: fixes });
       assert.deepStrictEqual(added.folders[0]!.threadIds, [live, other]);
