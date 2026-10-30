@@ -1,13 +1,20 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
-import type { ThreadPullRequestLink, VcsStatusResult } from "@t3tools/contracts";
+import type {
+  PullRequestSummary,
+  ThreadPullRequestKey,
+  ThreadPullRequestLink,
+  VcsStatusResult,
+} from "@t3tools/contracts";
 import {
   sourceControlClients,
   type ChangeRequestTerminology,
 } from "@t3tools/client-runtime/source-control-clients";
 
 import {
+  legacyThreadPullRequestKey,
   resolveThreadCurrentPullRequestLink,
   resolveThreadPullRequestBadge,
+  threadPullRequestKeyOf,
 } from "@t3tools/client-runtime/thread-pull-requests";
 
 export type ThreadPr = NonNullable<VcsStatusResult["pr"]>;
@@ -141,4 +148,39 @@ export function rememberBounded<V>(
     next.delete(oldest);
   }
   return next;
+}
+
+/** The newest summary held for `pullRequest`, matched strictly by host, repository and number. */
+export function knownPullRequestSummary(
+  pullRequest: ThreadPullRequestKey,
+  threads: Iterable<Pick<EnvironmentThreadShell, "projectId" | "pullRequests">>,
+  summaries: Iterable<PullRequestSummary>,
+): PullRequestSummary | undefined {
+  const key = threadPullRequestKeyOf(pullRequest);
+  let newest: PullRequestSummary | undefined;
+  const consider = (summary: PullRequestSummary) => {
+    if (newest === undefined || summary.updatedAt > newest.updatedAt) newest = summary;
+  };
+  for (const summary of summaries) {
+    if (threadPullRequestKeyOf(legacyThreadPullRequestKey(summary)) === key) consider(summary);
+  }
+  for (const thread of threads) {
+    for (const link of thread.pullRequests) {
+      const snapshot = link.snapshot;
+      if (snapshot?.updatedAt == null || threadPullRequestKeyOf(link) !== key) continue;
+      consider({
+        ...snapshot,
+        updatedAt: snapshot.updatedAt,
+        provider: (
+          sourceControlClients.findByChangeRequestUrl(link.url) ??
+          sourceControlClients.get(undefined)
+        ).kind,
+        projectId: thread.projectId,
+        repository: link.repository,
+        number: link.number,
+        url: link.url,
+      });
+    }
+  }
+  return newest;
 }
