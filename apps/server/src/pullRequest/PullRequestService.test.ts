@@ -229,6 +229,8 @@ it.effect("shows a listed pull request's preview without asking the host again",
     yield* service.refreshAfterTurn(ref.projectId);
     assert.strictEqual((yield* service.preview(ref)).title, "Renamed");
     assert.strictEqual(previewReads, 1);
+    yield* service.list({ state: "open", limit: 1 });
+    assert.strictEqual((yield* service.preview(ref)).title, "Renamed");
   }),
 );
 

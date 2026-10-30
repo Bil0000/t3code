@@ -166,6 +166,15 @@ describe("knownPullRequestSummary", () => {
         [otherRepository, newer],
       )?.title,
     ).toBe("Newer title");
+    const sameUpdate = { ...newer, updatedAt: "2026-09-08T00:00:00.000Z", title: "Same update" };
+    const seed = (observedAt: number) =>
+      knownPullRequestSummary(
+        { host: "github.com", repository: "t3tools/t3code", number: 7 },
+        threads,
+        [{ ...sameUpdate, observedAt }],
+      )?.title;
+    expect(seed(Date.parse("2026-09-07T00:00:00.000Z"))).toBe("Change 7");
+    expect(seed(Date.parse("2026-09-09T00:00:00.000Z"))).toBe("Same update");
   });
 });
 

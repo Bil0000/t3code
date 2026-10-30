@@ -158,28 +158,42 @@ export function knownPullRequestSummary(
 ): PullRequestSummary | undefined {
   const key = threadPullRequestKeyOf(pullRequest);
   let newest: PullRequestSummary | undefined;
-  const consider = (summary: PullRequestSummary) => {
-    if (newest === undefined || summary.updatedAt > newest.updatedAt) newest = summary;
+  let newestReadAt: number | undefined;
+  const consider = (summary: PullRequestSummary, readAt: number | undefined) => {
+    const laterRead =
+      summary.updatedAt === newest?.updatedAt &&
+      readAt !== undefined &&
+      newestReadAt !== undefined &&
+      readAt > newestReadAt;
+    if (newest === undefined || summary.updatedAt > newest.updatedAt || laterRead) {
+      newest = summary;
+      newestReadAt = readAt;
+    }
   };
   for (const summary of summaries) {
-    if (threadPullRequestKeyOf(legacyThreadPullRequestKey(summary)) === key) consider(summary);
+    if (threadPullRequestKeyOf(legacyThreadPullRequestKey(summary)) === key) {
+      consider(summary, summary.observedAt);
+    }
   }
   for (const thread of threads) {
     for (const link of thread.pullRequests) {
       const snapshot = link.snapshot;
       if (snapshot?.updatedAt == null || threadPullRequestKeyOf(link) !== key) continue;
-      consider({
-        ...snapshot,
-        updatedAt: snapshot.updatedAt,
-        provider: (
-          sourceControlClients.findByChangeRequestUrl(link.url) ??
-          sourceControlClients.get(undefined)
-        ).kind,
-        projectId: thread.projectId,
-        repository: link.repository,
-        number: link.number,
-        url: link.url,
-      });
+      consider(
+        {
+          ...snapshot,
+          updatedAt: snapshot.updatedAt,
+          provider: (
+            sourceControlClients.findByChangeRequestUrl(link.url) ??
+            sourceControlClients.get(undefined)
+          ).kind,
+          projectId: thread.projectId,
+          repository: link.repository,
+          number: link.number,
+          url: link.url,
+        },
+        Date.parse(snapshot.syncedAt),
+      );
     }
   }
   return newest;

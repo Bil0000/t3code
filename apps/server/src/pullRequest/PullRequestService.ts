@@ -1560,7 +1560,9 @@ export const make = Effect.gen(function* () {
         .slice(0, DETAIL_CACHE_CAPACITY / 2)
         .map((entry) => [refCacheKey(entry), previewFields(entry)] as const)
         .toReversed();
-      for (const [key, value] of seeds) yield* Cache.set(previewCache, key, value);
+      for (const [key, value] of seeds) {
+        if (!(yield* Cache.has(previewCache, key))) yield* Cache.set(previewCache, key, value);
+      }
     }
 
     return {
