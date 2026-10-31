@@ -32,8 +32,8 @@ const row = {
   number: 7,
 };
 
-function Rows() {
-  const prefetch = usePullRequestIntentPrefetch();
+function Rows({ listed = true }: { listed?: boolean }) {
+  const prefetch = usePullRequestIntentPrefetch(() => listed);
   return (
     <>
       <button type="button" onClick={() => prefetch(row)}>
@@ -46,7 +46,7 @@ function Rows() {
   );
 }
 
-it("reads the panel's detail only while the pointer rests on a row", async () => {
+it("reads the panel's detail only while the pointer rests on a listed row", async () => {
   state.reads = [];
   await using screen = await render(<Rows />, {
     // A bare hook probe; nothing here navigates.
@@ -79,5 +79,12 @@ it("reads the panel's detail only while the pointer rests on a row", async () =>
   });
 
   await act(() => leave.click());
+  expect(state.reads.at(-1)).toBeNull();
+
+  await act(() => rest.click());
+  await act(() => vi.advanceTimersByTime(150));
+  expect(state.reads.at(-1)).not.toBeNull();
+  // A row removed from the list fires no leave event.
+  await screen.rerender(<Rows listed={false} />);
   expect(state.reads.at(-1)).toBeNull();
 });

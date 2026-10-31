@@ -1080,7 +1080,9 @@ export function PullRequestsPage() {
     ),
   );
 
-  const prefetchEntry = usePullRequestIntentPrefetch();
+  const prefetchEntry = usePullRequestIntentPrefetch((entry) =>
+    listedPullRequestsBySurface.has(pullRequestListEntryId(entry)),
+  );
   const selectEntry = (entry: PullRequestRowTarget) => {
     if (rightPanelRef === null) return;
     useRightPanelStore.getState().openPullRequest(rightPanelRef, entry);
