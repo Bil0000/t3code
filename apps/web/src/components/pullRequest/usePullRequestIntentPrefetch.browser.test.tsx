@@ -84,9 +84,17 @@ it("reads the panel's detail only while the pointer rests on a listed row", asyn
   await act(() => rest.click());
   await act(() => vi.advanceTimersByTime(150));
   expect(state.reads.at(-1)).not.toBeNull();
-  // A row removed from the list fires no leave event.
+  // A row removed from the list fires no leave event, and coming back is not new intent.
+  let removedAt = state.reads.length;
   await screen.rerender(<Rows listed={false} />);
-  expect(state.reads.at(-1)).toBeNull();
   await screen.rerender(<Rows listed />);
-  expect(state.reads.at(-1)).toBeNull();
+  expect(state.reads.slice(removedAt)).not.toContainEqual(expect.anything());
+
+  await act(() => rest.click());
+  await act(() => vi.advanceTimersByTime(100));
+  removedAt = state.reads.length;
+  await screen.rerender(<Rows listed={false} />);
+  await screen.rerender(<Rows listed />);
+  await act(() => vi.advanceTimersByTime(1_000));
+  expect(state.reads.slice(removedAt)).not.toContainEqual(expect.anything());
 });
