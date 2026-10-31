@@ -23,10 +23,10 @@ interface PullRequestIntentTarget {
 export function usePullRequestIntentPrefetch(
   isListed: (target: PullRequestIntentTarget) => boolean,
 ) {
-  const [rested, setTarget] = useState<PullRequestIntentTarget | null>(null);
+  const [target, setTarget] = useState<PullRequestIntentTarget | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  // A removed row fires no leave event.
-  const target = rested !== null && isListed(rested) ? rested : null;
+  // A removed row fires no leave event, and coming back is not new intent.
+  if (target !== null && !isListed(target)) setTarget(null);
   useEnvironmentQuery(
     target === null
       ? null

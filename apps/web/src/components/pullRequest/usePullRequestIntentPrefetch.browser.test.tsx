@@ -87,4 +87,6 @@ it("reads the panel's detail only while the pointer rests on a listed row", asyn
   // A row removed from the list fires no leave event.
   await screen.rerender(<Rows listed={false} />);
   expect(state.reads.at(-1)).toBeNull();
+  await screen.rerender(<Rows listed />);
+  expect(state.reads.at(-1)).toBeNull();
 });
