@@ -119,9 +119,13 @@ function PullRequestRowImpl({
         aria-current={selected ? "true" : undefined}
         onClick={() => onSelect(entry)}
         onPointerEnter={() => onIntent?.(entry)}
-        onPointerLeave={() => onIntent?.(null)}
+        onPointerLeave={(event) => {
+          if (event.currentTarget !== document.activeElement) onIntent?.(null);
+        }}
         onFocus={() => onIntent?.(entry)}
-        onBlur={() => onIntent?.(null)}
+        onBlur={(event) => {
+          if (!event.currentTarget.matches(":hover")) onIntent?.(null);
+        }}
         className={cn(
           PULL_REQUEST_ROW_CLASS,
           PAGE_ROW_CLASS,
