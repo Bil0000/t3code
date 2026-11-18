@@ -236,6 +236,7 @@ const make = Effect.gen(function* () {
 
   const listProjects = (filter: {
     readonly projectId?: IssueListInput["projectId"];
+    readonly excludeProjectIds?: IssueListInput["excludeProjectIds"];
     readonly host?: string | undefined;
     /** The link's `host:port`, for a host whose binding keeps its port. */
     readonly authority?: string | undefined;
@@ -254,7 +255,7 @@ const make = Effect.gen(function* () {
       ),
       Effect.flatMap((shells) =>
         Effect.forEach(
-          shells,
+          shells.filter((project) => !filter.excludeProjectIds?.includes(project.id)),
           (project) =>
             resolveProjectTracker(project).pipe(
               Effect.map((bindings) => bindings.map((binding) => ({ project, ...binding }))),
@@ -322,7 +323,10 @@ const make = Effect.gen(function* () {
   const list: IssueService["Service"]["list"] = Effect.fn("IssueService.list")(function* (input) {
     // Trackers name every host so a client narrowed to one can switch to another; only the
     // narrowed host's scopes are read.
-    const { supported, unimplemented } = yield* listProjects({ projectId: input.projectId });
+    const { supported, unimplemented } = yield* listProjects({
+      projectId: input.projectId,
+      excludeProjectIds: input.excludeProjectIds,
+    });
     const host = input.host?.trim().toLowerCase();
     const limit = input.limit ?? DEFAULT_LIST_LIMIT;
     // Worktrees of one repository are separate projects, and every repository of an Azure
